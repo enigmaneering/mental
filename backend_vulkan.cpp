@@ -1,7 +1,5 @@
 //go:build linux
 
-#define VK_NO_PROTOTYPES
-#include <vulkan/vulkan.h>
 #include "vulkan_loader.h"
 #include <cstring>
 #include <cstdlib>
