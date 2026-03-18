@@ -98,11 +98,12 @@ jobs:
       - name: Build library (Unix)
         if: runner.os != 'Windows'
         run: |
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -buildmode=c-shared -o ${{ matrix.lib_name }} ./capi
+          CGO_ENABLED=1 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -buildmode=c-shared -o ${{ matrix.lib_name }} ./capi
 
       - name: Build library (Windows)
         if: runner.os == 'Windows'
         run: |
+          $env:CGO_ENABLED="1"
           $env:GOOS="${{ matrix.goos }}"
           $env:GOARCH="${{ matrix.goarch }}"
           go build -buildmode=c-shared -o ${{ matrix.lib_name }} ./capi
