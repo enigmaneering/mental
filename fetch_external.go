@@ -42,11 +42,16 @@ func main() {
 
 	fmt.Printf("Latest version: %s\n", version)
 
-	platform := detectPlatform()
+	// Allow override via TARGET_PLATFORM env var (for cross-compilation in CI)
+	platform := os.Getenv("TARGET_PLATFORM")
 	if platform == "" {
-		fmt.Fprintf(os.Stderr, "ERROR: Unsupported platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
-		os.Exit(1)
+		platform = detectPlatform()
+		if platform == "" {
+			fmt.Fprintf(os.Stderr, "ERROR: Unsupported platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+			os.Exit(1)
+		}
 	}
+	fmt.Printf("Target platform: %s\n", platform)
 
 	libraries := []string{"glslang", "spirv-cross", "dxc", "naga"}
 	for _, lib := range libraries {

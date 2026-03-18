@@ -45,36 +45,42 @@ jobs:
             goos: darwin
             goarch: arm64
             lib_name: libmental-darwin-arm64.dylib
+            external_platform: darwin-arm64
           - os: macos-latest
-            runner: macos-13
+            runner: macos-14
             platform: darwin-amd64
             goos: darwin
             goarch: amd64
             lib_name: libmental-darwin-amd64.dylib
+            external_platform: darwin-amd64
           - os: ubuntu-latest
             runner: ubuntu-latest
             platform: linux-amd64
             goos: linux
             goarch: amd64
             lib_name: libmental-linux-amd64.so
+            external_platform: linux-amd64
           - os: ubuntu-latest
             runner: ubuntu-24.04-arm
             platform: linux-arm64
             goos: linux
             goarch: arm64
             lib_name: libmental-linux-arm64.so
+            external_platform: linux-arm64
           - os: windows-latest
             runner: windows-latest
             platform: windows-amd64
             goos: windows
             goarch: amd64
             lib_name: mental-windows-amd64.dll
+            external_platform: windows-amd64
           - os: windows-latest
             runner: windows-latest
             platform: windows-arm64
             goos: windows
             goarch: arm64
             lib_name: mental-windows-arm64.dll
+            external_platform: windows-arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -94,17 +100,21 @@ jobs:
       - name: Fetch external libraries
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_PLATFORM: ${{ matrix.external_platform }}
         run: |
           go run fetch_external.go
 
       - name: Build library (Unix)
         if: runner.os != 'Windows'
         run: |
-          go build -buildmode=c-shared -o ${{ matrix.lib_name }} ./capi
+          CGO_ENABLED=1 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -buildmode=c-shared -o ${{ matrix.lib_name }} ./capi
 
       - name: Build library (Windows)
         if: runner.os == 'Windows'
         run: |
+          $env:CGO_ENABLED="1"
+          $env:GOOS="${{ matrix.goos }}"
+          $env:GOARCH="${{ matrix.goarch }}"
           go build -buildmode=c-shared -o ${{ matrix.lib_name }} ./capi
 
       - name: Copy header
