@@ -91,7 +91,17 @@ func ensureExternal() error {
 func getLatestVersion() (string, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=30", githubRepo)
 
-	resp, err := http.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Use GITHUB_TOKEN if available (for CI environments)
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to query GitHub API: %w", err)
 	}
