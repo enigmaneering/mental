@@ -97,6 +97,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y opencl-headers ocl-icd-opencl-dev libvulkan-dev
 
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Download OpenCL headers
+          New-Item -ItemType Directory -Force -Path "C:\opencl\include\CL"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/KhronosGroup/OpenCL-Headers/main/CL/cl.h" -OutFile "C:\opencl\include\CL\cl.h"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/KhronosGroup/OpenCL-Headers/main/CL/cl_platform.h" -OutFile "C:\opencl\include\CL\cl_platform.h"
+          echo "C:\opencl\include" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - name: Fetch external libraries
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -113,6 +123,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           $env:CGO_ENABLED="1"
+          $env:CGO_CFLAGS="-IC:\opencl\include"
           $env:GOOS="${{ matrix.goos }}"
           $env:GOARCH="${{ matrix.goarch }}"
           go build -buildmode=c-shared -o ${{ matrix.lib_name }} ./capi
