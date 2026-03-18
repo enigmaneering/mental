@@ -75,7 +75,7 @@ jobs:
             lib_name: mental-windows-amd64.dll
             external_platform: windows-amd64
           - os: windows-latest
-            runner: windows-latest
+            runner: windows-11-arm
             platform: windows-arm64
             goos: windows
             goarch: arm64
