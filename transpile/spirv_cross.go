@@ -3,8 +3,7 @@ package transpile
 /*
 #cgo CPPFLAGS: -I${SRCDIR}/../external/spirv-cross
 
-#cgo linux LDFLAGS: -L${SRCDIR}/../external/spirv-cross -lspirv-cross-core -lspirv-cross-glsl -lspirv-cross-hlsl -lspirv-cross-msl -Wl,-z,notext
-#cgo darwin LDFLAGS: -L${SRCDIR}/../external/spirv-cross -lspirv-cross-core -lspirv-cross-glsl -lspirv-cross-hlsl -lspirv-cross-msl
+#cgo !windows LDFLAGS: -L${SRCDIR}/../external/spirv-cross -lspirv-cross-core -lspirv-cross-glsl -lspirv-cross-hlsl -lspirv-cross-msl
 
 #cgo windows LDFLAGS: -L${SRCDIR}/../external/spirv-cross
 #cgo windows LDFLAGS: -lspirv-cross-core -lspirv-cross-glsl -lspirv-cross-hlsl -lspirv-cross-msl

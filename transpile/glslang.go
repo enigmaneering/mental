@@ -7,8 +7,8 @@ package transpile
 #cgo !windows CXXFLAGS: -std=c++11
 #cgo windows CXXFLAGS: -std=c++17
 
-#cgo linux LDFLAGS: -L${SRCDIR}/../external/glslang -lglslang -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lstdc++ -Wl,-z,notext
-#cgo darwin LDFLAGS: -L${SRCDIR}/../external/glslang -lglslang -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lstdc++
+#cgo !windows LDFLAGS: -L${SRCDIR}/../external/glslang -lglslang -lglslang-default-resource-limits -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools
+#cgo !windows LDFLAGS: -lstdc++
 
 #cgo windows LDFLAGS: -L${SRCDIR}/../external/glslang
 #cgo windows LDFLAGS: -lglslang -lglslang-default-resource-limits -lMachineIndependent -lGenericCodeGen -lOSDependent -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools

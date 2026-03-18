@@ -106,8 +106,6 @@ jobs:
 
       - name: Build library (Unix)
         if: runner.os != 'Windows'
-        env:
-          CGO_LDFLAGS_ALLOW: "-Wl,-z,notext"
         run: |
           CGO_ENABLED=1 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -buildmode=c-shared -o ${{ matrix.lib_name }} ./capi
 
