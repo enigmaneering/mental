@@ -24,10 +24,12 @@ typedef struct {
     HANDLE fence_event;
 } D3D12Device;
 
-/* D3D12 buffer wrapper */
+/* D3D12 buffer wrapper - three-buffer system for proper D3D12 buffer management */
 typedef struct {
-    ComPtr<ID3D12Resource> resource;
-    void* mapped_ptr;
+    ComPtr<ID3D12Resource> resource;        /* DEFAULT heap - GPU-accessible with UAV */
+    ComPtr<ID3D12Resource> upload_buffer;   /* UPLOAD heap - CPU writes */
+    ComPtr<ID3D12Resource> readback_buffer; /* READBACK heap - CPU reads */
+    void* mapped_ptr;                       /* Points to mapped upload buffer */
     size_t size;
     D3D12Device* device;
 } D3D12Buffer;
@@ -173,11 +175,9 @@ static void* d3d12_buffer_alloc(void* dev, size_t bytes) {
     D3D12Buffer* buf = new D3D12Buffer();
     buf->size = bytes;
     buf->device = d3d_dev;
+    buf->mapped_ptr = nullptr;
 
-    /* Create upload heap buffer (CPU-visible) */
-    D3D12_HEAP_PROPERTIES heap_props = {};
-    heap_props.Type = D3D12_HEAP_TYPE_UPLOAD;
-
+    /* Resource description (same for all buffers) */
     D3D12_RESOURCE_DESC resource_desc = {};
     resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
     resource_desc.Width = bytes;
@@ -187,13 +187,17 @@ static void* d3d12_buffer_alloc(void* dev, size_t bytes) {
     resource_desc.Format = DXGI_FORMAT_UNKNOWN;
     resource_desc.SampleDesc.Count = 1;
     resource_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    /* 1. Create DEFAULT heap buffer (GPU-accessible, UAV-enabled for compute) */
+    D3D12_HEAP_PROPERTIES default_heap = {};
+    default_heap.Type = D3D12_HEAP_TYPE_DEFAULT;
     resource_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
     HRESULT hr = d3d_dev->device->CreateCommittedResource(
-        &heap_props,
+        &default_heap,
         D3D12_HEAP_FLAG_NONE,
         &resource_desc,
-        D3D12_RESOURCE_STATE_GENERIC_READ,
+        D3D12_RESOURCE_STATE_COMMON,
         nullptr,
         IID_PPV_ARGS(&buf->resource));
 
@@ -202,9 +206,43 @@ static void* d3d12_buffer_alloc(void* dev, size_t bytes) {
         return NULL;
     }
 
-    /* Map buffer */
-    D3D12_RANGE read_range = {0, 0};
-    hr = buf->resource->Map(0, &read_range, &buf->mapped_ptr);
+    /* 2. Create UPLOAD buffer (for CPU -> GPU transfers) */
+    D3D12_HEAP_PROPERTIES upload_heap = {};
+    upload_heap.Type = D3D12_HEAP_TYPE_UPLOAD;
+    resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    hr = d3d_dev->device->CreateCommittedResource(
+        &upload_heap,
+        D3D12_HEAP_FLAG_NONE,
+        &resource_desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&buf->upload_buffer));
+
+    if (FAILED(hr)) {
+        delete buf;
+        return NULL;
+    }
+
+    /* 3. Create READBACK buffer (for GPU -> CPU transfers) */
+    D3D12_HEAP_PROPERTIES readback_heap = {};
+    readback_heap.Type = D3D12_HEAP_TYPE_READBACK;
+
+    hr = d3d_dev->device->CreateCommittedResource(
+        &readback_heap,
+        D3D12_HEAP_FLAG_NONE,
+        &resource_desc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&buf->readback_buffer));
+
+    if (FAILED(hr)) {
+        delete buf;
+        return NULL;
+    }
+
+    /* Map the UPLOAD buffer for CPU writes (stays mapped) */
+    hr = buf->upload_buffer->Map(0, nullptr, &buf->mapped_ptr);
     if (FAILED(hr)) {
         delete buf;
         return NULL;
@@ -213,14 +251,91 @@ static void* d3d12_buffer_alloc(void* dev, size_t bytes) {
     return buf;
 }
 
+/* Helper to wait for GPU */
+static void d3d12_wait_for_gpu(D3D12Device* dev) {
+    dev->fence_value++;
+    dev->queue->Signal(dev->fence.Get(), dev->fence_value);
+    if (dev->fence->GetCompletedValue() < dev->fence_value) {
+        dev->fence->SetEventOnCompletion(dev->fence_value, dev->fence_event);
+        WaitForSingleObject(dev->fence_event, INFINITE);
+    }
+}
+
 static void d3d12_buffer_write(void* buf, const void* data, size_t bytes) {
     D3D12Buffer* d3d_buf = (D3D12Buffer*)buf;
+    D3D12Device* dev = d3d_buf->device;
+
+    /* Write to mapped UPLOAD buffer */
     memcpy(d3d_buf->mapped_ptr, data, bytes);
+
+    /* Flush: Copy UPLOAD -> DEFAULT with proper state transitions */
+    dev->allocator->Reset();
+    dev->command_list->Reset(dev->allocator.Get(), nullptr);
+
+    /* Transition DEFAULT buffer to COPY_DEST */
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = d3d_buf->resource.Get();
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    dev->command_list->ResourceBarrier(1, &barrier);
+
+    /* Copy from UPLOAD to DEFAULT */
+    dev->command_list->CopyResource(d3d_buf->resource.Get(), d3d_buf->upload_buffer.Get());
+
+    /* Transition DEFAULT buffer to UNORDERED_ACCESS for compute */
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    dev->command_list->ResourceBarrier(1, &barrier);
+
+    dev->command_list->Close();
+
+    /* Execute and wait */
+    ID3D12CommandList* cmd_lists[] = { dev->command_list.Get() };
+    dev->queue->ExecuteCommandLists(1, cmd_lists);
+    d3d12_wait_for_gpu(dev);
 }
 
 static void d3d12_buffer_read(void* buf, void* data, size_t bytes) {
     D3D12Buffer* d3d_buf = (D3D12Buffer*)buf;
-    memcpy(data, d3d_buf->mapped_ptr, bytes);
+    D3D12Device* dev = d3d_buf->device;
+
+    /* Copy DEFAULT -> READBACK */
+    dev->allocator->Reset();
+    dev->command_list->Reset(dev->allocator.Get(), nullptr);
+
+    /* Transition DEFAULT buffer to COPY_SOURCE */
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = d3d_buf->resource.Get();
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    dev->command_list->ResourceBarrier(1, &barrier);
+
+    /* Copy from DEFAULT to READBACK */
+    dev->command_list->CopyResource(d3d_buf->readback_buffer.Get(), d3d_buf->resource.Get());
+
+    /* Transition DEFAULT buffer back to UNORDERED_ACCESS */
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    dev->command_list->ResourceBarrier(1, &barrier);
+
+    dev->command_list->Close();
+
+    /* Execute and wait */
+    ID3D12CommandList* cmd_lists[] = { dev->command_list.Get() };
+    dev->queue->ExecuteCommandLists(1, cmd_lists);
+    d3d12_wait_for_gpu(dev);
+
+    /* Map and read from READBACK buffer */
+    void* read_ptr = nullptr;
+    D3D12_RANGE read_range = {0, static_cast<SIZE_T>(bytes)};
+    if (SUCCEEDED(d3d_buf->readback_buffer->Map(0, &read_range, &read_ptr))) {
+        memcpy(data, read_ptr, bytes);
+        d3d_buf->readback_buffer->Unmap(0, nullptr);
+    }
 }
 
 static void* d3d12_buffer_resize(void* dev, void* old_buf, size_t old_size, size_t new_size) {
@@ -261,7 +376,9 @@ static void d3d12_buffer_destroy(void* buf) {
     if (!buf) return;
 
     D3D12Buffer* d3d_buf = (D3D12Buffer*)buf;
-    d3d_buf->resource->Unmap(0, nullptr);
+    if (d3d_buf->mapped_ptr) {
+        d3d_buf->upload_buffer->Unmap(0, nullptr);
+    }
     delete d3d_buf;
 }
 
