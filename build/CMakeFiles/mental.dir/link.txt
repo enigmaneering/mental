@@ -1,0 +1,2 @@
+/usr/bin/ar qc libmental.a CMakeFiles/mental.dir/mental.c.o CMakeFiles/mental.dir/transpile.c.o CMakeFiles/mental.dir/transpile_other.c.o CMakeFiles/mental.dir/backend_opencl.c.o CMakeFiles/mental.dir/backend_metal.m.o CMakeFiles/mental.dir/transpile_glslang.cpp.o CMakeFiles/mental.dir/transpile_spirv_cross.cpp.o
+/usr/bin/ranlib libmental.a

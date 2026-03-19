@@ -1,0 +1,593 @@
+/*
+ * Mental - D3D12 Backend (Windows)
+ */
+
+#ifdef _WIN32
+
+#include <d3d12.h>
+#include <dxgi1_6.h>
+#include <wrl/client.h>
+#include "mental_internal.h"
+#include <vector>
+#include <string>
+
+using Microsoft::WRL::ComPtr;
+
+/* D3D12 device wrapper */
+typedef struct {
+    ComPtr<ID3D12Device> device;
+    ComPtr<ID3D12CommandQueue> queue;
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> command_list;
+    ComPtr<ID3D12Fence> fence;
+    UINT64 fence_value;
+    HANDLE fence_event;
+} D3D12Device;
+
+/* D3D12 buffer wrapper */
+typedef struct {
+    ComPtr<ID3D12Resource> resource;
+    void* mapped_ptr;
+    size_t size;
+    D3D12Device* device;
+} D3D12Buffer;
+
+/* D3D12 kernel wrapper */
+typedef struct {
+    ComPtr<ID3D12PipelineState> pipeline;
+    ComPtr<ID3D12RootSignature> root_signature;
+    ComPtr<ID3D12DescriptorHeap> descriptor_heap;
+    ComPtr<ID3D12Device> device;
+} D3D12Kernel;
+
+/* D3D12 viewport wrapper */
+typedef struct {
+    ComPtr<IDXGISwapChain3> swapChain;
+    D3D12Buffer* buffer;
+    D3D12Device* device;
+    UINT bufferIndex;
+} D3D12Viewport;
+
+/* Global D3D12 state */
+static std::vector<ComPtr<IDXGIAdapter1>> g_adapters;
+
+static int d3d12_init(void) {
+    HRESULT hr;
+
+    /* Create DXGI factory */
+    ComPtr<IDXGIFactory6> factory;
+    hr = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
+    if (FAILED(hr)) return -1;
+
+    /* Enumerate adapters */
+    ComPtr<IDXGIAdapter1> adapter;
+    for (UINT i = 0; factory->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+                                                          IID_PPV_ARGS(&adapter)) != DXGI_ERROR_NOT_FOUND; i++) {
+        DXGI_ADAPTER_DESC1 desc;
+        adapter->GetDesc1(&desc);
+
+        /* Skip software adapters */
+        if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) {
+            continue;
+        }
+
+        /* Check if D3D12 is supported */
+        if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, _uuidof(ID3D12Device), nullptr))) {
+            g_adapters.push_back(adapter);
+        }
+    }
+
+    return g_adapters.empty() ? -1 : 0;
+}
+
+static void d3d12_shutdown(void) {
+    g_adapters.clear();
+}
+
+static int d3d12_device_count(void) {
+    return (int)g_adapters.size();
+}
+
+static int d3d12_device_info(int index, char* name, size_t name_len) {
+    if (index < 0 || index >= (int)g_adapters.size()) return -1;
+
+    DXGI_ADAPTER_DESC1 desc;
+    g_adapters[index]->GetDesc1(&desc);
+
+    WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, (int)name_len, NULL, NULL);
+    return 0;
+}
+
+static void* d3d12_device_create(int index) {
+    if (index < 0 || index >= (int)g_adapters.size()) return NULL;
+
+    D3D12Device* dev = new D3D12Device();
+
+    /* Create device */
+    HRESULT hr = D3D12CreateDevice(g_adapters[index].Get(), D3D_FEATURE_LEVEL_11_0,
+                                    IID_PPV_ARGS(&dev->device));
+    if (FAILED(hr)) {
+        delete dev;
+        return NULL;
+    }
+
+    /* Create command queue */
+    D3D12_COMMAND_QUEUE_DESC queue_desc = {};
+    queue_desc.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
+    queue_desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+
+    hr = dev->device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&dev->queue));
+    if (FAILED(hr)) {
+        delete dev;
+        return NULL;
+    }
+
+    /* Create command allocator */
+    hr = dev->device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE,
+                                               IID_PPV_ARGS(&dev->allocator));
+    if (FAILED(hr)) {
+        delete dev;
+        return NULL;
+    }
+
+    /* Create command list */
+    hr = dev->device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COMPUTE,
+                                         dev->allocator.Get(), nullptr,
+                                         IID_PPV_ARGS(&dev->command_list));
+    if (FAILED(hr)) {
+        delete dev;
+        return NULL;
+    }
+    dev->command_list->Close();  /* Start closed */
+
+    /* Create fence for synchronization */
+    dev->fence_value = 0;
+    hr = dev->device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&dev->fence));
+    if (FAILED(hr)) {
+        delete dev;
+        return NULL;
+    }
+
+    dev->fence_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    if (!dev->fence_event) {
+        delete dev;
+        return NULL;
+    }
+
+    return dev;
+}
+
+static void d3d12_device_destroy(void* dev) {
+    if (!dev) return;
+
+    D3D12Device* d3d_dev = (D3D12Device*)dev;
+    if (d3d_dev->fence_event) {
+        CloseHandle(d3d_dev->fence_event);
+    }
+    delete d3d_dev;
+}
+
+static void* d3d12_buffer_alloc(void* dev, size_t bytes) {
+    D3D12Device* d3d_dev = (D3D12Device*)dev;
+
+    D3D12Buffer* buf = new D3D12Buffer();
+    buf->size = bytes;
+    buf->device = d3d_dev;
+
+    /* Create upload heap buffer (CPU-visible) */
+    D3D12_HEAP_PROPERTIES heap_props = {};
+    heap_props.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC resource_desc = {};
+    resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    resource_desc.Width = bytes;
+    resource_desc.Height = 1;
+    resource_desc.DepthOrArraySize = 1;
+    resource_desc.MipLevels = 1;
+    resource_desc.Format = DXGI_FORMAT_UNKNOWN;
+    resource_desc.SampleDesc.Count = 1;
+    resource_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    resource_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+    HRESULT hr = d3d_dev->device->CreateCommittedResource(
+        &heap_props,
+        D3D12_HEAP_FLAG_NONE,
+        &resource_desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&buf->resource));
+
+    if (FAILED(hr)) {
+        delete buf;
+        return NULL;
+    }
+
+    /* Map buffer */
+    D3D12_RANGE read_range = {0, 0};
+    hr = buf->resource->Map(0, &read_range, &buf->mapped_ptr);
+    if (FAILED(hr)) {
+        delete buf;
+        return NULL;
+    }
+
+    return buf;
+}
+
+static void d3d12_buffer_write(void* buf, const void* data, size_t bytes) {
+    D3D12Buffer* d3d_buf = (D3D12Buffer*)buf;
+    memcpy(d3d_buf->mapped_ptr, data, bytes);
+}
+
+static void d3d12_buffer_read(void* buf, void* data, size_t bytes) {
+    D3D12Buffer* d3d_buf = (D3D12Buffer*)buf;
+    memcpy(data, d3d_buf->mapped_ptr, bytes);
+}
+
+static void* d3d12_buffer_resize(void* dev, void* old_buf, size_t old_size, size_t new_size) {
+    D3D12Device* d3d_dev = (D3D12Device*)dev;
+    D3D12Buffer* old_d3d_buf = (D3D12Buffer*)old_buf;
+
+    /* Create new buffer */
+    D3D12Buffer* new_buf = (D3D12Buffer*)d3d12_buffer_alloc(dev, new_size);
+    if (!new_buf) return NULL;
+
+    /* Copy old data */
+    size_t copy_size = old_size < new_size ? old_size : new_size;
+    memcpy(new_buf->mapped_ptr, old_d3d_buf->mapped_ptr, copy_size);
+
+    /* Release old buffer */
+    old_d3d_buf->resource->Unmap(0, nullptr);
+    delete old_d3d_buf;
+
+    /* Update old buffer pointer to point to new buffer */
+    return new_buf;
+}
+
+static void* d3d12_buffer_clone(void* dev, void* src_buf, size_t size) {
+    D3D12Device* d3d_dev = (D3D12Device*)dev;
+    D3D12Buffer* src_d3d_buf = (D3D12Buffer*)src_buf;
+
+    /* Allocate new buffer */
+    D3D12Buffer* clone_buf = (D3D12Buffer*)d3d12_buffer_alloc(dev, size);
+    if (!clone_buf) return NULL;
+
+    /* Copy data from source buffer */
+    memcpy(clone_buf->mapped_ptr, src_d3d_buf->mapped_ptr, size);
+
+    return clone_buf;
+}
+
+static void d3d12_buffer_destroy(void* buf) {
+    if (!buf) return;
+
+    D3D12Buffer* d3d_buf = (D3D12Buffer*)buf;
+    d3d_buf->resource->Unmap(0, nullptr);
+    delete d3d_buf;
+}
+
+static void* d3d12_kernel_compile(void* dev, const char* source, size_t source_len,
+                                   char* error, size_t error_len) {
+    D3D12Device* d3d_dev = (D3D12Device*)dev;
+
+    /* Assume source is DXIL bytecode (SPIRV->HLSL->DXIL transpilation happens before this) */
+    D3D12Kernel* kernel = new D3D12Kernel();
+    kernel->device = d3d_dev->device;
+
+    /* Create root signature with UAV descriptor table
+     * Note: This creates a simple root signature with one descriptor table
+     * containing UAVs for input/output buffers */
+    D3D12_DESCRIPTOR_RANGE range = {};
+    range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    range.NumDescriptors = 16;  /* Support up to 16 buffers */
+    range.BaseShaderRegister = 0;
+    range.RegisterSpace = 0;
+    range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER param = {};
+    param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    param.DescriptorTable.NumDescriptorRanges = 1;
+    param.DescriptorTable.pDescriptorRanges = &range;
+    param.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
+    root_sig_desc.NumParameters = 1;
+    root_sig_desc.pParameters = &param;
+    root_sig_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    ComPtr<ID3DBlob> signature;
+    ComPtr<ID3DBlob> sig_error;
+    HRESULT hr = D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                              &signature, &sig_error);
+    if (FAILED(hr)) {
+        if (error && sig_error) {
+            snprintf(error, error_len, "Failed to serialize root signature: %s",
+                     (char*)sig_error->GetBufferPointer());
+        }
+        delete kernel;
+        return NULL;
+    }
+
+    hr = d3d_dev->device->CreateRootSignature(0, signature->GetBufferPointer(),
+                                               signature->GetBufferSize(),
+                                               IID_PPV_ARGS(&kernel->root_signature));
+    if (FAILED(hr)) {
+        if (error) {
+            snprintf(error, error_len, "Failed to create root signature");
+        }
+        delete kernel;
+        return NULL;
+    }
+
+    /* Create compute pipeline state */
+    D3D12_COMPUTE_PIPELINE_STATE_DESC pso_desc = {};
+    pso_desc.pRootSignature = kernel->root_signature.Get();
+    pso_desc.CS.pShaderBytecode = source;
+    pso_desc.CS.BytecodeLength = source_len;
+
+    hr = d3d_dev->device->CreateComputePipelineState(&pso_desc,
+                                                      IID_PPV_ARGS(&kernel->pipeline));
+    if (FAILED(hr)) {
+        if (error) {
+            snprintf(error, error_len, "Failed to create compute pipeline state");
+        }
+        delete kernel;
+        return NULL;
+    }
+
+    /* Create descriptor heap for UAVs */
+    D3D12_DESCRIPTOR_HEAP_DESC heap_desc = {};
+    heap_desc.NumDescriptors = 16;
+    heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+
+    hr = d3d_dev->device->CreateDescriptorHeap(&heap_desc,
+                                                IID_PPV_ARGS(&kernel->descriptor_heap));
+    if (FAILED(hr)) {
+        if (error) {
+            snprintf(error, error_len, "Failed to create descriptor heap");
+        }
+        delete kernel;
+        return NULL;
+    }
+
+    return kernel;
+}
+
+static void d3d12_kernel_dispatch(void* kernel, void** inputs, int input_count,
+                                   void* output, int work_size) {
+    if (!kernel) return;
+
+    D3D12Kernel* d3d_kernel = (D3D12Kernel*)kernel;
+    D3D12Buffer* output_buf = (D3D12Buffer*)output;
+    D3D12Device* d3d_dev = output_buf->device;
+
+    /* Reset command list */
+    d3d_dev->allocator->Reset();
+    d3d_dev->command_list->Reset(d3d_dev->allocator.Get(), d3d_kernel->pipeline.Get());
+
+    /* Set root signature */
+    d3d_dev->command_list->SetComputeRootSignature(d3d_kernel->root_signature.Get());
+
+    /* Bind descriptor heap */
+    ID3D12DescriptorHeap* heaps[] = { d3d_kernel->descriptor_heap.Get() };
+    d3d_dev->command_list->SetDescriptorHeaps(1, heaps);
+
+    /* Create UAVs for all buffers (inputs + output) */
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle = d3d_kernel->descriptor_heap->GetCPUDescriptorHandleForHeapStart();
+    UINT descriptor_size = d3d_dev->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    /* Create UAVs for input buffers */
+    for (int i = 0; i < input_count; i++) {
+        D3D12Buffer* input_buf = (D3D12Buffer*)inputs[i];
+
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+        uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+        uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uav_desc.Buffer.FirstElement = 0;
+        uav_desc.Buffer.NumElements = (UINT)(input_buf->size / 4);
+        uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE handle = cpu_handle;
+        handle.ptr += i * descriptor_size;
+        d3d_dev->device->CreateUnorderedAccessView(input_buf->resource.Get(), nullptr, &uav_desc, handle);
+    }
+
+    /* Create UAV for output buffer */
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+    uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+    uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    uav_desc.Buffer.FirstElement = 0;
+    uav_desc.Buffer.NumElements = (UINT)(output_buf->size / 4);
+    uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE output_handle = cpu_handle;
+    output_handle.ptr += input_count * descriptor_size;
+    d3d_dev->device->CreateUnorderedAccessView(output_buf->resource.Get(), nullptr, &uav_desc, output_handle);
+
+    /* Set descriptor table */
+    D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle = d3d_kernel->descriptor_heap->GetGPUDescriptorHandleForHeapStart();
+    d3d_dev->command_list->SetComputeRootDescriptorTable(0, gpu_handle);
+
+    /* Dispatch compute shader
+     * Calculate thread groups: 64 threads per group (common default) */
+    UINT thread_group_size = 64;
+    UINT num_groups = (work_size + thread_group_size - 1) / thread_group_size;
+    d3d_dev->command_list->Dispatch(num_groups, 1, 1);
+
+    /* Close and execute command list */
+    d3d_dev->command_list->Close();
+    ID3D12CommandList* cmd_lists[] = { d3d_dev->command_list.Get() };
+    d3d_dev->queue->ExecuteCommandLists(1, cmd_lists);
+
+    /* Wait for GPU to finish (synchronous execution) */
+    d3d_dev->fence_value++;
+    d3d_dev->queue->Signal(d3d_dev->fence.Get(), d3d_dev->fence_value);
+    if (d3d_dev->fence->GetCompletedValue() < d3d_dev->fence_value) {
+        d3d_dev->fence->SetEventOnCompletion(d3d_dev->fence_value, d3d_dev->fence_event);
+        WaitForSingleObject(d3d_dev->fence_event, INFINITE);
+    }
+}
+
+static void d3d12_kernel_destroy(void* kernel) {
+    if (!kernel) return;
+    delete (D3D12Kernel*)kernel;
+}
+
+/* Viewport operations */
+static void* d3d12_viewport_attach(void* dev, void* buffer, void* surface, char* error, size_t error_len) {
+    D3D12Device* d3d_dev = (D3D12Device*)dev;
+    D3D12Buffer* d3d_buf = (D3D12Buffer*)buffer;
+    HWND hwnd = (HWND)surface;
+
+    if (!hwnd || !IsWindow(hwnd)) {
+        if (error) {
+            snprintf(error, error_len, "Invalid HWND");
+        }
+        return NULL;
+    }
+
+    /* Create DXGI factory */
+    ComPtr<IDXGIFactory4> factory;
+    HRESULT hr = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
+    if (FAILED(hr)) {
+        if (error) {
+            snprintf(error, error_len, "Failed to create DXGI factory");
+        }
+        return NULL;
+    }
+
+    /* Describe swap chain */
+    DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
+    swapChainDesc.Width = 0;  /* Use window width */
+    swapChainDesc.Height = 0; /* Use window height */
+    swapChainDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    swapChainDesc.Stereo = FALSE;
+    swapChainDesc.SampleDesc.Count = 1;
+    swapChainDesc.SampleDesc.Quality = 0;
+    swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    swapChainDesc.BufferCount = 2;
+    swapChainDesc.Scaling = DXGI_SCALING_STRETCH;
+    swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+
+    /* Create swap chain */
+    ComPtr<IDXGISwapChain1> swapChain1;
+    hr = factory->CreateSwapChainForHwnd(
+        d3d_dev->queue.Get(),
+        hwnd,
+        &swapChainDesc,
+        nullptr,
+        nullptr,
+        &swapChain1
+    );
+
+    if (FAILED(hr)) {
+        if (error) {
+            snprintf(error, error_len, "Failed to create swap chain");
+        }
+        return NULL;
+    }
+
+    /* Query for IDXGISwapChain3 */
+    ComPtr<IDXGISwapChain3> swapChain;
+    hr = swapChain1.As(&swapChain);
+    if (FAILED(hr)) {
+        if (error) {
+            snprintf(error, error_len, "Failed to query IDXGISwapChain3");
+        }
+        return NULL;
+    }
+
+    /* Create viewport */
+    D3D12Viewport* viewport = new D3D12Viewport();
+    viewport->swapChain = swapChain;
+    viewport->buffer = d3d_buf;
+    viewport->device = d3d_dev;
+    viewport->bufferIndex = 0;
+
+    return viewport;
+}
+
+static void d3d12_viewport_present(void* viewport_ptr) {
+    if (!viewport_ptr) return;
+
+    D3D12Viewport* viewport = (D3D12Viewport*)viewport_ptr;
+
+    /* Get current back buffer */
+    viewport->bufferIndex = viewport->swapChain->GetCurrentBackBufferIndex();
+    ComPtr<ID3D12Resource> backBuffer;
+    HRESULT hr = viewport->swapChain->GetBuffer(viewport->bufferIndex, IID_PPV_ARGS(&backBuffer));
+    if (FAILED(hr)) return;
+
+    /* Reset command list */
+    viewport->device->allocator->Reset();
+    viewport->device->command_list->Reset(viewport->device->allocator.Get(), nullptr);
+
+    /* Transition back buffer to COPY_DEST */
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = backBuffer.Get();
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    viewport->device->command_list->ResourceBarrier(1, &barrier);
+
+    /* Copy from buffer to back buffer */
+    viewport->device->command_list->CopyResource(backBuffer.Get(), viewport->buffer->resource.Get());
+
+    /* Transition back buffer to PRESENT */
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+    viewport->device->command_list->ResourceBarrier(1, &barrier);
+
+    /* Execute commands */
+    viewport->device->command_list->Close();
+    ID3D12CommandList* cmd_lists[] = { viewport->device->command_list.Get() };
+    viewport->device->queue->ExecuteCommandLists(1, cmd_lists);
+
+    /* Present */
+    viewport->swapChain->Present(1, 0);
+
+    /* Wait for GPU */
+    viewport->device->fence_value++;
+    viewport->device->queue->Signal(viewport->device->fence.Get(), viewport->device->fence_value);
+    if (viewport->device->fence->GetCompletedValue() < viewport->device->fence_value) {
+        viewport->device->fence->SetEventOnCompletion(viewport->device->fence_value, viewport->device->fence_event);
+        WaitForSingleObject(viewport->device->fence_event, INFINITE);
+    }
+}
+
+static void d3d12_viewport_detach(void* viewport_ptr) {
+    if (!viewport_ptr) return;
+    delete (D3D12Viewport*)viewport_ptr;
+}
+
+/* Backend implementation */
+static mental_backend g_d3d12_backend = {
+    .name = "D3D12",
+    .api = MENTAL_API_D3D12,
+    .init = d3d12_init,
+    .shutdown = d3d12_shutdown,
+    .device_count = d3d12_device_count,
+    .device_info = d3d12_device_info,
+    .device_create = d3d12_device_create,
+    .device_destroy = d3d12_device_destroy,
+    .buffer_alloc = d3d12_buffer_alloc,
+    .buffer_write = d3d12_buffer_write,
+    .buffer_read = d3d12_buffer_read,
+    .buffer_resize = d3d12_buffer_resize,
+    .buffer_clone = d3d12_buffer_clone,
+    .buffer_destroy = d3d12_buffer_destroy,
+    .kernel_compile = d3d12_kernel_compile,
+    .kernel_dispatch = d3d12_kernel_dispatch,
+    .kernel_destroy = d3d12_kernel_destroy,
+    .viewport_attach = d3d12_viewport_attach,
+    .viewport_present = d3d12_viewport_present,
+    .viewport_detach = d3d12_viewport_detach
+};
+
+mental_backend* d3d12_backend = &g_d3d12_backend;
+
+#else
+mental_backend* d3d12_backend = NULL;
+#endif

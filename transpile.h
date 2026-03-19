@@ -1,0 +1,63 @@
+/*
+ * Mental - Shader Transpilation
+ *
+ * Language detection and SPIRV-based transpilation.
+ * Supports: GLSL, HLSL, MSL, WGSL
+ */
+
+#ifndef MENTAL_TRANSPILE_H
+#define MENTAL_TRANSPILE_H
+
+#include "mental.h"
+#include <stddef.h>
+
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Shader language types */
+typedef enum {
+    MENTAL_LANG_UNKNOWN = 0,
+    MENTAL_LANG_GLSL,
+    MENTAL_LANG_HLSL,
+    MENTAL_LANG_MSL,
+    MENTAL_LANG_WGSL,
+    MENTAL_LANG_SPIRV
+} mental_language;
+
+/* Detect shader language from source code */
+mental_language mental_detect_language(const char* source, size_t source_len);
+
+/* Compile GLSL to SPIRV */
+unsigned char* mental_glsl_to_spirv(const char* source, size_t source_len, size_t* out_len, char* error, size_t error_len);
+
+/* Compile HLSL to SPIRV */
+unsigned char* mental_hlsl_to_spirv(const char* source, size_t source_len, size_t* out_len, char* error, size_t error_len);
+
+/* Compile WGSL to SPIRV */
+unsigned char* mental_wgsl_to_spirv(const char* source, size_t source_len, size_t* out_len, char* error, size_t error_len);
+
+/* Transpile SPIRV to GLSL */
+char* mental_spirv_to_glsl(const unsigned char* spirv, size_t spirv_len, size_t* out_len, char* error, size_t error_len);
+
+/* Transpile SPIRV to HLSL */
+char* mental_spirv_to_hlsl(const unsigned char* spirv, size_t spirv_len, size_t* out_len, char* error, size_t error_len);
+
+/* Transpile SPIRV to MSL */
+char* mental_spirv_to_msl(const unsigned char* spirv, size_t spirv_len, size_t* out_len, char* error, size_t error_len);
+
+/* Transpile SPIRV to WGSL */
+char* mental_spirv_to_wgsl(const unsigned char* spirv, size_t spirv_len, size_t* out_len, char* error, size_t error_len);
+
+/* Free transpilation results */
+void mental_transpile_free(char* result);
+
+/* Map API type to target language */
+mental_language mental_api_to_language(mental_api_type api);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* MENTAL_TRANSPILE_H */

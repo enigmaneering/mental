@@ -1,0 +1,136 @@
+name: Mental Library Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test Mental Library
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS
+          - os: macos-latest
+            runner: macos-14  # ARM64
+            platform: darwin-arm64
+            display_name: macOS ARM64 (Metal)
+          - os: macos-latest
+            runner: macos-14
+            platform: darwin-amd64
+            display_name: macOS x86_64 (Metal)
+          # Linux
+          - os: ubuntu-latest
+            runner: ubuntu-latest
+            platform: linux-amd64
+            display_name: Linux x86_64 (Vulkan)
+            use_xvfb: true
+          - os: ubuntu-latest
+            runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            display_name: Linux ARM64 (Vulkan)
+            use_xvfb: true
+          # Windows
+          - os: windows-latest
+            runner: windows-latest
+            platform: windows-amd64
+            display_name: Windows x86_64 (D3D12)
+          - os: windows-latest
+            runner: windows-latest
+            platform: windows-arm64
+            display_name: Windows ARM64 (D3D12)
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          cmake \
+          build-essential \
+          libx11-dev \
+          libvulkan-dev \
+          vulkan-tools \
+          mesa-vulkan-drivers \
+          xvfb
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        # Dependencies already present on macOS runners
+        echo "macOS dependencies ready"
+
+    - name: Setup MSVC (Windows)
+      if: runner.os == 'Windows'
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Build (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        mkdir build
+        cd build
+        cmake ..
+        make -j4
+
+    - name: Build (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        mkdir build
+        cd build
+        cmake .. -G "Visual Studio 17 2022"
+        cmake --build . --config Release
+
+    - name: Run tests (Linux with Xvfb)
+      if: matrix.use_xvfb
+      uses: GabrielBB/xvfb-action@v1
+      with:
+        run: |
+          cd build
+          ctest --output-on-failure
+
+    - name: Run tests (macOS/Windows)
+      if: ${{ !matrix.use_xvfb }}
+      run: |
+        cd build
+        ctest --output-on-failure
+
+    - name: Run tests (Windows Release config)
+      if: runner.os == 'Windows'
+      run: |
+        cd build
+        ctest --output-on-failure -C Release
+
+    - name: Test Summary
+      if: always()
+      run: |
+        cd build
+        echo "=== Test Results for ${{ matrix.display_name }} ==="
+        cat Testing/Temporary/LastTest.log || true
+
+  summary:
+    runs-on: ubuntu-latest
+    name: Test Summary
+    needs: [test]
+    if: always()
+
+    steps:
+    - name: Report Status
+      run: |
+        echo "🧪 Mental Library Test Results"
+        echo "=============================="
+        echo ""
+        echo "Test status: ${{ needs.test.result }}"
+
+        if [[ "${{ needs.test.result }}" == "success" ]]; then
+          echo "✅ All platform tests passed!"
+        else
+          echo "❌ Some tests failed"
+          exit 1
+        fi
