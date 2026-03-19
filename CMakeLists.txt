@@ -37,7 +37,7 @@ if(PLATFORM_DARWIN)
     list(APPEND MENTAL_SOURCES backend_metal.m)
     set_source_files_properties(backend_metal.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 elseif(PLATFORM_WINDOWS)
-    list(APPEND MENTAL_SOURCES backend_opencl.c)
+    # OpenCL backend only if OpenCL is available (will be checked later)
     list(APPEND MENTAL_CXX_SOURCES backend_d3d12.cpp)
 elseif(PLATFORM_LINUX)
     list(APPEND MENTAL_SOURCES backend_opencl.c)
@@ -62,12 +62,14 @@ target_include_directories(mental-static PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${EXTERNAL_DIR}/glslang
     ${EXTERNAL_DIR}/spirv-cross
+    ${EXTERNAL_DIR}/dxc/include
 )
 
 target_include_directories(mental PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${EXTERNAL_DIR}/glslang
     ${EXTERNAL_DIR}/spirv-cross
+    ${EXTERNAL_DIR}/dxc/include
 )
 
 # Platform-specific configurations
@@ -119,6 +121,15 @@ elseif(PLATFORM_WINDOWS)
     # OpenCL (optional on Windows - D3D12 is the primary backend)
     find_package(OpenCL)
 
+    # Add OpenCL backend source if OpenCL is available
+    if(OpenCL_FOUND)
+        target_sources(mental-static PRIVATE backend_opencl.c)
+        target_sources(mental PRIVATE backend_opencl.c)
+        message(STATUS "OpenCL found - enabling OpenCL backend")
+    else()
+        message(STATUS "OpenCL not found - only D3D12 backend available")
+    endif()
+
     # Common dependencies for both shared and static
     set(WINDOWS_LIBS
         d3d12.lib dxgi.lib
@@ -126,30 +137,28 @@ elseif(PLATFORM_WINDOWS)
 
     if(OpenCL_FOUND)
         list(APPEND WINDOWS_LIBS OpenCL::OpenCL)
-        message(STATUS "OpenCL found - enabling OpenCL backend")
-    else()
-        message(STATUS "OpenCL not found - only D3D12 backend available")
     endif()
 
     # glslang and SPIRV-Cross static libraries (only for mental-static)
     # Link order matters: dependencies must come after libraries that use them
+    # MinGW uses .a extension for static libraries
     set(WINDOWS_STATIC_LIBS
-        ${EXTERNAL_DIR}/glslang/glslang.lib
-        ${EXTERNAL_DIR}/glslang/glslang-default-resource-limits.lib
-        ${EXTERNAL_DIR}/glslang/SPIRV.lib
-        ${EXTERNAL_DIR}/glslang/GenericCodeGen.lib
-        ${EXTERNAL_DIR}/glslang/MachineIndependent.lib
-        ${EXTERNAL_DIR}/glslang/OSDependent.lib
-        ${EXTERNAL_DIR}/spirv-cross/spirv-cross-core.lib
-        ${EXTERNAL_DIR}/spirv-cross/spirv-cross-glsl.lib
-        ${EXTERNAL_DIR}/spirv-cross/spirv-cross-hlsl.lib
-        ${EXTERNAL_DIR}/spirv-cross/spirv-cross-msl.lib
-        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-opt.lib
-        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-link.lib
-        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-diff.lib
-        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-lint.lib
-        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-reduce.lib
-        ${EXTERNAL_DIR}/glslang/SPIRV-Tools.lib
+        ${EXTERNAL_DIR}/glslang/libglslang.a
+        ${EXTERNAL_DIR}/glslang/libglslang-default-resource-limits.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV.a
+        ${EXTERNAL_DIR}/glslang/libGenericCodeGen.a
+        ${EXTERNAL_DIR}/glslang/libMachineIndependent.a
+        ${EXTERNAL_DIR}/glslang/libOSDependent.a
+        ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-core.a
+        ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-glsl.a
+        ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-hlsl.a
+        ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-msl.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-opt.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-link.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-diff.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-lint.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-reduce.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools.a
     )
 
     # Link shared library (needs glslang/SPIRV-Cross too for symbols)
