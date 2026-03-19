@@ -83,6 +83,7 @@ jobs:
           mingw-w64-x86_64-gcc
           mingw-w64-x86_64-cmake
           make
+          unzip
 
     - name: Download shader toolchain dependencies (Unix)
       if: runner.os != 'Windows'
