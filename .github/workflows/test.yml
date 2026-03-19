@@ -63,6 +63,67 @@ jobs:
         # Dependencies already present on macOS runners
         echo "macOS dependencies ready"
 
+    - name: Download shader toolchain dependencies
+      run: |
+        # Get latest release from redistributables
+        LATEST_RELEASE=$(curl -s https://api.github.com/repos/enigmaneering/redistributables/releases/latest)
+        VERSION=$(echo "$LATEST_RELEASE" | grep '"tag_name"' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')
+
+        echo "Downloading shader toolchain $VERSION for ${{ matrix.platform }}"
+
+        mkdir -p external/glslang external/spirv-cross external/dxc/bin external/naga/bin
+
+        # Download and extract glslang
+        curl -L -o glslang.tar.gz "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/glslang-${{ matrix.platform }}.tar.gz" 2>/dev/null || \
+        curl -L -o glslang.zip "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/glslang-${{ matrix.platform }}.zip" 2>/dev/null || true
+
+        if [ -f glslang.tar.gz ]; then
+          tar -xzf glslang.tar.gz
+          cp -r glslang-${{ matrix.platform }}/* external/glslang/
+        elif [ -f glslang.zip ]; then
+          unzip -q glslang.zip
+          cp -r glslang-${{ matrix.platform }}/* external/glslang/
+        fi
+
+        # Download and extract SPIRV-Cross
+        curl -L -o spirv-cross.tar.gz "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/spirv-cross-${{ matrix.platform }}.tar.gz" 2>/dev/null || \
+        curl -L -o spirv-cross.zip "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/spirv-cross-${{ matrix.platform }}.zip" 2>/dev/null || true
+
+        if [ -f spirv-cross.tar.gz ]; then
+          tar -xzf spirv-cross.tar.gz
+          cp -r spirv-cross-${{ matrix.platform }}/* external/spirv-cross/
+        elif [ -f spirv-cross.zip ]; then
+          unzip -q spirv-cross.zip
+          cp -r spirv-cross-${{ matrix.platform }}/* external/spirv-cross/
+        fi
+
+        # Download and extract DXC
+        curl -L -o dxc.tar.gz "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/dxc-${{ matrix.platform }}.tar.gz" 2>/dev/null || \
+        curl -L -o dxc.zip "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/dxc-${{ matrix.platform }}.zip" 2>/dev/null || true
+
+        if [ -f dxc.tar.gz ]; then
+          tar -xzf dxc.tar.gz
+          cp -r dxc-${{ matrix.platform }}/bin/* external/dxc/bin/ 2>/dev/null || cp -r dxc-${{ matrix.platform }}/* external/dxc/bin/ 2>/dev/null || true
+        elif [ -f dxc.zip ]; then
+          unzip -q dxc.zip
+          cp -r dxc-${{ matrix.platform }}/bin/* external/dxc/bin/ 2>/dev/null || cp -r dxc-${{ matrix.platform }}/* external/dxc/bin/ 2>/dev/null || true
+        fi
+
+        # Download and extract Naga
+        curl -L -o naga.tar.gz "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/naga-${{ matrix.platform }}.tar.gz" 2>/dev/null || \
+        curl -L -o naga.zip "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/naga-${{ matrix.platform }}.zip" 2>/dev/null || true
+
+        if [ -f naga.tar.gz ]; then
+          tar -xzf naga.tar.gz
+          cp -r naga-${{ matrix.platform }}/bin/* external/naga/bin/ 2>/dev/null || cp -r naga-${{ matrix.platform }}/* external/naga/bin/ 2>/dev/null || true
+        elif [ -f naga.zip ]; then
+          unzip -q naga.zip
+          cp -r naga-${{ matrix.platform }}/bin/* external/naga/bin/ 2>/dev/null || cp -r naga-${{ matrix.platform }}/* external/naga/bin/ 2>/dev/null || true
+        fi
+
+        echo "Dependencies downloaded and extracted"
+        ls -la external/
+
     - name: Setup MSVC (Windows)
       if: runner.os == 'Windows'
       uses: microsoft/setup-msbuild@v2
