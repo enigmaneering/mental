@@ -115,10 +115,12 @@ jobs:
 
         if [ -f dxc.tar.gz ]; then
           tar -xzf dxc.tar.gz
-          cp -r dxc-$RUNNER_PLATFORM/bin/* external/dxc/bin/ 2>/dev/null || cp -r dxc-$RUNNER_PLATFORM/* external/dxc/bin/ 2>/dev/null || true
+          # Copy entire dxc directory structure (bin/, lib/, etc.)
+          cp -r dxc-$RUNNER_PLATFORM/* external/dxc/ 2>/dev/null || true
         elif [ -f dxc.zip ]; then
           unzip -q dxc.zip
-          cp -r dxc-$RUNNER_PLATFORM/bin/* external/dxc/bin/ 2>/dev/null || cp -r dxc-$RUNNER_PLATFORM/* external/dxc/bin/ 2>/dev/null || true
+          # Copy entire dxc directory structure (bin/, lib/, etc.)
+          cp -r dxc-$RUNNER_PLATFORM/* external/dxc/ 2>/dev/null || true
         fi
 
         # Download and extract Naga (use runner_platform for executable)
@@ -138,6 +140,7 @@ jobs:
         chmod +x external/naga/bin/* 2>/dev/null || true
         if [ "$(uname)" = "Darwin" ]; then
           xattr -d com.apple.quarantine external/dxc/bin/* 2>/dev/null || true
+          xattr -d com.apple.quarantine external/dxc/lib/* 2>/dev/null || true
           xattr -d com.apple.quarantine external/naga/bin/* 2>/dev/null || true
         fi
 
@@ -176,11 +179,8 @@ jobs:
         try {
           Invoke-WebRequest -Uri "https://github.com/enigmaneering/redistributables/releases/download/$version/dxc-$runnerPlatform.zip" -OutFile "dxc.zip"
           Expand-Archive -Path "dxc.zip" -DestinationPath "."
-          if (Test-Path "dxc-$runnerPlatform/bin") {
-            Copy-Item -Path "dxc-$runnerPlatform/bin/*" -Destination "external/dxc/bin/" -Recurse -Force
-          } else {
-            Copy-Item -Path "dxc-$runnerPlatform/*" -Destination "external/dxc/bin/" -Recurse -Force
-          }
+          # Copy entire dxc directory structure (bin/, lib/, etc.)
+          Copy-Item -Path "dxc-$runnerPlatform/*" -Destination "external/dxc/" -Recurse -Force
         } catch { Write-Host "Failed to download dxc" }
 
         # Download and extract Naga (use runner_platform for executable)
