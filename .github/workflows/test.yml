@@ -16,31 +16,37 @@ jobs:
             platform: darwin-arm64
             display_name: macOS ARM64 (Metal)
             macos_arch: arm64
+            runner_platform: darwin-arm64
           - os: macos-latest
             runner: macos-14  # Cross-compile x86_64 on ARM64
             platform: darwin-amd64
             display_name: macOS x86_64 (Metal)
             macos_arch: x86_64
+            runner_platform: darwin-arm64
           # Linux
           - os: ubuntu-latest
             runner: ubuntu-latest
             platform: linux-amd64
             display_name: Linux x86_64 (Vulkan)
             use_xvfb: true
+            runner_platform: linux-amd64
           - os: ubuntu-latest
             runner: ubuntu-24.04-arm
             platform: linux-arm64
             display_name: Linux ARM64 (Vulkan)
             use_xvfb: true
+            runner_platform: linux-arm64
           # Windows
           - os: windows-latest
             runner: windows-latest
             platform: windows-amd64
             display_name: Windows x86_64 (D3D12)
+            runner_platform: windows-amd64
           - os: windows-latest
             runner: windows-latest
             platform: windows-arm64
             display_name: Windows ARM64 (D3D12)
+            runner_platform: windows-amd64
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -57,7 +63,9 @@ jobs:
           libvulkan-dev \
           vulkan-tools \
           mesa-vulkan-drivers \
-          xvfb
+          xvfb \
+          ocl-icd-opencl-dev \
+          opencl-headers
 
     - name: Install dependencies (macOS)
       if: runner.os == 'macOS'
@@ -65,7 +73,8 @@ jobs:
         # Dependencies already present on macOS runners
         echo "macOS dependencies ready"
 
-    - name: Download shader toolchain dependencies
+    - name: Download shader toolchain dependencies (Unix)
+      if: runner.os != 'Windows'
       run: |
         # Get latest release from redistributables
         LATEST_RELEASE=$(curl -s https://api.github.com/repos/enigmaneering/redistributables/releases/latest)
@@ -99,32 +108,94 @@ jobs:
           cp -r spirv-cross-${{ matrix.platform }}/* external/spirv-cross/
         fi
 
-        # Download and extract DXC
-        curl -L -o dxc.tar.gz "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/dxc-${{ matrix.platform }}.tar.gz" 2>/dev/null || \
-        curl -L -o dxc.zip "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/dxc-${{ matrix.platform }}.zip" 2>/dev/null || true
+        # Download and extract DXC (use runner_platform for executable)
+        RUNNER_PLATFORM="${{ matrix.runner_platform || matrix.platform }}"
+        curl -L -o dxc.tar.gz "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/dxc-$RUNNER_PLATFORM.tar.gz" 2>/dev/null || \
+        curl -L -o dxc.zip "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/dxc-$RUNNER_PLATFORM.zip" 2>/dev/null || true
 
         if [ -f dxc.tar.gz ]; then
           tar -xzf dxc.tar.gz
-          cp -r dxc-${{ matrix.platform }}/bin/* external/dxc/bin/ 2>/dev/null || cp -r dxc-${{ matrix.platform }}/* external/dxc/bin/ 2>/dev/null || true
+          cp -r dxc-$RUNNER_PLATFORM/bin/* external/dxc/bin/ 2>/dev/null || cp -r dxc-$RUNNER_PLATFORM/* external/dxc/bin/ 2>/dev/null || true
         elif [ -f dxc.zip ]; then
           unzip -q dxc.zip
-          cp -r dxc-${{ matrix.platform }}/bin/* external/dxc/bin/ 2>/dev/null || cp -r dxc-${{ matrix.platform }}/* external/dxc/bin/ 2>/dev/null || true
+          cp -r dxc-$RUNNER_PLATFORM/bin/* external/dxc/bin/ 2>/dev/null || cp -r dxc-$RUNNER_PLATFORM/* external/dxc/bin/ 2>/dev/null || true
         fi
 
-        # Download and extract Naga
-        curl -L -o naga.tar.gz "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/naga-${{ matrix.platform }}.tar.gz" 2>/dev/null || \
-        curl -L -o naga.zip "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/naga-${{ matrix.platform }}.zip" 2>/dev/null || true
+        # Download and extract Naga (use runner_platform for executable)
+        curl -L -o naga.tar.gz "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/naga-$RUNNER_PLATFORM.tar.gz" 2>/dev/null || \
+        curl -L -o naga.zip "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/naga-$RUNNER_PLATFORM.zip" 2>/dev/null || true
 
         if [ -f naga.tar.gz ]; then
           tar -xzf naga.tar.gz
-          cp -r naga-${{ matrix.platform }}/bin/* external/naga/bin/ 2>/dev/null || cp -r naga-${{ matrix.platform }}/* external/naga/bin/ 2>/dev/null || true
+          cp -r naga-$RUNNER_PLATFORM/bin/* external/naga/bin/ 2>/dev/null || cp -r naga-$RUNNER_PLATFORM/* external/naga/bin/ 2>/dev/null || true
         elif [ -f naga.zip ]; then
           unzip -q naga.zip
-          cp -r naga-${{ matrix.platform }}/bin/* external/naga/bin/ 2>/dev/null || cp -r naga-${{ matrix.platform }}/* external/naga/bin/ 2>/dev/null || true
+          cp -r naga-$RUNNER_PLATFORM/bin/* external/naga/bin/ 2>/dev/null || cp -r naga-$RUNNER_PLATFORM/* external/naga/bin/ 2>/dev/null || true
+        fi
+
+        # Make binaries executable and remove macOS quarantine
+        chmod +x external/dxc/bin/* 2>/dev/null || true
+        chmod +x external/naga/bin/* 2>/dev/null || true
+        if [ "$(uname)" = "Darwin" ]; then
+          xattr -d com.apple.quarantine external/dxc/bin/* 2>/dev/null || true
+          xattr -d com.apple.quarantine external/naga/bin/* 2>/dev/null || true
         fi
 
         echo "Dependencies downloaded and extracted"
         ls -la external/
+
+    - name: Download shader toolchain dependencies (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        # Get latest release from redistributables
+        $response = Invoke-RestMethod -Uri "https://api.github.com/repos/enigmaneering/redistributables/releases/latest"
+        $version = $response.tag_name
+
+        Write-Host "Downloading shader toolchain $version for ${{ matrix.platform }}"
+
+        New-Item -ItemType Directory -Force -Path external/glslang, external/spirv-cross, external/dxc/bin, external/naga/bin | Out-Null
+
+        # Download and extract glslang
+        try {
+          Invoke-WebRequest -Uri "https://github.com/enigmaneering/redistributables/releases/download/$version/glslang-${{ matrix.platform }}.zip" -OutFile "glslang.zip"
+          Expand-Archive -Path "glslang.zip" -DestinationPath "."
+          Copy-Item -Path "glslang-${{ matrix.platform }}/*" -Destination "external/glslang/" -Recurse -Force
+        } catch { Write-Host "Failed to download glslang" }
+
+        # Download and extract SPIRV-Cross
+        try {
+          Invoke-WebRequest -Uri "https://github.com/enigmaneering/redistributables/releases/download/$version/spirv-cross-${{ matrix.platform }}.zip" -OutFile "spirv-cross.zip"
+          Expand-Archive -Path "spirv-cross.zip" -DestinationPath "."
+          Copy-Item -Path "spirv-cross-${{ matrix.platform }}/*" -Destination "external/spirv-cross/" -Recurse -Force
+        } catch { Write-Host "Failed to download spirv-cross" }
+
+        # Download and extract DXC (use runner_platform for executable)
+        $runnerPlatform = "${{ matrix.runner_platform }}"
+        if (-not $runnerPlatform) { $runnerPlatform = "${{ matrix.platform }}" }
+        try {
+          Invoke-WebRequest -Uri "https://github.com/enigmaneering/redistributables/releases/download/$version/dxc-$runnerPlatform.zip" -OutFile "dxc.zip"
+          Expand-Archive -Path "dxc.zip" -DestinationPath "."
+          if (Test-Path "dxc-$runnerPlatform/bin") {
+            Copy-Item -Path "dxc-$runnerPlatform/bin/*" -Destination "external/dxc/bin/" -Recurse -Force
+          } else {
+            Copy-Item -Path "dxc-$runnerPlatform/*" -Destination "external/dxc/bin/" -Recurse -Force
+          }
+        } catch { Write-Host "Failed to download dxc" }
+
+        # Download and extract Naga (use runner_platform for executable)
+        try {
+          Invoke-WebRequest -Uri "https://github.com/enigmaneering/redistributables/releases/download/$version/naga-$runnerPlatform.zip" -OutFile "naga.zip"
+          Expand-Archive -Path "naga.zip" -DestinationPath "."
+          if (Test-Path "naga-$runnerPlatform/bin") {
+            Copy-Item -Path "naga-$runnerPlatform/bin/*" -Destination "external/naga/bin/" -Recurse -Force
+          } else {
+            Copy-Item -Path "naga-$runnerPlatform/*" -Destination "external/naga/bin/" -Recurse -Force
+          }
+        } catch { Write-Host "Failed to download naga" }
+
+        Write-Host "Dependencies downloaded and extracted"
+        Get-ChildItem -Path external -Recurse
 
     - name: Setup MSVC (Windows)
       if: runner.os == 'Windows'
