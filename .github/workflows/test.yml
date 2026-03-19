@@ -1,10 +1,6 @@
 name: Mental Library Tests
 
 on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main, develop ]
   workflow_dispatch:
 
 jobs:
@@ -74,6 +70,7 @@ jobs:
     - name: Build (Unix)
       if: runner.os != 'Windows'
       run: |
+        rm -rf build
         mkdir build
         cd build
         cmake ..
@@ -82,6 +79,7 @@ jobs:
     - name: Build (Windows)
       if: runner.os == 'Windows'
       run: |
+        if (Test-Path build) { Remove-Item -Recurse -Force build }
         mkdir build
         cd build
         cmake .. -G "Visual Studio 17 2022"

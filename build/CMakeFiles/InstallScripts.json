@@ -1,8 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/Users/rpetz/source/enigmaneering/mental/build/cmake_install.cmake",
-		"/Users/rpetz/source/enigmaneering/mental/build/test/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

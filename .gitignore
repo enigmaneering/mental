@@ -44,3 +44,5 @@ external/freeze
 
 # Version tracking file (automatically managed)
 external/.version
+
+build/
