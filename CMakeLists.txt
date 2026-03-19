@@ -89,16 +89,11 @@ if(PLATFORM_DARWIN)
     )
 
     # glslang and SPIRV-Cross static libraries (only for mental-static)
+    # Link order matters: dependencies must come after libraries that use them
     set(DARWIN_STATIC_LIBS
         ${EXTERNAL_DIR}/glslang/libglslang.a
         ${EXTERNAL_DIR}/glslang/libglslang-default-resource-limits.a
         ${EXTERNAL_DIR}/glslang/libSPIRV.a
-        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools.a
-        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-opt.a
-        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-link.a
-        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-diff.a
-        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-lint.a
-        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-reduce.a
         ${EXTERNAL_DIR}/glslang/libGenericCodeGen.a
         ${EXTERNAL_DIR}/glslang/libMachineIndependent.a
         ${EXTERNAL_DIR}/glslang/libOSDependent.a
@@ -106,6 +101,12 @@ if(PLATFORM_DARWIN)
         ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-glsl.a
         ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-hlsl.a
         ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-msl.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-opt.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-link.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-diff.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-lint.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-reduce.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools.a
     )
 
     # Link shared library (needs glslang/SPIRV-Cross too for symbols)
@@ -131,15 +132,11 @@ elseif(PLATFORM_WINDOWS)
     endif()
 
     # glslang and SPIRV-Cross static libraries (only for mental-static)
+    # Link order matters: dependencies must come after libraries that use them
     set(WINDOWS_STATIC_LIBS
         ${EXTERNAL_DIR}/glslang/glslang.lib
+        ${EXTERNAL_DIR}/glslang/glslang-default-resource-limits.lib
         ${EXTERNAL_DIR}/glslang/SPIRV.lib
-        ${EXTERNAL_DIR}/glslang/SPIRV-Tools.lib
-        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-opt.lib
-        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-link.lib
-        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-diff.lib
-        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-lint.lib
-        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-reduce.lib
         ${EXTERNAL_DIR}/glslang/GenericCodeGen.lib
         ${EXTERNAL_DIR}/glslang/MachineIndependent.lib
         ${EXTERNAL_DIR}/glslang/OSDependent.lib
@@ -147,6 +144,12 @@ elseif(PLATFORM_WINDOWS)
         ${EXTERNAL_DIR}/spirv-cross/spirv-cross-glsl.lib
         ${EXTERNAL_DIR}/spirv-cross/spirv-cross-hlsl.lib
         ${EXTERNAL_DIR}/spirv-cross/spirv-cross-msl.lib
+        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-opt.lib
+        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-link.lib
+        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-diff.lib
+        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-lint.lib
+        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-reduce.lib
+        ${EXTERNAL_DIR}/glslang/SPIRV-Tools.lib
     )
 
     # Link shared library (needs glslang/SPIRV-Cross too for symbols)
@@ -170,15 +173,11 @@ elseif(PLATFORM_LINUX)
     )
 
     # glslang and SPIRV-Cross static libraries (only for mental-static)
+    # Link order matters: dependencies must come after libraries that use them
     set(LINUX_STATIC_LIBS
         ${EXTERNAL_DIR}/glslang/libglslang.a
+        ${EXTERNAL_DIR}/glslang/libglslang-default-resource-limits.a
         ${EXTERNAL_DIR}/glslang/libSPIRV.a
-        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools.a
-        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-opt.a
-        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-link.a
-        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-diff.a
-        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-lint.a
-        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-reduce.a
         ${EXTERNAL_DIR}/glslang/libGenericCodeGen.a
         ${EXTERNAL_DIR}/glslang/libMachineIndependent.a
         ${EXTERNAL_DIR}/glslang/libOSDependent.a
@@ -186,6 +185,12 @@ elseif(PLATFORM_LINUX)
         ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-glsl.a
         ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-hlsl.a
         ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-msl.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-opt.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-link.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-diff.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-lint.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-reduce.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools.a
     )
 
     # Link shared library (needs glslang/SPIRV-Cross too for symbols)
