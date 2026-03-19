@@ -44,10 +44,24 @@ elseif(PLATFORM_LINUX)
     list(APPEND MENTAL_CXX_SOURCES backend_vulkan.cpp)
 endif()
 
-# Create static library
-add_library(mental STATIC
+# Create both static and dynamic libraries
+add_library(mental-static STATIC
     ${MENTAL_SOURCES}
     ${MENTAL_CXX_SOURCES}
+)
+
+add_library(mental SHARED
+    ${MENTAL_SOURCES}
+    ${MENTAL_CXX_SOURCES}
+)
+
+# Set output name for static library to avoid conflicts
+set_target_properties(mental-static PROPERTIES OUTPUT_NAME mental-static)
+
+target_include_directories(mental-static PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${EXTERNAL_DIR}/glslang
+    ${EXTERNAL_DIR}/spirv-cross
 )
 
 target_include_directories(mental PUBLIC
@@ -63,14 +77,19 @@ if(PLATFORM_DARWIN)
     find_library(FOUNDATION_LIBRARY Foundation)
     find_library(QUARTZCORE_LIBRARY QuartzCore)
     find_library(APPKIT_LIBRARY AppKit)
-    target_link_libraries(mental PUBLIC ${METAL_LIBRARY} ${FOUNDATION_LIBRARY} ${QUARTZCORE_LIBRARY} ${APPKIT_LIBRARY})
 
     # OpenCL framework
     find_library(OPENCL_LIBRARY OpenCL)
-    target_link_libraries(mental PUBLIC ${OPENCL_LIBRARY})
 
-    # glslang and SPIRV-Cross
-    target_link_libraries(mental PUBLIC
+    # Common dependencies for both shared and static
+    set(DARWIN_LIBS
+        ${METAL_LIBRARY} ${FOUNDATION_LIBRARY} ${QUARTZCORE_LIBRARY} ${APPKIT_LIBRARY}
+        ${OPENCL_LIBRARY}
+        c++
+    )
+
+    # glslang and SPIRV-Cross static libraries (only for mental-static)
+    set(DARWIN_STATIC_LIBS
         ${EXTERNAL_DIR}/glslang/libglslang.a
         ${EXTERNAL_DIR}/glslang/libglslang-default-resource-limits.a
         ${EXTERNAL_DIR}/glslang/libSPIRV.a
@@ -85,64 +104,84 @@ if(PLATFORM_DARWIN)
         ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-msl.a
     )
 
-    # C++ standard library
-    target_link_libraries(mental PUBLIC c++)
+    # Link shared library (needs glslang/SPIRV-Cross too for symbols)
+    target_link_libraries(mental PUBLIC ${DARWIN_LIBS} ${DARWIN_STATIC_LIBS})
+
+    # Link static library (with all static dependencies embedded)
+    target_link_libraries(mental-static PUBLIC ${DARWIN_LIBS} ${DARWIN_STATIC_LIBS})
 
 elseif(PLATFORM_WINDOWS)
-    # D3D12 and DXGI
-    target_link_libraries(mental PUBLIC d3d12.lib dxgi.lib)
-
     # OpenCL
     find_package(OpenCL REQUIRED)
-    target_link_libraries(mental PUBLIC OpenCL::OpenCL)
 
-    # glslang and SPIRV-Cross
-    target_link_libraries(mental PUBLIC
-        ${EXTERNAL_DIR}/glslang/lib/windows/glslang.lib
-        ${EXTERNAL_DIR}/glslang/lib/windows/SPIRV.lib
-        ${EXTERNAL_DIR}/glslang/lib/windows/SPIRV-Tools.lib
-        ${EXTERNAL_DIR}/glslang/lib/windows/SPIRV-Tools-opt.lib
-        ${EXTERNAL_DIR}/glslang/lib/windows/GenericCodeGen.lib
-        ${EXTERNAL_DIR}/glslang/lib/windows/MachineIndependent.lib
-        ${EXTERNAL_DIR}/glslang/lib/windows/OSDependent.lib
-        ${EXTERNAL_DIR}/spirv-cross/lib/windows/spirv-cross-core.lib
-        ${EXTERNAL_DIR}/spirv-cross/lib/windows/spirv-cross-glsl.lib
-        ${EXTERNAL_DIR}/spirv-cross/lib/windows/spirv-cross-hlsl.lib
-        ${EXTERNAL_DIR}/spirv-cross/lib/windows/spirv-cross-msl.lib
+    # Common dependencies for both shared and static
+    set(WINDOWS_LIBS
+        d3d12.lib dxgi.lib
+        OpenCL::OpenCL
     )
+
+    # glslang and SPIRV-Cross static libraries (only for mental-static)
+    set(WINDOWS_STATIC_LIBS
+        ${EXTERNAL_DIR}/glslang/glslang.lib
+        ${EXTERNAL_DIR}/glslang/SPIRV.lib
+        ${EXTERNAL_DIR}/glslang/SPIRV-Tools.lib
+        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-opt.lib
+        ${EXTERNAL_DIR}/glslang/GenericCodeGen.lib
+        ${EXTERNAL_DIR}/glslang/MachineIndependent.lib
+        ${EXTERNAL_DIR}/glslang/OSDependent.lib
+        ${EXTERNAL_DIR}/spirv-cross/spirv-cross-core.lib
+        ${EXTERNAL_DIR}/spirv-cross/spirv-cross-glsl.lib
+        ${EXTERNAL_DIR}/spirv-cross/spirv-cross-hlsl.lib
+        ${EXTERNAL_DIR}/spirv-cross/spirv-cross-msl.lib
+    )
+
+    # Link shared library (needs glslang/SPIRV-Cross too for symbols)
+    target_link_libraries(mental PUBLIC ${WINDOWS_LIBS} ${WINDOWS_STATIC_LIBS})
+
+    # Link static library (with all static dependencies embedded)
+    target_link_libraries(mental-static PUBLIC ${WINDOWS_LIBS} ${WINDOWS_STATIC_LIBS})
 
 elseif(PLATFORM_LINUX)
     # Vulkan
     find_package(Vulkan REQUIRED)
-    target_link_libraries(mental PUBLIC Vulkan::Vulkan)
 
     # OpenCL
     find_package(OpenCL REQUIRED)
-    target_link_libraries(mental PUBLIC OpenCL::OpenCL)
 
-    # glslang and SPIRV-Cross
-    target_link_libraries(mental PUBLIC
-        ${EXTERNAL_DIR}/glslang/lib/linux/libglslang.a
-        ${EXTERNAL_DIR}/glslang/lib/linux/libSPIRV.a
-        ${EXTERNAL_DIR}/glslang/lib/linux/libSPIRV-Tools.a
-        ${EXTERNAL_DIR}/glslang/lib/linux/libSPIRV-Tools-opt.a
-        ${EXTERNAL_DIR}/glslang/lib/linux/libGenericCodeGen.a
-        ${EXTERNAL_DIR}/glslang/lib/linux/libMachineIndependent.a
-        ${EXTERNAL_DIR}/glslang/lib/linux/libOSDependent.a
-        ${EXTERNAL_DIR}/spirv-cross/lib/linux/libspirv-cross-core.a
-        ${EXTERNAL_DIR}/spirv-cross/lib/linux/libspirv-cross-glsl.a
-        ${EXTERNAL_DIR}/spirv-cross/lib/linux/libspirv-cross-hlsl.a
-        ${EXTERNAL_DIR}/spirv-cross/lib/linux/libspirv-cross-msl.a
+    # Common dependencies for both shared and static
+    set(LINUX_LIBS
+        Vulkan::Vulkan
+        OpenCL::OpenCL
+        stdc++ pthread
     )
 
-    # C++ standard library and pthread
-    target_link_libraries(mental PUBLIC stdc++ pthread)
+    # glslang and SPIRV-Cross static libraries (only for mental-static)
+    set(LINUX_STATIC_LIBS
+        ${EXTERNAL_DIR}/glslang/libglslang.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-opt.a
+        ${EXTERNAL_DIR}/glslang/libGenericCodeGen.a
+        ${EXTERNAL_DIR}/glslang/libMachineIndependent.a
+        ${EXTERNAL_DIR}/glslang/libOSDependent.a
+        ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-core.a
+        ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-glsl.a
+        ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-hlsl.a
+        ${EXTERNAL_DIR}/spirv-cross/libspirv-cross-msl.a
+    )
+
+    # Link shared library (needs glslang/SPIRV-Cross too for symbols)
+    target_link_libraries(mental PUBLIC ${LINUX_LIBS} ${LINUX_STATIC_LIBS})
+
+    # Link static library (with all static dependencies embedded)
+    target_link_libraries(mental-static PUBLIC ${LINUX_LIBS} ${LINUX_STATIC_LIBS})
 endif()
 
-# Install targets
-install(TARGETS mental
+# Install targets (both shared and static)
+install(TARGETS mental mental-static
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin
 )
 
 install(FILES mental.h DESTINATION include)

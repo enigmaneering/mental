@@ -157,7 +157,7 @@ jobs:
 
         Write-Host "Downloading shader toolchain $version for ${{ matrix.platform }}"
 
-        New-Item -ItemType Directory -Force -Path external/glslang, external/spirv-cross, external/dxc/bin, external/naga/bin | Out-Null
+        New-Item -ItemType Directory -Force -Path external/glslang, external/spirv-cross, external/dxc, external/naga/bin | Out-Null
 
         # Download and extract glslang
         try {
@@ -197,9 +197,18 @@ jobs:
         Write-Host "Dependencies downloaded and extracted"
         Get-ChildItem -Path external -Recurse
 
-    - name: Setup MSVC (Windows)
+    - name: Setup MinGW (Windows)
       if: runner.os == 'Windows'
-      uses: microsoft/setup-msbuild@v2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: false
+        cache: true
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-cmake
+          mingw-w64-x86_64-ninja
+          make
 
     - name: Build (Unix)
       if: runner.os != 'Windows'
@@ -214,14 +223,15 @@ jobs:
         fi
         make -j4
 
-    - name: Build (Windows)
+    - name: Build (Windows with MinGW)
       if: runner.os == 'Windows'
+      shell: msys2 {0}
       run: |
-        if (Test-Path build) { Remove-Item -Recurse -Force build }
+        rm -rf build
         mkdir build
         cd build
-        cmake .. -G "Visual Studio 17 2022"
-        cmake --build . --config Release
+        cmake .. -G "MinGW Makefiles"
+        make -j4
 
     - name: Run tests (Linux with Xvfb)
       if: matrix.use_xvfb
@@ -231,20 +241,22 @@ jobs:
           cd build
           ctest --output-on-failure
 
-    - name: Run tests (macOS/Windows)
-      if: ${{ !matrix.use_xvfb }}
+    - name: Run tests (macOS)
+      if: ${{ !matrix.use_xvfb && runner.os != 'Windows' }}
       run: |
         cd build
         ctest --output-on-failure
 
-    - name: Run tests (Windows Release config)
+    - name: Run tests (Windows)
       if: runner.os == 'Windows'
+      shell: msys2 {0}
       run: |
         cd build
-        ctest --output-on-failure -C Release
+        ctest --output-on-failure
 
     - name: Test Summary
       if: always()
+      shell: bash
       run: |
         cd build
         echo "=== Test Results for ${{ matrix.display_name }} ==="
