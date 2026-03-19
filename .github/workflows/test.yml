@@ -16,7 +16,7 @@ jobs:
             platform: darwin-arm64
             display_name: macOS ARM64 (Metal)
           - os: macos-latest
-            runner: macos-14
+            runner: macos-13  # Intel x86_64
             platform: darwin-amd64
             display_name: macOS x86_64 (Metal)
           # Linux
