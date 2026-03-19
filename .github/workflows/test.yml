@@ -203,11 +203,9 @@ jobs:
       with:
         msystem: MINGW64
         update: false
-        cache: true
         install: >-
           mingw-w64-x86_64-gcc
           mingw-w64-x86_64-cmake
-          mingw-w64-x86_64-ninja
           make
 
     - name: Build (Unix)
@@ -230,7 +228,7 @@ jobs:
         rm -rf build
         mkdir build
         cd build
-        cmake .. -G "MinGW Makefiles"
+        cmake .. -G "MSYS Makefiles"
         make -j4
 
     - name: Run tests (Linux with Xvfb)
