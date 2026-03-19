@@ -95,6 +95,10 @@ if(PLATFORM_DARWIN)
         ${EXTERNAL_DIR}/glslang/libSPIRV.a
         ${EXTERNAL_DIR}/glslang/libSPIRV-Tools.a
         ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-opt.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-link.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-diff.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-lint.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-reduce.a
         ${EXTERNAL_DIR}/glslang/libGenericCodeGen.a
         ${EXTERNAL_DIR}/glslang/libMachineIndependent.a
         ${EXTERNAL_DIR}/glslang/libOSDependent.a
@@ -111,14 +115,20 @@ if(PLATFORM_DARWIN)
     target_link_libraries(mental-static PUBLIC ${DARWIN_LIBS} ${DARWIN_STATIC_LIBS})
 
 elseif(PLATFORM_WINDOWS)
-    # OpenCL
-    find_package(OpenCL REQUIRED)
+    # OpenCL (optional on Windows - D3D12 is the primary backend)
+    find_package(OpenCL)
 
     # Common dependencies for both shared and static
     set(WINDOWS_LIBS
         d3d12.lib dxgi.lib
-        OpenCL::OpenCL
     )
+
+    if(OpenCL_FOUND)
+        list(APPEND WINDOWS_LIBS OpenCL::OpenCL)
+        message(STATUS "OpenCL found - enabling OpenCL backend")
+    else()
+        message(STATUS "OpenCL not found - only D3D12 backend available")
+    endif()
 
     # glslang and SPIRV-Cross static libraries (only for mental-static)
     set(WINDOWS_STATIC_LIBS
@@ -126,6 +136,10 @@ elseif(PLATFORM_WINDOWS)
         ${EXTERNAL_DIR}/glslang/SPIRV.lib
         ${EXTERNAL_DIR}/glslang/SPIRV-Tools.lib
         ${EXTERNAL_DIR}/glslang/SPIRV-Tools-opt.lib
+        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-link.lib
+        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-diff.lib
+        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-lint.lib
+        ${EXTERNAL_DIR}/glslang/SPIRV-Tools-reduce.lib
         ${EXTERNAL_DIR}/glslang/GenericCodeGen.lib
         ${EXTERNAL_DIR}/glslang/MachineIndependent.lib
         ${EXTERNAL_DIR}/glslang/OSDependent.lib
@@ -161,6 +175,10 @@ elseif(PLATFORM_LINUX)
         ${EXTERNAL_DIR}/glslang/libSPIRV.a
         ${EXTERNAL_DIR}/glslang/libSPIRV-Tools.a
         ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-opt.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-link.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-diff.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-lint.a
+        ${EXTERNAL_DIR}/glslang/libSPIRV-Tools-reduce.a
         ${EXTERNAL_DIR}/glslang/libGenericCodeGen.a
         ${EXTERNAL_DIR}/glslang/libMachineIndependent.a
         ${EXTERNAL_DIR}/glslang/libOSDependent.a
