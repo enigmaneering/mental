@@ -73,11 +73,22 @@ jobs:
         # Dependencies already present on macOS runners
         echo "macOS dependencies ready"
 
+    - name: Setup MinGW (Windows)
+      if: runner.os == 'Windows'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: false
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-cmake
+          make
+
     - name: Download shader toolchain dependencies (Unix)
       if: runner.os != 'Windows'
       run: |
         # Get latest release from redistributables
-        VERSION=$(curl -s https://api.github.com/repos/enigmaneering/redistributables/releases/latest | grep '"tag_name":' | head -1 | sed -E 's/.*"tag_name":[[:space:]]*"([^"]+)".*/\1/')
+        VERSION=$(curl -s https://api.github.com/repos/enigmaneering/redistributables/releases/latest | grep '"tag_name":' | head -1 | cut -d'"' -f4)
 
         if [ -z "$VERSION" ]; then
           echo "ERROR: Failed to determine latest redistributables version"
@@ -158,64 +169,69 @@ jobs:
 
     - name: Download shader toolchain dependencies (Windows)
       if: runner.os == 'Windows'
-      shell: pwsh
+      shell: msys2 {0}
       run: |
         # Get latest release from redistributables
-        $response = Invoke-RestMethod -Uri "https://api.github.com/repos/enigmaneering/redistributables/releases/latest"
-        $version = $response.tag_name
+        VERSION=$(curl -s https://api.github.com/repos/enigmaneering/redistributables/releases/latest | grep '"tag_name":' | head -1 | cut -d'"' -f4)
 
-        Write-Host "Downloading shader toolchain $version for ${{ matrix.platform }}"
+        if [ -z "$VERSION" ]; then
+          echo "ERROR: Failed to determine latest redistributables version"
+          exit 1
+        fi
 
-        New-Item -ItemType Directory -Force -Path external/glslang, external/spirv-cross, external/dxc, external/naga/bin | Out-Null
+        echo "Downloading shader toolchain $VERSION for ${{ matrix.platform }}"
+
+        mkdir -p external/glslang external/spirv-cross external/dxc external/naga/bin
 
         # Download and extract glslang
-        try {
-          Invoke-WebRequest -Uri "https://github.com/enigmaneering/redistributables/releases/download/$version/glslang-${{ matrix.platform }}.zip" -OutFile "glslang.zip"
-          Expand-Archive -Path "glslang.zip" -DestinationPath "."
-          Copy-Item -Path "glslang-${{ matrix.platform }}/*" -Destination "external/glslang/" -Recurse -Force
-        } catch { Write-Host "Failed to download glslang" }
+        if curl -L -f -o glslang.tar.gz "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/glslang-${{ matrix.platform }}.tar.gz"; then
+          echo "Downloaded glslang.tar.gz"
+          tar -xzf glslang.tar.gz
+          cp -r glslang-${{ matrix.platform }}/* external/glslang/
+        else
+          echo "ERROR: Failed to download glslang for ${{ matrix.platform }}"
+          exit 1
+        fi
 
         # Download and extract SPIRV-Cross
-        try {
-          Invoke-WebRequest -Uri "https://github.com/enigmaneering/redistributables/releases/download/$version/spirv-cross-${{ matrix.platform }}.zip" -OutFile "spirv-cross.zip"
-          Expand-Archive -Path "spirv-cross.zip" -DestinationPath "."
-          Copy-Item -Path "spirv-cross-${{ matrix.platform }}/*" -Destination "external/spirv-cross/" -Recurse -Force
-        } catch { Write-Host "Failed to download spirv-cross" }
+        if curl -L -f -o spirv-cross.tar.gz "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/spirv-cross-${{ matrix.platform }}.tar.gz"; then
+          echo "Downloaded spirv-cross.tar.gz"
+          tar -xzf spirv-cross.tar.gz
+          cp -r spirv-cross-${{ matrix.platform }}/* external/spirv-cross/
+        else
+          echo "ERROR: Failed to download spirv-cross for ${{ matrix.platform }}"
+          exit 1
+        fi
 
         # Download and extract DXC (use runner_platform for executable)
-        $runnerPlatform = "${{ matrix.runner_platform }}"
-        if (-not $runnerPlatform) { $runnerPlatform = "${{ matrix.platform }}" }
-        try {
-          Invoke-WebRequest -Uri "https://github.com/enigmaneering/redistributables/releases/download/$version/dxc-$runnerPlatform.zip" -OutFile "dxc.zip"
-          Expand-Archive -Path "dxc.zip" -DestinationPath "."
-          # Copy entire dxc directory structure (bin/, lib/, etc.)
-          Copy-Item -Path "dxc-$runnerPlatform/*" -Destination "external/dxc/" -Recurse -Force
-        } catch { Write-Host "Failed to download dxc" }
+        RUNNER_PLATFORM="${{ matrix.runner_platform }}"
+        if [ -z "$RUNNER_PLATFORM" ]; then
+          RUNNER_PLATFORM="${{ matrix.platform }}"
+        fi
 
-        # Download and extract Naga (use runner_platform for executable)
-        try {
-          Invoke-WebRequest -Uri "https://github.com/enigmaneering/redistributables/releases/download/$version/naga-$runnerPlatform.zip" -OutFile "naga.zip"
-          Expand-Archive -Path "naga.zip" -DestinationPath "."
-          if (Test-Path "naga-$runnerPlatform/bin") {
-            Copy-Item -Path "naga-$runnerPlatform/bin/*" -Destination "external/naga/bin/" -Recurse -Force
-          } else {
-            Copy-Item -Path "naga-$runnerPlatform/*" -Destination "external/naga/bin/" -Recurse -Force
-          }
-        } catch { Write-Host "Failed to download naga" }
+        if curl -L -f -o dxc.zip "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/dxc-$RUNNER_PLATFORM.zip"; then
+          echo "Downloaded dxc.zip"
+          unzip -q dxc.zip
+          cp -r dxc-$RUNNER_PLATFORM/* external/dxc/
+        else
+          echo "WARNING: Failed to download dxc for $RUNNER_PLATFORM (optional)"
+        fi
 
-        Write-Host "Dependencies downloaded and extracted"
-        Get-ChildItem -Path external -Recurse
+        # Download and extract Naga (optional, use runner_platform for executable)
+        if curl -L -f -o naga.tar.gz "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/naga-$RUNNER_PLATFORM.tar.gz"; then
+          echo "Downloaded naga.tar.gz"
+          tar -xzf naga.tar.gz
+          if [ -d "naga-$RUNNER_PLATFORM/bin" ]; then
+            cp -r naga-$RUNNER_PLATFORM/bin/* external/naga/bin/
+          else
+            cp -r naga-$RUNNER_PLATFORM/* external/naga/bin/
+          fi
+        else
+          echo "WARNING: Failed to download naga for $RUNNER_PLATFORM (optional)"
+        fi
 
-    - name: Setup MinGW (Windows)
-      if: runner.os == 'Windows'
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: false
-        install: >-
-          mingw-w64-x86_64-gcc
-          mingw-w64-x86_64-cmake
-          make
+        echo "Dependencies downloaded and extracted"
+        ls -la external/
 
     - name: Build (Unix)
       if: runner.os != 'Windows'

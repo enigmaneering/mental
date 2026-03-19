@@ -72,7 +72,7 @@ static int d3d12_init(void) {
         }
 
         /* Check if D3D12 is supported */
-        if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, _uuidof(ID3D12Device), nullptr))) {
+        if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), nullptr))) {
             g_adapters.push_back(adapter);
         }
     }
