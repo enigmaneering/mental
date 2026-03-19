@@ -15,10 +15,12 @@ jobs:
             runner: macos-14  # ARM64
             platform: darwin-arm64
             display_name: macOS ARM64 (Metal)
+            macos_arch: arm64
           - os: macos-latest
-            runner: macos-13  # Intel x86_64
+            runner: macos-14  # Cross-compile x86_64 on ARM64
             platform: darwin-amd64
             display_name: macOS x86_64 (Metal)
+            macos_arch: x86_64
           # Linux
           - os: ubuntu-latest
             runner: ubuntu-latest
@@ -134,7 +136,11 @@ jobs:
         rm -rf build
         mkdir build
         cd build
-        cmake ..
+        if [ -n "${{ matrix.macos_arch }}" ]; then
+          cmake -DCMAKE_OSX_ARCHITECTURES=${{ matrix.macos_arch }} ..
+        else
+          cmake ..
+        fi
         make -j4
 
     - name: Build (Windows)
