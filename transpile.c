@@ -4,6 +4,7 @@
 
 #include "transpile.h"
 #include "mental_internal.h"
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -117,11 +118,17 @@ char* mental_transpile(const char* source, size_t source_len, mental_api_type ta
                 spirv_len = source_len;
             }
             break;
+        case MENTAL_LANG_MSL:
+            /* MSL can only be used directly on Metal backend, not transpiled from */
+            fprintf(stderr, "ERROR: MSL shaders cannot be transpiled to other backends. Use on Metal only.\n");
+            return NULL;
         default:
+            fprintf(stderr, "ERROR: Unknown or unsupported source language\n");
             return NULL;
     }
 
     if (!spirv) {
+        fprintf(stderr, "ERROR: Failed to compile source to SPIRV: %s\n", error[0] ? error : "Unknown error");
         return NULL;
     }
 
@@ -141,7 +148,13 @@ char* mental_transpile(const char* source, size_t source_len, mental_api_type ta
             result = mental_spirv_to_wgsl(spirv, spirv_len, out_len, error, sizeof(error));
             break;
         default:
-            break;
+            fprintf(stderr, "ERROR: Unknown or unsupported target language\n");
+            free(spirv);
+            return NULL;
+    }
+
+    if (!result) {
+        fprintf(stderr, "ERROR: Failed to transpile SPIRV to target: %s\n", error[0] ? error : "Unknown error");
     }
 
     free(spirv);

@@ -79,7 +79,7 @@ const char* wgsl_shader =
     "    output[id.x] = input0[id.x] + input1[id.x];\n"
     "}\n";
 
-static int test_shader(const char* name, const char* shader_source, mental_device dev) {
+static int test_shader(const char* name, const char* shader_source, mental_device dev, int required) {
     printf("  Testing %s shader...\n", name);
 
     /* Compile shader */
@@ -87,8 +87,13 @@ static int test_shader(const char* name, const char* shader_source, mental_devic
     if (kernel == NULL) {
         mental_error err = mental_get_error();
         if (err != MENTAL_SUCCESS) {
-            printf("    SKIP: %s not supported (%s)\n", name, mental_get_error_message());
-            return 0; /* Skip, not a failure */
+            if (required) {
+                printf("    FAIL: %s shader REQUIRED but failed: %s\n", name, mental_get_error_message());
+                return 1; /* Hard failure for required shaders */
+            } else {
+                printf("    SKIP: %s not supported (%s)\n", name, mental_get_error_message());
+                return 0; /* Skip for optional shaders */
+            }
         }
         printf("    FAIL: Failed to compile %s shader\n", name);
         return 1;
@@ -178,24 +183,24 @@ int main(void) {
 
     int failures = 0;
 
-    /* Test GLSL (should work on all backends via SPIRV) */
-    failures += test_shader("GLSL", glsl_shader, dev);
+    /* Test GLSL (REQUIRED - should work on all backends via SPIRV) */
+    failures += test_shader("GLSL", glsl_shader, dev, 1);
 
-    /* Test ESSL (OpenGL ES Shading Language) */
-    failures += test_shader("ESSL", essl_shader, dev);
+    /* Test ESSL (REQUIRED - OpenGL ES Shading Language) */
+    failures += test_shader("ESSL", essl_shader, dev, 1);
 
-    /* Test HLSL (should work on D3D12, transpiled elsewhere) */
-    failures += test_shader("HLSL", hlsl_shader, dev);
+    /* Test HLSL (REQUIRED - must work through transpilation) */
+    failures += test_shader("HLSL", hlsl_shader, dev, 1);
 
-    /* Test MSL (only on Metal backend) */
+    /* Test MSL (REQUIRED on Metal, skip on other backends) */
     if (strstr(api_name, "Metal") != NULL) {
-        failures += test_shader("MSL", msl_shader, dev);
+        failures += test_shader("MSL", msl_shader, dev, 1);
     } else {
         printf("  SKIP: MSL shader (not on Metal backend)\n");
     }
 
-    /* Test WGSL (WebGPU Shading Language) */
-    failures += test_shader("WGSL", wgsl_shader, dev);
+    /* Test WGSL (REQUIRED - WebGPU Shading Language) */
+    failures += test_shader("WGSL", wgsl_shader, dev, 1);
 
     if (failures > 0) {
         printf("FAIL: %d shader(s) failed\n", failures);
