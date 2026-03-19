@@ -26,15 +26,21 @@ static mental_backend** get_backend_priority(int* count) {
 #if defined(__APPLE__)
     /* macOS: Metal -> OpenCL */
     if (metal_backend) backends[(*count)++] = metal_backend;
+#ifdef MENTAL_HAS_OPENCL
     if (opencl_backend) backends[(*count)++] = opencl_backend;
+#endif
 #elif defined(_WIN32)
     /* Windows: D3D12 -> OpenCL */
     if (d3d12_backend) backends[(*count)++] = d3d12_backend;
+#ifdef MENTAL_HAS_OPENCL
     if (opencl_backend) backends[(*count)++] = opencl_backend;
+#endif
 #else
     /* Linux: Vulkan -> OpenCL */
     if (vulkan_backend) backends[(*count)++] = vulkan_backend;
+#ifdef MENTAL_HAS_OPENCL
     if (opencl_backend) backends[(*count)++] = opencl_backend;
+#endif
 #endif
 
     return backends;

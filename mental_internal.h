@@ -86,7 +86,9 @@ struct mental_backend_t {
 extern mental_backend* metal_backend;
 extern mental_backend* d3d12_backend;
 extern mental_backend* vulkan_backend;
+#ifdef MENTAL_HAS_OPENCL
 extern mental_backend* opencl_backend;
+#endif
 
 /* Error handling (thread-local) */
 void mental_set_error(mental_error code, const char* message);

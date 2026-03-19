@@ -31,16 +31,13 @@ set(MENTAL_CXX_SOURCES
     transpile_spirv_cross.cpp
 )
 
-# Platform-specific backends
+# Platform-specific backends (OpenCL is added conditionally later)
 if(PLATFORM_DARWIN)
-    list(APPEND MENTAL_SOURCES backend_opencl.c)
     list(APPEND MENTAL_SOURCES backend_metal.m)
     set_source_files_properties(backend_metal.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 elseif(PLATFORM_WINDOWS)
-    # OpenCL backend only if OpenCL is available (will be checked later)
     list(APPEND MENTAL_CXX_SOURCES backend_d3d12.cpp)
 elseif(PLATFORM_LINUX)
-    list(APPEND MENTAL_SOURCES backend_opencl.c)
     list(APPEND MENTAL_CXX_SOURCES backend_vulkan.cpp)
 endif()
 
@@ -80,15 +77,27 @@ if(PLATFORM_DARWIN)
     find_library(QUARTZCORE_LIBRARY QuartzCore)
     find_library(APPKIT_LIBRARY AppKit)
 
-    # OpenCL framework
+    # OpenCL framework (optional - may be deprecated in future macOS versions)
     find_library(OPENCL_LIBRARY OpenCL)
+    if(OPENCL_LIBRARY)
+        target_sources(mental-static PRIVATE backend_opencl.c)
+        target_sources(mental PRIVATE backend_opencl.c)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_OPENCL=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENCL=1)
+        message(STATUS "OpenCL found - enabling OpenCL backend")
+    else()
+        message(STATUS "OpenCL not found - only Metal backend available")
+    endif()
 
     # Common dependencies for both shared and static
     set(DARWIN_LIBS
         ${METAL_LIBRARY} ${FOUNDATION_LIBRARY} ${QUARTZCORE_LIBRARY} ${APPKIT_LIBRARY}
-        ${OPENCL_LIBRARY}
         c++
     )
+
+    if(OPENCL_LIBRARY)
+        list(APPEND DARWIN_LIBS ${OPENCL_LIBRARY})
+    endif()
 
     # glslang and SPIRV-Cross static libraries (only for mental-static)
     # Link order matters: dependencies must come after libraries that use them
@@ -125,6 +134,8 @@ elseif(PLATFORM_WINDOWS)
     if(OpenCL_FOUND)
         target_sources(mental-static PRIVATE backend_opencl.c)
         target_sources(mental PRIVATE backend_opencl.c)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_OPENCL=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENCL=1)
         message(STATUS "OpenCL found - enabling OpenCL backend")
     else()
         message(STATUS "OpenCL not found - only D3D12 backend available")
@@ -171,15 +182,27 @@ elseif(PLATFORM_LINUX)
     # Vulkan
     find_package(Vulkan REQUIRED)
 
-    # OpenCL
-    find_package(OpenCL REQUIRED)
+    # OpenCL (optional - not all Linux systems have it)
+    find_package(OpenCL)
+    if(OpenCL_FOUND)
+        target_sources(mental-static PRIVATE backend_opencl.c)
+        target_sources(mental PRIVATE backend_opencl.c)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_OPENCL=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENCL=1)
+        message(STATUS "OpenCL found - enabling OpenCL backend")
+    else()
+        message(STATUS "OpenCL not found - only Vulkan backend available")
+    endif()
 
     # Common dependencies for both shared and static
     set(LINUX_LIBS
         Vulkan::Vulkan
-        OpenCL::OpenCL
         stdc++ pthread
     )
+
+    if(OpenCL_FOUND)
+        list(APPEND LINUX_LIBS OpenCL::OpenCL)
+    endif()
 
     # glslang and SPIRV-Cross static libraries (only for mental-static)
     # Link order matters: dependencies must come after libraries that use them

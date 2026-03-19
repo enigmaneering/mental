@@ -84,6 +84,8 @@ jobs:
           mingw-w64-x86_64-cmake
           make
           unzip
+          mingw-w64-x86_64-opencl-headers
+          mingw-w64-x86_64-opencl-icd
 
     - name: Download shader toolchain dependencies (Unix)
       if: runner.os != 'Windows'
