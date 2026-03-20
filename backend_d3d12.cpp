@@ -366,9 +366,20 @@ static void* d3d12_buffer_clone(void* dev, void* src_buf, size_t size) {
     D3D12Buffer* clone_buf = (D3D12Buffer*)d3d12_buffer_alloc(dev, size);
     if (!clone_buf) return NULL;
 
-    /* Copy data from source buffer */
-    memcpy(clone_buf->mapped_ptr, src_d3d_buf->mapped_ptr, size);
+    /* Copy GPU-side data: DEFAULT -> READBACK -> temp -> UPLOAD -> DEFAULT */
+    /* First, read from source DEFAULT buffer */
+    char* temp_data = (char*)malloc(size);
+    if (!temp_data) {
+        d3d12_buffer_destroy(clone_buf);
+        return NULL;
+    }
 
+    d3d12_buffer_read(src_buf, temp_data, size);
+
+    /* Then write to clone (copies to DEFAULT buffer) */
+    d3d12_buffer_write(clone_buf, temp_data, size);
+
+    free(temp_data);
     return clone_buf;
 }
 
