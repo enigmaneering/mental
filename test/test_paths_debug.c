@@ -18,6 +18,9 @@ int main(void) {
 
     printf("\nTesting DXC paths (looking for %s):\n", DXC_EXE);
     const char* dxc_paths[] = {
+        "../external/dxc/" DXC_EXE,
+        "external/dxc/" DXC_EXE,
+        "../../external/dxc/" DXC_EXE,
         "../external/dxc/bin/" DXC_EXE,
         "external/dxc/bin/" DXC_EXE,
         "../../external/dxc/bin/" DXC_EXE,

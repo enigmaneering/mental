@@ -29,6 +29,10 @@ static const char* find_dxc(void) {
 
     /* Try relative paths (from build dir, build/test dir, and project root) */
     /* Use F_OK (0) instead of X_OK since Windows doesn't have execute bits */
+    /* Windows redistributable has flat structure, Unix has bin/ subdirectory */
+    if (access("../external/dxc/" DXC_EXE, 0) == 0) return "../external/dxc/" DXC_EXE;
+    if (access("../../external/dxc/" DXC_EXE, 0) == 0) return "../../external/dxc/" DXC_EXE;
+    if (access("external/dxc/" DXC_EXE, 0) == 0) return "external/dxc/" DXC_EXE;
     if (access("../external/dxc/bin/" DXC_EXE, 0) == 0) return "../external/dxc/bin/" DXC_EXE;
     if (access("../../external/dxc/bin/" DXC_EXE, 0) == 0) return "../../external/dxc/bin/" DXC_EXE;
     if (access("external/dxc/bin/" DXC_EXE, 0) == 0) return "external/dxc/bin/" DXC_EXE;
