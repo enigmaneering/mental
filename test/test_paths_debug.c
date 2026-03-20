@@ -8,29 +8,37 @@ int main(void) {
         printf("Current working directory: %s\n", cwd);
     }
 
-    printf("\nTesting DXC paths:\n");
+#ifdef _WIN32
+    #define DXC_EXE "dxc.exe"
+    #define NAGA_EXE "naga.exe"
+#else
+    #define DXC_EXE "dxc"
+    #define NAGA_EXE "naga"
+#endif
+
+    printf("\nTesting DXC paths (looking for %s):\n", DXC_EXE);
     const char* dxc_paths[] = {
-        "../external/dxc/bin/dxc",
-        "external/dxc/bin/dxc",
-        "../../external/dxc/bin/dxc",
+        "../external/dxc/bin/" DXC_EXE,
+        "external/dxc/bin/" DXC_EXE,
+        "../../external/dxc/bin/" DXC_EXE,
         NULL
     };
 
     for (int i = 0; dxc_paths[i]; i++) {
-        int result = access(dxc_paths[i], X_OK);
+        int result = access(dxc_paths[i], 0);  /* F_OK = file exists */
         printf("  %s: %s\n", dxc_paths[i], result == 0 ? "FOUND" : "NOT FOUND");
     }
 
-    printf("\nTesting Naga paths:\n");
+    printf("\nTesting Naga paths (looking for %s):\n", NAGA_EXE);
     const char* naga_paths[] = {
-        "../external/naga/bin/naga",
-        "external/naga/bin/naga",
-        "../../external/naga/bin/naga",
+        "../external/naga/bin/" NAGA_EXE,
+        "external/naga/bin/" NAGA_EXE,
+        "../../external/naga/bin/" NAGA_EXE,
         NULL
     };
 
     for (int i = 0; naga_paths[i]; i++) {
-        int result = access(naga_paths[i], X_OK);
+        int result = access(naga_paths[i], 0);  /* F_OK = file exists */
         printf("  %s: %s\n", naga_paths[i], result == 0 ? "FOUND" : "NOT FOUND");
     }
 

@@ -20,43 +20,42 @@
 
 /* Helper to find DXC compiler */
 static const char* find_dxc(void) {
-    /* Try external/dxc/dxc (or dxc.exe on Windows) */
+    /* Platform-specific executable name */
 #ifdef _WIN32
-    const char* dxc_name = "dxc.exe";
+    #define DXC_EXE "dxc.exe"
 #else
-    const char* dxc_name = "dxc";
+    #define DXC_EXE "dxc"
 #endif
 
     /* Try relative paths (from build dir, build/test dir, and project root) */
-    if (access("../external/dxc/bin/dxc", X_OK) == 0) return "../external/dxc/bin/dxc";
-    if (access("../../external/dxc/bin/dxc", X_OK) == 0) return "../../external/dxc/bin/dxc";
-    if (access("external/dxc/bin/dxc", X_OK) == 0) return "external/dxc/bin/dxc";
-    if (access("../external/dxc/bin/dxc.exe", X_OK) == 0) return "../external/dxc/bin/dxc.exe";
-    if (access("../../external/dxc/bin/dxc.exe", X_OK) == 0) return "../../external/dxc/bin/dxc.exe";
-    if (access("external/dxc/bin/dxc.exe", X_OK) == 0) return "external/dxc/bin/dxc.exe";
+    /* Use F_OK (0) instead of X_OK since Windows doesn't have execute bits */
+    if (access("../external/dxc/bin/" DXC_EXE, 0) == 0) return "../external/dxc/bin/" DXC_EXE;
+    if (access("../../external/dxc/bin/" DXC_EXE, 0) == 0) return "../../external/dxc/bin/" DXC_EXE;
+    if (access("external/dxc/bin/" DXC_EXE, 0) == 0) return "external/dxc/bin/" DXC_EXE;
 
     /* Fall back to system PATH */
-    return dxc_name;
+    return DXC_EXE;
+#undef DXC_EXE
 }
 
 /* Helper to find Naga compiler */
 static const char* find_naga(void) {
+    /* Platform-specific executable name */
 #ifdef _WIN32
-    const char* naga_name = "naga.exe";
+    #define NAGA_EXE "naga.exe"
 #else
-    const char* naga_name = "naga";
+    #define NAGA_EXE "naga"
 #endif
 
     /* Try relative paths (from build dir, build/test dir, and project root) */
-    if (access("../external/naga/bin/naga", X_OK) == 0) return "../external/naga/bin/naga";
-    if (access("../../external/naga/bin/naga", X_OK) == 0) return "../../external/naga/bin/naga";
-    if (access("external/naga/bin/naga", X_OK) == 0) return "external/naga/bin/naga";
-    if (access("../external/naga/naga.exe", X_OK) == 0) return "../external/naga/naga.exe";
-    if (access("../../external/naga/bin/naga.exe", X_OK) == 0) return "../../external/naga/bin/naga.exe";
-    if (access("external/naga/naga.exe", X_OK) == 0) return "external/naga/naga.exe";
+    /* Use F_OK (0) instead of X_OK since Windows doesn't have execute bits */
+    if (access("../external/naga/bin/" NAGA_EXE, 0) == 0) return "../external/naga/bin/" NAGA_EXE;
+    if (access("../../external/naga/bin/" NAGA_EXE, 0) == 0) return "../../external/naga/bin/" NAGA_EXE;
+    if (access("external/naga/bin/" NAGA_EXE, 0) == 0) return "external/naga/bin/" NAGA_EXE;
 
     /* Fall back to system PATH */
-    return naga_name;
+    return NAGA_EXE;
+#undef NAGA_EXE
 }
 
 /* Helper to read file into buffer */
