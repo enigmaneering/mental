@@ -215,9 +215,18 @@ jobs:
         if curl -L -f -o dxc.zip "https://github.com/enigmaneering/redistributables/releases/download/$VERSION/dxc-$RUNNER_PLATFORM.zip"; then
           echo "Downloaded dxc.zip"
           unzip -q dxc.zip
+          echo "DXC archive contents:"
+          ls -la dxc-$RUNNER_PLATFORM/
           cp -r dxc-$RUNNER_PLATFORM/* external/dxc/
+          echo "DXC extracted to external/dxc/:"
+          ls -la external/dxc/
+          if [ -d "external/dxc/bin" ]; then
+            echo "DXC bin directory contents:"
+            ls -la external/dxc/bin/
+          fi
         else
-          echo "WARNING: Failed to download dxc for $RUNNER_PLATFORM (optional)"
+          echo "ERROR: Failed to download dxc for $RUNNER_PLATFORM - DXC is required for shader compilation tests"
+          exit 1
         fi
 
         # Download and extract Naga (optional, use runner_platform for executable)
