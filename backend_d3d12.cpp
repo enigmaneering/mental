@@ -53,6 +53,9 @@ typedef struct {
 /* Global D3D12 state */
 static std::vector<ComPtr<IDXGIAdapter1>> g_adapters;
 
+/* Forward declarations */
+static void d3d12_buffer_destroy(void* buf);
+
 static int d3d12_init(void) {
     HRESULT hr;
 
