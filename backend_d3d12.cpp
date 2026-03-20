@@ -6,6 +6,7 @@
 
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#include <dxcapi.h>
 #include <wrl/client.h>
 #include "mental_internal.h"
 #include <vector>
@@ -396,11 +397,99 @@ static void d3d12_buffer_destroy(void* buf) {
     delete d3d_buf;
 }
 
+/* Helper to compile HLSL to DXIL using DXC */
+static unsigned char* compile_hlsl_to_dxil(const char* hlsl_source, size_t hlsl_len,
+                                            size_t* out_dxil_len, char* error, size_t error_len) {
+    ComPtr<IDxcLibrary> library;
+    ComPtr<IDxcCompiler> compiler;
+    ComPtr<IDxcBlobEncoding> source_blob;
+    ComPtr<IDxcOperationResult> result;
+
+    /* Create DXC library and compiler */
+    HRESULT hr = DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&library));
+    if (FAILED(hr)) {
+        if (error) snprintf(error, error_len, "Failed to create DXC library (HRESULT: 0x%08X)", (unsigned int)hr);
+        return nullptr;
+    }
+
+    hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
+    if (FAILED(hr)) {
+        if (error) snprintf(error, error_len, "Failed to create DXC compiler (HRESULT: 0x%08X)", (unsigned int)hr);
+        return nullptr;
+    }
+
+    /* Create blob from HLSL source */
+    hr = library->CreateBlobWithEncodingFromPinned(hlsl_source, (UINT32)hlsl_len, CP_UTF8, &source_blob);
+    if (FAILED(hr)) {
+        if (error) snprintf(error, error_len, "Failed to create source blob (HRESULT: 0x%08X)", (unsigned int)hr);
+        return nullptr;
+    }
+
+    /* Compile HLSL to DXIL */
+    hr = compiler->Compile(
+        source_blob.Get(),
+        L"shader.hlsl",
+        L"main",
+        L"cs_6_0",  /* Compute Shader 6.0 */
+        nullptr, 0,  /* No additional arguments */
+        nullptr, 0,  /* No defines */
+        nullptr,     /* No include handler */
+        &result
+    );
+
+    if (FAILED(hr) || !result) {
+        if (error) snprintf(error, error_len, "DXC compilation failed (HRESULT: 0x%08X)", (unsigned int)hr);
+        return nullptr;
+    }
+
+    /* Check compilation status */
+    HRESULT status;
+    result->GetStatus(&status);
+    if (FAILED(status)) {
+        /* Get error message */
+        ComPtr<IDxcBlobEncoding> error_blob;
+        result->GetErrorBuffer(&error_blob);
+        if (error && error_blob) {
+            const char* error_msg = (const char*)error_blob->GetBufferPointer();
+            snprintf(error, error_len, "DXC compilation error: %s", error_msg);
+        } else if (error) {
+            snprintf(error, error_len, "DXC compilation failed (HRESULT: 0x%08X)", (unsigned int)status);
+        }
+        return nullptr;
+    }
+
+    /* Get compiled bytecode */
+    ComPtr<IDxcBlob> bytecode;
+    hr = result->GetResult(&bytecode);
+    if (FAILED(hr) || !bytecode) {
+        if (error) snprintf(error, error_len, "Failed to get DXC result (HRESULT: 0x%08X)", (unsigned int)hr);
+        return nullptr;
+    }
+
+    /* Copy bytecode to malloc'd buffer */
+    size_t bytecode_size = bytecode->GetBufferSize();
+    unsigned char* dxil = (unsigned char*)malloc(bytecode_size);
+    if (!dxil) {
+        if (error) snprintf(error, error_len, "Failed to allocate memory for DXIL bytecode");
+        return nullptr;
+    }
+
+    memcpy(dxil, bytecode->GetBufferPointer(), bytecode_size);
+    *out_dxil_len = bytecode_size;
+    return dxil;
+}
+
 static void* d3d12_kernel_compile(void* dev, const char* source, size_t source_len,
                                    char* error, size_t error_len) {
     D3D12Device* d3d_dev = (D3D12Device*)dev;
 
-    /* Assume source is DXIL bytecode (SPIRV->HLSL->DXIL transpilation happens before this) */
+    /* Compile HLSL to DXIL bytecode */
+    size_t dxil_len = 0;
+    unsigned char* dxil = compile_hlsl_to_dxil(source, source_len, &dxil_len, error, error_len);
+    if (!dxil) {
+        return nullptr;  /* Error already set by compile_hlsl_to_dxil */
+    }
+
     D3D12Kernel* kernel = new D3D12Kernel();
     kernel->device = d3d_dev->device;
 
@@ -452,18 +541,23 @@ static void* d3d12_kernel_compile(void* dev, const char* source, size_t source_l
     /* Create compute pipeline state */
     D3D12_COMPUTE_PIPELINE_STATE_DESC pso_desc = {};
     pso_desc.pRootSignature = kernel->root_signature.Get();
-    pso_desc.CS.pShaderBytecode = source;
-    pso_desc.CS.BytecodeLength = source_len;
+    pso_desc.CS.pShaderBytecode = dxil;
+    pso_desc.CS.BytecodeLength = dxil_len;
 
     hr = d3d_dev->device->CreateComputePipelineState(&pso_desc,
                                                       IID_PPV_ARGS(&kernel->pipeline));
     if (FAILED(hr)) {
         if (error) {
-            snprintf(error, error_len, "Failed to create compute pipeline state");
+            snprintf(error, error_len, "Failed to create compute pipeline state (HRESULT: 0x%08X, bytecode size: %zu bytes)",
+                     (unsigned int)hr, dxil_len);
         }
+        free(dxil);
         delete kernel;
         return NULL;
     }
+
+    /* DXIL bytecode no longer needed after pipeline creation */
+    free(dxil);
 
     /* Create descriptor heap for UAVs */
     D3D12_DESCRIPTOR_HEAP_DESC heap_desc = {};

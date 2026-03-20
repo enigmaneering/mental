@@ -271,6 +271,9 @@ jobs:
         cd build
         cmake .. -G "MSYS Makefiles"
         make -j4
+        # Copy DXC DLLs to build directory so tests can find them
+        cp ../external/dxc/dxcompiler.dll . || echo "Warning: dxcompiler.dll not found"
+        cp ../external/dxc/dxil.dll . || echo "Warning: dxil.dll not found"
 
     - name: Run tests (Linux with Xvfb)
       if: matrix.use_xvfb
