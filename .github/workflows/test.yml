@@ -90,11 +90,13 @@ jobs:
     - name: Download shader toolchain dependencies (Unix)
       if: runner.os != 'Windows'
       run: |
-        # Get latest release from redistributables
-        VERSION=$(curl -s https://api.github.com/repos/enigmaneering/redistributables/releases/latest | grep '"tag_name":' | head -1 | cut -d'"' -f4)
+        # Get latest release from redistributables (with authentication to avoid rate limiting)
+        VERSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/enigmaneering/redistributables/releases/latest | grep '"tag_name":' | head -1 | cut -d'"' -f4)
 
         if [ -z "$VERSION" ]; then
           echo "ERROR: Failed to determine latest redistributables version"
+          echo "Attempting to fetch release info for debugging..."
+          curl -v -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/enigmaneering/redistributables/releases/latest
           exit 1
         fi
 
@@ -174,11 +176,13 @@ jobs:
       if: runner.os == 'Windows'
       shell: msys2 {0}
       run: |
-        # Get latest release from redistributables
-        VERSION=$(curl -s https://api.github.com/repos/enigmaneering/redistributables/releases/latest | grep '"tag_name":' | head -1 | cut -d'"' -f4)
+        # Get latest release from redistributables (with authentication to avoid rate limiting)
+        VERSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/enigmaneering/redistributables/releases/latest | grep '"tag_name":' | head -1 | cut -d'"' -f4)
 
         if [ -z "$VERSION" ]; then
           echo "ERROR: Failed to determine latest redistributables version"
+          echo "Attempting to fetch release info for debugging..."
+          curl -v -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/enigmaneering/redistributables/releases/latest
           exit 1
         fi
 
