@@ -29,6 +29,8 @@ type funcTable struct {
 	viewportDet    uintptr
 	getError       uintptr
 	getErrorMsg    uintptr
+	setToolPath    uintptr
+	getToolPath    uintptr
 }
 
 var (
@@ -72,7 +74,11 @@ func doInit() error {
 	h, err := openLibrary(name)
 	if err == nil {
 		libH = h
-		return resolveSymbols(h)
+		if err := resolveSymbols(h); err != nil {
+			return err
+		}
+		configureTools()
+		return nil
 	}
 
 	// 2. external/ folder relative to cwd.
@@ -81,7 +87,11 @@ func doInit() error {
 		h, err = openLibrary(extPath)
 		if err == nil {
 			libH = h
-			return resolveSymbols(h)
+			if err := resolveSymbols(h); err != nil {
+				return err
+			}
+			configureTools()
+			return nil
 		}
 	}
 
@@ -91,7 +101,11 @@ func doInit() error {
 		return fmt.Errorf("mental: unable to load %s: system, external/, and embed all failed: %w", name, err)
 	}
 	libH = h
-	return resolveSymbols(h)
+	if err := resolveSymbols(h); err != nil {
+		return err
+	}
+	configureTools()
+	return nil
 }
 
 // symbol names in the order they appear in funcTable.
@@ -118,6 +132,8 @@ var symbolNames = [...]struct {
 	{"mental_viewport_detach", offsetOf_viewportDet},
 	{"mental_get_error", offsetOf_getError},
 	{"mental_get_error_message", offsetOf_getErrorMsg},
+	{"mental_set_tool_path", offsetOf_setToolPath},
+	{"mental_get_tool_path", offsetOf_getToolPath},
 }
 
 // Field offsets computed via unsafe.Offsetof — kept in a single place
@@ -142,6 +158,8 @@ var (
 	offsetOf_viewportDet    = ptrOffset(16)
 	offsetOf_getError       = ptrOffset(17)
 	offsetOf_getErrorMsg    = ptrOffset(18)
+	offsetOf_setToolPath    = ptrOffset(19)
+	offsetOf_getToolPath    = ptrOffset(20)
 )
 
 func ptrOffset(index int) uintptr {
@@ -151,7 +169,7 @@ func ptrOffset(index int) uintptr {
 const ptrSize = 8 // all supported platforms are 64-bit
 
 func resolveSymbols(handle uintptr) error {
-	base := (*[19]uintptr)(unsafePointer(&ft))
+	base := (*[21]uintptr)(unsafePointer(&ft))
 	for i, sym := range symbolNames {
 		addr, err := lookupSymbol(handle, sym.name)
 		if err != nil {

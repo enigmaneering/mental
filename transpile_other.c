@@ -18,8 +18,41 @@
 #define mkdtemp(template) _mktemp(template)
 #endif
 
+/* Configured tool paths — set via mental_set_tool_path(). */
+static char g_dxc_path[4096];
+static char g_naga_path[4096];
+
+void mental_set_tool_path(mental_tool tool, const char* path) {
+    char* dest = NULL;
+    size_t cap = 0;
+
+    switch (tool) {
+    case MENTAL_TOOL_DXC:  dest = g_dxc_path;  cap = sizeof(g_dxc_path);  break;
+    case MENTAL_TOOL_NAGA: dest = g_naga_path; cap = sizeof(g_naga_path); break;
+    default: return;
+    }
+
+    if (path) {
+        strncpy(dest, path, cap - 1);
+        dest[cap - 1] = '\0';
+    } else {
+        dest[0] = '\0';
+    }
+}
+
+const char* mental_get_tool_path(mental_tool tool) {
+    switch (tool) {
+    case MENTAL_TOOL_DXC:  return g_dxc_path[0]  ? g_dxc_path  : NULL;
+    case MENTAL_TOOL_NAGA: return g_naga_path[0] ? g_naga_path : NULL;
+    default: return NULL;
+    }
+}
+
 /* Helper to find DXC compiler */
 static const char* find_dxc(void) {
+    /* Use explicitly configured path if set */
+    if (g_dxc_path[0]) return g_dxc_path;
+
     /* Platform-specific executable name */
 #ifdef _WIN32
     #define DXC_EXE "dxc.exe"
@@ -44,6 +77,9 @@ static const char* find_dxc(void) {
 
 /* Helper to find Naga compiler */
 static const char* find_naga(void) {
+    /* Use explicitly configured path if set */
+    if (g_naga_path[0]) return g_naga_path;
+
     /* Platform-specific executable name */
 #ifdef _WIN32
     #define NAGA_EXE "naga.exe"

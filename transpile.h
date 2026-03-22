@@ -56,6 +56,21 @@ void mental_transpile_free(char* result);
 /* Map API type to target language */
 mental_language mental_api_to_language(mental_api_type api);
 
+/* External tool identifiers */
+typedef enum {
+    MENTAL_TOOL_DXC  = 0,
+    MENTAL_TOOL_NAGA = 1
+} mental_tool;
+
+/* Configure the path to an external tool (DXC, Naga).
+ * Must be an absolute or resolvable path to the executable.
+ * Pass NULL to clear a previously set path and revert to search. */
+void mental_set_tool_path(mental_tool tool, const char* path);
+
+/* Query the configured path for an external tool.
+ * Returns NULL if no path has been explicitly set. */
+const char* mental_get_tool_path(mental_tool tool);
+
 #ifdef __cplusplus
 }
 #endif
