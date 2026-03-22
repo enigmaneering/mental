@@ -61,3 +61,30 @@ TEXT ·call5(SB), NOSPLIT, $48-56
 	CALL R10
 	MOVQ AX, ret+48(FP)
 	RET
+
+// C-callable atexit trampoline for Windows x64.
+// Calls WriteFile/ReadFile through resolved kernel32 addresses.
+// At entry RSP = 16n-8 (x64 ABI). SUB $40 gives 32 shadow + 8 for 5th arg,
+// and RSP becomes 16-aligned for the outgoing CALL.
+//
+// func atexitTrampoline()
+TEXT ·atexitTrampoline(SB), NOSPLIT, $0-0
+	SUBQ $40, SP
+	// WriteFile(signalHandle, &buf, 1, &written, NULL)
+	MOVQ ·atexitSignalFd(SB), CX
+	LEAQ ·atexitBuf(SB), DX
+	MOVQ $1, R8
+	LEAQ ·atexitWritten(SB), R9
+	MOVQ $0, 32(SP)
+	MOVQ ·writeFileAddr(SB), R10
+	CALL R10
+	// ReadFile(doneHandle, &buf, 1, &written, NULL)  — blocks until Go signals done
+	MOVQ ·atexitDoneFd(SB), CX
+	LEAQ ·atexitBuf(SB), DX
+	MOVQ $1, R8
+	LEAQ ·atexitWritten(SB), R9
+	MOVQ $0, 32(SP)
+	MOVQ ·readFileAddr(SB), R10
+	CALL R10
+	ADDQ $40, SP
+	RET

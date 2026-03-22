@@ -59,3 +59,31 @@ TEXT ·call5(SB), NOSPLIT, $16-56
 	BL   (R9)
 	MOVD R0, ret+48(FP)
 	RET
+
+// C-callable atexit trampoline for Windows ARM64.
+// Calls WriteFile/ReadFile through resolved kernel32 addresses.
+// Must save/restore LR (R30) since BL overwrites it.
+//
+// func atexitTrampoline()
+TEXT ·atexitTrampoline(SB), NOSPLIT, $0-0
+	SUB  $16, RSP, RSP
+	MOVD R30, (RSP)
+	// WriteFile(signalHandle, &buf, 1, &written, NULL)
+	MOVD ·atexitSignalFd(SB), R0
+	MOVD $·atexitBuf(SB), R1
+	MOVD $1, R2
+	MOVD $·atexitWritten(SB), R3
+	MOVD $0, R4
+	MOVD ·writeFileAddr(SB), R9
+	BL   (R9)
+	// ReadFile(doneHandle, &buf, 1, &written, NULL)  — blocks until Go signals done
+	MOVD ·atexitDoneFd(SB), R0
+	MOVD $·atexitBuf(SB), R1
+	MOVD $1, R2
+	MOVD $·atexitWritten(SB), R3
+	MOVD $0, R4
+	MOVD ·readFileAddr(SB), R9
+	BL   (R9)
+	MOVD (RSP), R30
+	ADD  $16, RSP, RSP
+	RET

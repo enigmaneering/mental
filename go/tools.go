@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"unsafe"
 )
 
@@ -26,12 +25,10 @@ var tools = []toolSpec{
 	{toolNaga, "naga"},
 }
 
-// tempToolPaths tracks extracted temp files so Shutdown can clean them up.
-var tempToolPaths []string
-
-// configureTools is called once during Init after symbols are resolved.
+// configureTools is called once during init after symbols are resolved.
 // For each tool it checks: system PATH first, then extracts the embedded
-// binary to a temporary file as a fallback.
+// binary to a temporary file as a fallback. Temp files are registered with
+// the C library for automatic cleanup at process exit.
 func configureTools() {
 	for _, t := range tools {
 		exeName := t.name
@@ -72,7 +69,7 @@ func configureTools() {
 		}
 
 		setToolPath(t.id, tmpPath)
-		tempToolPaths = append(tempToolPaths, tmpPath)
+		registerTempFilePath(tmpPath)
 	}
 }
 
@@ -82,19 +79,9 @@ func setToolPath(tool int, path string) {
 	call2(ft.setToolPath, uintptr(tool), uintptr(unsafe.Pointer(&cstr[0])))
 }
 
-var shutdownOnce sync.Once
-
-// Shutdown releases resources held by the mental library.
-// It removes any temporary tool binaries extracted during Init and
-// clears the configured tool paths in the C library.
-//
-// Shutdown is safe to call multiple times; only the first call has effect.
-// After Shutdown, the library should not be used.
-func Shutdown() {
-	shutdownOnce.Do(func() {
-		for _, p := range tempToolPaths {
-			os.Remove(p)
-		}
-		tempToolPaths = nil
-	})
+// registerTempFilePath calls mental_register_temp_file in the C library.
+// The C library's atexit handler will remove these files at process exit.
+func registerTempFilePath(path string) {
+	cstr := append([]byte(path), 0) // null-terminated
+	call1(ft.registerTempFile, uintptr(unsafe.Pointer(&cstr[0])))
 }

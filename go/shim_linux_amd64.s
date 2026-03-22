@@ -97,3 +97,23 @@ TEXT ·sysDlerror(SB), NOSPLIT, $16-8
 	CALL libc_dlerror(SB)
 	MOVQ AX, ret+0(FP)
 	RET
+
+// C-callable atexit trampoline. Writes to atexitSignalFd to wake the Go
+// cleanup goroutine, then blocks on atexitDoneFd until cleanup completes.
+// Uses raw Linux syscalls — no Go runtime or libc dependency.
+//
+// func atexitTrampoline()
+TEXT ·atexitTrampoline(SB), NOSPLIT, $0-0
+	// write(atexitSignalFd, &atexitBuf, 1)
+	MOVQ $1, AX                      // SYS_write
+	MOVQ ·atexitSignalFd(SB), DI
+	LEAQ ·atexitBuf(SB), SI
+	MOVQ $1, DX
+	SYSCALL
+	// read(atexitDoneFd, &atexitBuf, 1)  — blocks until Go signals done
+	XORQ AX, AX                      // SYS_read = 0
+	MOVQ ·atexitDoneFd(SB), DI
+	LEAQ ·atexitBuf(SB), SI
+	MOVQ $1, DX
+	SYSCALL
+	RET

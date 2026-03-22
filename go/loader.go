@@ -5,39 +5,38 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync"
 )
 
 // funcTable holds resolved C function pointers for the mental library.
 type funcTable struct {
-	deviceCount    uintptr
-	deviceGet      uintptr
-	deviceName     uintptr
-	deviceAPI      uintptr
-	deviceAPIName  uintptr
-	alloc          uintptr
-	write          uintptr
-	read           uintptr
-	size           uintptr
-	clone          uintptr
-	finalize       uintptr
-	compile        uintptr
-	dispatch       uintptr
-	kernelFinalize uintptr
-	viewportAttach uintptr
-	viewportPres   uintptr
-	viewportDet    uintptr
-	getError       uintptr
-	getErrorMsg    uintptr
-	setToolPath    uintptr
-	getToolPath    uintptr
+	deviceCount      uintptr
+	deviceGet        uintptr
+	deviceName       uintptr
+	deviceAPI        uintptr
+	deviceAPIName    uintptr
+	alloc            uintptr
+	write            uintptr
+	read             uintptr
+	size             uintptr
+	clone            uintptr
+	finalize         uintptr
+	compile          uintptr
+	dispatch         uintptr
+	kernelFinalize   uintptr
+	viewportAttach   uintptr
+	viewportPres     uintptr
+	viewportDet      uintptr
+	getError         uintptr
+	getErrorMsg      uintptr
+	setToolPath      uintptr
+	getToolPath      uintptr
+	mentalAtexit     uintptr
+	registerTempFile uintptr
 }
 
 var (
-	ft       funcTable
-	libH     uintptr
-	initOnce sync.Once
-	initErr  error
+	ft   funcTable
+	libH uintptr
 )
 
 // libName returns the platform-specific shared library filename.
@@ -52,59 +51,45 @@ func libName() string {
 	}
 }
 
-// Init loads the mental shared library and resolves all symbols.
-// It is called automatically on first use but can be called explicitly
-// to check for load errors early.
+// init loads the mental shared library, resolves symbols, configures tools,
+// and sets up automatic cleanup via the C library's atexit mechanism.
 //
-// Search order:
+// Search order for the shared library:
 //  1. System library paths (standard dlopen / LoadLibrary search)
 //  2. "external/" directory relative to the current working directory
 //  3. Embedded library extracted to a temporary file
-func Init() error {
-	initOnce.Do(func() {
-		initErr = doInit()
-	})
-	return initErr
+func init() {
+	if err := doInit(); err != nil {
+		panic(err)
+	}
 }
 
 func doInit() error {
 	name := libName()
 
-	// 1. System search — bare library name uses default search paths.
+	// Try sources in priority order: system, external/, embedded.
 	h, err := openLibrary(name)
-	if err == nil {
-		libH = h
-		if err := resolveSymbols(h); err != nil {
-			return err
-		}
-		configureTools()
-		return nil
-	}
-
-	// 2. external/ folder relative to cwd.
-	if dir, e := os.Getwd(); e == nil {
-		extPath := filepath.Join(dir, "external", name)
-		h, err = openLibrary(extPath)
-		if err == nil {
-			libH = h
-			if err := resolveSymbols(h); err != nil {
-				return err
-			}
-			configureTools()
-			return nil
-		}
-	}
-
-	// 3. Embedded library fallback.
-	h, err = loadFromEmbed()
 	if err != nil {
-		return fmt.Errorf("mental: unable to load %s: system, external/, and embed all failed: %w", name, err)
+		if dir, e := os.Getwd(); e == nil {
+			h, err = openLibrary(filepath.Join(dir, "external", name))
+		}
 	}
+	if err != nil {
+		h, err = loadFromEmbed()
+		if err != nil {
+			return fmt.Errorf("mental: unable to load %s: system, external/, and embed all failed: %w", name, err)
+		}
+	}
+
 	libH = h
 	if err := resolveSymbols(h); err != nil {
 		return err
 	}
 	configureTools()
+	if embedTmpPath != "" {
+		registerTempFilePath(embedTmpPath)
+	}
+	setupLifecycle()
 	return nil
 }
 
@@ -134,32 +119,36 @@ var symbolNames = [...]struct {
 	{"mental_get_error_message", offsetOf_getErrorMsg},
 	{"mental_set_tool_path", offsetOf_setToolPath},
 	{"mental_get_tool_path", offsetOf_getToolPath},
+	{"mental_atexit", offsetOf_mentalAtexit},
+	{"mental_register_temp_file", offsetOf_registerTempFile},
 }
 
 // Field offsets computed via unsafe.Offsetof — kept in a single place
 // so the symbol table and struct stay in sync.
 var (
-	offsetOf_deviceCount    = ptrOffset(0)
-	offsetOf_deviceGet      = ptrOffset(1)
-	offsetOf_deviceName     = ptrOffset(2)
-	offsetOf_deviceAPI      = ptrOffset(3)
-	offsetOf_deviceAPIName  = ptrOffset(4)
-	offsetOf_alloc          = ptrOffset(5)
-	offsetOf_write          = ptrOffset(6)
-	offsetOf_read           = ptrOffset(7)
-	offsetOf_size           = ptrOffset(8)
-	offsetOf_clone          = ptrOffset(9)
-	offsetOf_finalize       = ptrOffset(10)
-	offsetOf_compile        = ptrOffset(11)
-	offsetOf_dispatch       = ptrOffset(12)
-	offsetOf_kernelFinalize = ptrOffset(13)
-	offsetOf_viewportAttach = ptrOffset(14)
-	offsetOf_viewportPres   = ptrOffset(15)
-	offsetOf_viewportDet    = ptrOffset(16)
-	offsetOf_getError       = ptrOffset(17)
-	offsetOf_getErrorMsg    = ptrOffset(18)
-	offsetOf_setToolPath    = ptrOffset(19)
-	offsetOf_getToolPath    = ptrOffset(20)
+	offsetOf_deviceCount      = ptrOffset(0)
+	offsetOf_deviceGet        = ptrOffset(1)
+	offsetOf_deviceName       = ptrOffset(2)
+	offsetOf_deviceAPI        = ptrOffset(3)
+	offsetOf_deviceAPIName    = ptrOffset(4)
+	offsetOf_alloc            = ptrOffset(5)
+	offsetOf_write            = ptrOffset(6)
+	offsetOf_read             = ptrOffset(7)
+	offsetOf_size             = ptrOffset(8)
+	offsetOf_clone            = ptrOffset(9)
+	offsetOf_finalize         = ptrOffset(10)
+	offsetOf_compile          = ptrOffset(11)
+	offsetOf_dispatch         = ptrOffset(12)
+	offsetOf_kernelFinalize   = ptrOffset(13)
+	offsetOf_viewportAttach   = ptrOffset(14)
+	offsetOf_viewportPres     = ptrOffset(15)
+	offsetOf_viewportDet      = ptrOffset(16)
+	offsetOf_getError         = ptrOffset(17)
+	offsetOf_getErrorMsg      = ptrOffset(18)
+	offsetOf_setToolPath      = ptrOffset(19)
+	offsetOf_getToolPath      = ptrOffset(20)
+	offsetOf_mentalAtexit     = ptrOffset(21)
+	offsetOf_registerTempFile = ptrOffset(22)
 )
 
 func ptrOffset(index int) uintptr {
@@ -169,7 +158,7 @@ func ptrOffset(index int) uintptr {
 const ptrSize = 8 // all supported platforms are 64-bit
 
 func resolveSymbols(handle uintptr) error {
-	base := (*[21]uintptr)(unsafePointer(&ft))
+	base := (*[23]uintptr)(unsafePointer(&ft))
 	for i, sym := range symbolNames {
 		addr, err := lookupSymbol(handle, sym.name)
 		if err != nil {

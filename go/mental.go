@@ -1,10 +1,15 @@
 // Package mental provides Go bindings for the Mental GPU compute library.
 //
 // Mental is loaded dynamically at runtime with no cgo dependency.
+// The library is initialized automatically on package import via init().
+//
 // The search order for the shared library is:
 //  1. System library paths (standard dlopen / LoadLibrary)
 //  2. ./external/ directory relative to the working directory
 //  3. Embedded prebuilt library (if present at compile time in lib/)
+//
+// Cleanup of temporary files is automatic at process exit via atexit.
+// Use [Defer] to register additional cleanup callbacks.
 //
 // Assembly shims translate Go's calling convention to the platform C ABI
 // (SysV AMD64, AAPCS64, or Windows x64) for each supported target.
@@ -87,27 +92,18 @@ type Kernel uintptr
 // Viewport is an opaque handle to a surface presentation attachment.
 type Viewport uintptr
 
-func mustInit() {
-	if err := Init(); err != nil {
-		panic(err)
-	}
-}
-
 // DeviceCount returns the number of available GPU devices.
 func DeviceCount() int {
-	mustInit()
 	return int(call0(ft.deviceCount))
 }
 
 // DeviceGet returns the device at the given index.
 func DeviceGet(index int) Device {
-	mustInit()
 	return Device(call1(ft.deviceGet, uintptr(index)))
 }
 
 // Name returns the human-readable device name.
 func (d Device) Name() string {
-	mustInit()
 	p := call1(ft.deviceName, uintptr(d))
 	if p == 0 {
 		return ""
@@ -117,13 +113,11 @@ func (d Device) Name() string {
 
 // API returns the backend API type for this device.
 func (d Device) API() APIType {
-	mustInit()
 	return APIType(call1(ft.deviceAPI, uintptr(d)))
 }
 
 // APIName returns the backend API name as a string.
 func (d Device) APIName() string {
-	mustInit()
 	p := call1(ft.deviceAPIName, uintptr(d))
 	if p == 0 {
 		return ""
@@ -133,14 +127,12 @@ func (d Device) APIName() string {
 
 // Alloc allocates a GPU memory buffer of the given size in bytes.
 func Alloc(dev Device, bytes int) Reference {
-	mustInit()
 	return Reference(call2(ft.alloc, uintptr(dev), uintptr(bytes)))
 }
 
 // Write copies data from a Go byte slice into the GPU buffer.
 // The buffer auto-resizes if the data is larger than the current capacity.
 func Write(ref Reference, data []byte) {
-	mustInit()
 	if len(data) == 0 {
 		return
 	}
@@ -151,7 +143,6 @@ func Write(ref Reference, data []byte) {
 
 // Read copies data from the GPU buffer into a Go byte slice.
 func Read(ref Reference, buf []byte) {
-	mustInit()
 	if len(buf) == 0 {
 		return
 	}
@@ -162,19 +153,16 @@ func Read(ref Reference, buf []byte) {
 
 // Size returns the current size of the GPU buffer in bytes.
 func (r Reference) Size() int {
-	mustInit()
 	return int(call1(ft.size, uintptr(r)))
 }
 
 // Clone creates a new GPU buffer with a copy of this buffer's data.
 func (r Reference) Clone() Reference {
-	mustInit()
 	return Reference(call1(ft.clone, uintptr(r)))
 }
 
 // Finalize frees the GPU memory. Must be called explicitly.
 func (r Reference) Finalize() {
-	mustInit()
 	call1(ft.finalize, uintptr(r))
 }
 
@@ -182,7 +170,6 @@ func (r Reference) Finalize() {
 // The shader language is auto-detected and transpiled as needed.
 // Returns the compiled kernel and any error from the C library.
 func Compile(dev Device, source string) (Kernel, error) {
-	mustInit()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -196,7 +183,6 @@ func Compile(dev Device, source string) (Kernel, error) {
 
 // Dispatch executes a kernel with the given input buffers, output buffer, and work size.
 func Dispatch(kernel Kernel, inputs []Reference, output Reference, workSize int) {
-	mustInit()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -209,14 +195,12 @@ func Dispatch(kernel Kernel, inputs []Reference, output Reference, workSize int)
 
 // Finalize frees the compiled kernel. Must be called explicitly.
 func (k Kernel) Finalize() {
-	mustInit()
 	call1(ft.kernelFinalize, uintptr(k))
 }
 
 // ViewportAttach attaches a GPU buffer to an OS surface for zero-copy presentation.
 // The surface parameter is platform-specific (NSView*, HWND, etc.).
 func ViewportAttach(ref Reference, surface uintptr) (Viewport, error) {
-	mustInit()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -229,25 +213,21 @@ func ViewportAttach(ref Reference, surface uintptr) (Viewport, error) {
 
 // Present renders the attached buffer to the surface.
 func (v Viewport) Present() {
-	mustInit()
 	call1(ft.viewportPres, uintptr(v))
 }
 
 // Detach disconnects and cleans up the viewport.
 func (v Viewport) Detach() {
-	mustInit()
 	call1(ft.viewportDet, uintptr(v))
 }
 
 // GetError returns the last error code from the C library (thread-local).
 func GetError() Error {
-	mustInit()
 	return Error(call0(ft.getError))
 }
 
 // GetErrorMessage returns the last error message from the C library (thread-local).
 func GetErrorMessage() string {
-	mustInit()
 	p := call0(ft.getErrorMsg)
 	if p == 0 {
 		return ""

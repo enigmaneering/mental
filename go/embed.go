@@ -50,9 +50,16 @@ func loadFromEmbed() (uintptr, error) {
 
 	// Best-effort cleanup on Unix: unlink the temp file now.
 	// The OS keeps the file open via the fd until the process exits.
+	// On Windows we can't unlink while loaded, so record the path
+	// for automatic removal via the C library's atexit handler.
 	if runtime.GOOS != "windows" {
 		os.Remove(tmpPath)
+	} else {
+		embedTmpPath = tmpPath
 	}
 
 	return h, nil
 }
+
+// embedTmpPath holds the temp library path on Windows for deferred cleanup.
+var embedTmpPath string
