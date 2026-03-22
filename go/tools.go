@@ -26,7 +26,9 @@ var tools = []toolSpec{
 }
 
 // configureTools is called once during Init after symbols are resolved.
-// For each tool it checks: system PATH first, then embedded fallback.
+// For each tool it checks: system PATH first, then extracts the embedded
+// binary to a temporary file as a fallback. Temp files are placed in the
+// OS temp directory and cleaned up automatically on reboot.
 func configureTools() {
 	for _, t := range tools {
 		exeName := t.name
@@ -40,27 +42,33 @@ func configureTools() {
 			continue
 		}
 
-		// 2. Extract embedded binary to cache directory.
+		// 2. Extract embedded binary to a temporary file.
 		platform := runtime.GOOS + "-" + runtime.GOARCH
 		embedPath := filepath.Join("lib", platform, exeName)
 		data, err := libFS.ReadFile(embedPath)
 		if err != nil {
-			continue // No embedded binary — tool simply won't be available.
+			continue // No embedded binary — tool won't be available.
 		}
 
-		cacheDir, err := toolCacheDir()
+		tmp, err := os.CreateTemp("", "mental-*-"+exeName)
 		if err != nil {
 			continue
 		}
+		tmpPath := tmp.Name()
 
-		toolPath := filepath.Join(cacheDir, exeName)
-		if needsWrite(toolPath, int64(len(data))) {
-			if err := os.WriteFile(toolPath, data, 0755); err != nil {
-				continue
-			}
+		if _, err := tmp.Write(data); err != nil {
+			tmp.Close()
+			os.Remove(tmpPath)
+			continue
+		}
+		tmp.Close()
+
+		// Make executable on Unix.
+		if runtime.GOOS != "windows" {
+			os.Chmod(tmpPath, 0755)
 		}
 
-		setToolPath(t.id, toolPath)
+		setToolPath(t.id, tmpPath)
 	}
 }
 
@@ -68,21 +76,4 @@ func configureTools() {
 func setToolPath(tool int, path string) {
 	cstr := append([]byte(path), 0) // null-terminated
 	call2(ft.setToolPath, uintptr(tool), uintptr(unsafe.Pointer(&cstr[0])))
-}
-
-// toolCacheDir returns (and creates) the cache directory for extracted tools.
-func toolCacheDir() (string, error) {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		// Fall back to temp directory if no user cache is available.
-		base = os.TempDir()
-	}
-	dir := filepath.Join(base, "mental", "tools")
-	return dir, os.MkdirAll(dir, 0755)
-}
-
-// needsWrite returns true if the file at path is missing or a different size.
-func needsWrite(path string, size int64) bool {
-	info, err := os.Stat(path)
-	return err != nil || info.Size() != size
 }
