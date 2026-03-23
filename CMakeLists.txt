@@ -143,7 +143,7 @@ elseif(PLATFORM_WINDOWS)
 
     # Common dependencies for both shared and static
     set(WINDOWS_LIBS
-        d3d12.lib dxgi.lib dxcompiler.lib
+        d3d12.lib dxgi.lib
     )
 
     if(OpenCL_FOUND)
