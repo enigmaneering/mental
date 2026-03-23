@@ -64,7 +64,7 @@ typedef enum {
 
 /* Configure the path to an external tool (DXC, Naga).
  * Must be an absolute or resolvable path to the executable.
- * Pass NULL to clear a previously set path and revert to search. */
+ * Pass NULL to clear a previously set path. */
 void mental_set_tool_path(mental_tool tool, const char* path);
 
 /* Query the configured path for an external tool.

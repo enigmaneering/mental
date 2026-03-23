@@ -48,56 +48,6 @@ const char* mental_get_tool_path(mental_tool tool) {
     }
 }
 
-/* Helper to find DXC compiler */
-static const char* find_dxc(void) {
-    /* Use explicitly configured path if set */
-    if (g_dxc_path[0]) return g_dxc_path;
-
-    /* Platform-specific executable name */
-#ifdef _WIN32
-    #define DXC_EXE "dxc.exe"
-#else
-    #define DXC_EXE "dxc"
-#endif
-
-    /* Try relative paths (from build dir, build/test dir, and project root) */
-    /* Use F_OK (0) instead of X_OK since Windows doesn't have execute bits */
-    /* Windows redistributable has flat structure, Unix has bin/ subdirectory */
-    if (access("../external/dxc/" DXC_EXE, 0) == 0) return "../external/dxc/" DXC_EXE;
-    if (access("../../external/dxc/" DXC_EXE, 0) == 0) return "../../external/dxc/" DXC_EXE;
-    if (access("external/dxc/" DXC_EXE, 0) == 0) return "external/dxc/" DXC_EXE;
-    if (access("../external/dxc/bin/" DXC_EXE, 0) == 0) return "../external/dxc/bin/" DXC_EXE;
-    if (access("../../external/dxc/bin/" DXC_EXE, 0) == 0) return "../../external/dxc/bin/" DXC_EXE;
-    if (access("external/dxc/bin/" DXC_EXE, 0) == 0) return "external/dxc/bin/" DXC_EXE;
-
-    /* Fall back to system PATH */
-    return DXC_EXE;
-#undef DXC_EXE
-}
-
-/* Helper to find Naga compiler */
-static const char* find_naga(void) {
-    /* Use explicitly configured path if set */
-    if (g_naga_path[0]) return g_naga_path;
-
-    /* Platform-specific executable name */
-#ifdef _WIN32
-    #define NAGA_EXE "naga.exe"
-#else
-    #define NAGA_EXE "naga"
-#endif
-
-    /* Try relative paths (from build dir, build/test dir, and project root) */
-    /* Use F_OK (0) instead of X_OK since Windows doesn't have execute bits */
-    if (access("../external/naga/bin/" NAGA_EXE, 0) == 0) return "../external/naga/bin/" NAGA_EXE;
-    if (access("../../external/naga/bin/" NAGA_EXE, 0) == 0) return "../../external/naga/bin/" NAGA_EXE;
-    if (access("external/naga/bin/" NAGA_EXE, 0) == 0) return "external/naga/bin/" NAGA_EXE;
-
-    /* Fall back to system PATH */
-    return NAGA_EXE;
-#undef NAGA_EXE
-}
-
 /* Helper to read file into buffer */
 static unsigned char* read_file(const char* path, size_t* out_len) {
     FILE* f = fopen(path, "rb");
@@ -132,7 +82,11 @@ static unsigned char* read_file(const char* path, size_t* out_len) {
 
 unsigned char* mental_hlsl_to_spirv(const char* source, size_t source_len,
                                     size_t* out_len, char* error, size_t error_len) {
-    const char* dxc = find_dxc();
+    const char* dxc = mental_get_tool_path(MENTAL_TOOL_DXC);
+    if (!dxc) {
+        if (error) strncpy(error, "DXC compiler not configured (call mental_set_tool_path)", error_len - 1);
+        return NULL;
+    }
 
     /* Create temporary directory */
     char tmpdir[] = "/tmp/mental_hlsl_XXXXXX";
@@ -197,7 +151,11 @@ unsigned char* mental_hlsl_to_spirv(const char* source, size_t source_len,
 
 unsigned char* mental_wgsl_to_spirv(const char* source, size_t source_len,
                                     size_t* out_len, char* error, size_t error_len) {
-    const char* naga = find_naga();
+    const char* naga = mental_get_tool_path(MENTAL_TOOL_NAGA);
+    if (!naga) {
+        if (error) strncpy(error, "Naga compiler not configured (call mental_set_tool_path)", error_len - 1);
+        return NULL;
+    }
 
     /* Create temporary directory */
     char tmpdir[] = "/tmp/mental_wgsl_XXXXXX";
