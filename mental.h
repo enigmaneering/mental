@@ -145,6 +145,16 @@ mental_error mental_get_error(void);
 /* Get last error message (thread-local) */
 const char* mental_get_error_message(void);
 
+/*
+ * Lifecycle Management
+ *
+ * Register callbacks for automatic cleanup at process exit.
+ * Callbacks run in LIFO order (last registered = first called).
+ */
+
+/* Register a callback to run at process exit (LIFO order). */
+void mental_atexit(void (*fn)(void));
+
 #ifdef __cplusplus
 }
 #endif

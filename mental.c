@@ -504,3 +504,32 @@ mental_error mental_get_error(void) {
 const char* mental_get_error_message(void) {
     return g_last_error_message;
 }
+
+/*
+ * Lifecycle Management
+ */
+
+#define MENTAL_MAX_ATEXIT 32
+
+static void (*g_atexit_fns[MENTAL_MAX_ATEXIT])(void);
+static int g_atexit_count = 0;
+static int g_shutdown_registered = 0;
+
+static void mental_shutdown_handler(void) {
+    /* Run atexit callbacks in LIFO order */
+    for (int i = g_atexit_count - 1; i >= 0; i--) {
+        if (g_atexit_fns[i]) {
+            g_atexit_fns[i]();
+        }
+    }
+}
+
+void mental_atexit(void (*fn)(void)) {
+    if (!g_shutdown_registered) {
+        atexit(mental_shutdown_handler);
+        g_shutdown_registered = 1;
+    }
+    if (g_atexit_count < MENTAL_MAX_ATEXIT && fn) {
+        g_atexit_fns[g_atexit_count++] = fn;
+    }
+}

@@ -52,6 +52,7 @@ add_executable(test_msl_debug test_msl_debug.c)
 target_link_libraries(test_msl_debug mental-static)
 
 add_executable(test_paths_debug test_paths_debug.c)
+target_link_libraries(test_paths_debug mental-static)
 add_test(NAME PathDebug COMMAND test_paths_debug)
 
 add_executable(test_hlsl_debug test_hlsl_debug.c)

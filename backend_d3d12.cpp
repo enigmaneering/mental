@@ -6,11 +6,14 @@
 
 #include <d3d12.h>
 #include <dxgi1_6.h>
-#include <dxcapi.h>
 #include <wrl/client.h>
 #include "mental_internal.h"
+#include "transpile.h"
 #include <vector>
 #include <string>
+#include <stdio.h>
+#include <stdlib.h>
+#include <windows.h>
 
 using Microsoft::WRL::ComPtr;
 
@@ -397,85 +400,96 @@ static void d3d12_buffer_destroy(void* buf) {
     delete d3d_buf;
 }
 
-/* Helper to compile HLSL to DXIL using DXC */
+/* Helper to compile HLSL to DXIL using DXC command-line tool */
 static unsigned char* compile_hlsl_to_dxil(const char* hlsl_source, size_t hlsl_len,
                                             size_t* out_dxil_len, char* error, size_t error_len) {
-    ComPtr<IDxcLibrary> library;
-    ComPtr<IDxcCompiler> compiler;
-    ComPtr<IDxcBlobEncoding> source_blob;
-    ComPtr<IDxcOperationResult> result;
-
-    /* Create DXC library and compiler */
-    HRESULT hr = DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&library));
-    if (FAILED(hr)) {
-        if (error) snprintf(error, error_len, "Failed to create DXC library (HRESULT: 0x%08X)", (unsigned int)hr);
+    const char* dxc = mental_get_tool_path(MENTAL_TOOL_DXC);
+    if (!dxc) {
+        if (error) snprintf(error, error_len, "DXC compiler not found (set via mental_set_tool_path)");
         return nullptr;
     }
 
-    hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
-    if (FAILED(hr)) {
-        if (error) snprintf(error, error_len, "Failed to create DXC compiler (HRESULT: 0x%08X)", (unsigned int)hr);
+    /* Create temporary directory */
+    char temp_path[MAX_PATH];
+    char temp_dir[MAX_PATH];
+    GetTempPathA(MAX_PATH, temp_path);
+    snprintf(temp_dir, sizeof(temp_dir), "%smental_hlsl_%lu", temp_path, GetTickCount64());
+    if (!CreateDirectoryA(temp_dir, NULL)) {
+        if (error) snprintf(error, error_len, "Failed to create temp directory");
         return nullptr;
     }
 
-    /* Create blob from HLSL source */
-    hr = library->CreateBlobWithEncodingFromPinned(hlsl_source, (UINT32)hlsl_len, CP_UTF8, &source_blob);
-    if (FAILED(hr)) {
-        if (error) snprintf(error, error_len, "Failed to create source blob (HRESULT: 0x%08X)", (unsigned int)hr);
+    /* Write HLSL to temp file */
+    char src_path[MAX_PATH];
+    snprintf(src_path, sizeof(src_path), "%s\\shader.hlsl", temp_dir);
+    FILE* f = fopen(src_path, "wb");
+    if (!f) {
+        if (error) snprintf(error, error_len, "Failed to write HLSL source");
+        RemoveDirectoryA(temp_dir);
+        return nullptr;
+    }
+    fwrite(hlsl_source, 1, hlsl_len, f);
+    fclose(f);
+
+    /* Compile HLSL to DXIL using DXC */
+    char out_path[MAX_PATH];
+    char cmd[4096];
+    snprintf(out_path, sizeof(out_path), "%s\\shader.dxil", temp_dir);
+    snprintf(cmd, sizeof(cmd), "\"%s\" -T cs_6_0 -E main -Fo \"%s\" \"%s\" 2>&1",
+             dxc, out_path, src_path);
+
+    FILE* pipe = _popen(cmd, "r");
+    if (!pipe) {
+        if (error) snprintf(error, error_len, "Failed to execute DXC compiler");
+        DeleteFileA(src_path);
+        RemoveDirectoryA(temp_dir);
         return nullptr;
     }
 
-    /* Compile HLSL to DXIL */
-    hr = compiler->Compile(
-        source_blob.Get(),
-        L"shader.hlsl",
-        L"main",
-        L"cs_6_0",  /* Compute Shader 6.0 */
-        nullptr, 0,  /* No additional arguments */
-        nullptr, 0,  /* No defines */
-        nullptr,     /* No include handler */
-        &result
-    );
+    char output_buf[4096] = {0};
+    fread(output_buf, 1, sizeof(output_buf) - 1, pipe);
+    int status = _pclose(pipe);
 
-    if (FAILED(hr) || !result) {
-        if (error) snprintf(error, error_len, "DXC compilation failed (HRESULT: 0x%08X)", (unsigned int)hr);
+    if (status != 0) {
+        if (error) snprintf(error, error_len, "DXC compilation failed: %s", output_buf);
+        DeleteFileA(src_path);
+        RemoveDirectoryA(temp_dir);
         return nullptr;
     }
 
-    /* Check compilation status */
-    HRESULT status;
-    result->GetStatus(&status);
-    if (FAILED(status)) {
-        /* Get error message */
-        ComPtr<IDxcBlobEncoding> error_blob;
-        result->GetErrorBuffer(&error_blob);
-        if (error && error_blob) {
-            const char* error_msg = (const char*)error_blob->GetBufferPointer();
-            snprintf(error, error_len, "DXC compilation error: %s", error_msg);
-        } else if (error) {
-            snprintf(error, error_len, "DXC compilation failed (HRESULT: 0x%08X)", (unsigned int)status);
-        }
+    /* Read compiled DXIL bytecode */
+    FILE* dxil_file = fopen(out_path, "rb");
+    if (!dxil_file) {
+        if (error) snprintf(error, error_len, "Failed to read DXIL output");
+        DeleteFileA(src_path);
+        DeleteFileA(out_path);
+        RemoveDirectoryA(temp_dir);
         return nullptr;
     }
 
-    /* Get compiled bytecode */
-    ComPtr<IDxcBlob> bytecode;
-    hr = result->GetResult(&bytecode);
-    if (FAILED(hr) || !bytecode) {
-        if (error) snprintf(error, error_len, "Failed to get DXC result (HRESULT: 0x%08X)", (unsigned int)hr);
-        return nullptr;
-    }
+    fseek(dxil_file, 0, SEEK_END);
+    long dxil_size = ftell(dxil_file);
+    fseek(dxil_file, 0, SEEK_SET);
 
-    /* Copy bytecode to malloc'd buffer */
-    size_t bytecode_size = bytecode->GetBufferSize();
-    unsigned char* dxil = (unsigned char*)malloc(bytecode_size);
+    unsigned char* dxil = (unsigned char*)malloc(dxil_size);
     if (!dxil) {
-        if (error) snprintf(error, error_len, "Failed to allocate memory for DXIL bytecode");
+        if (error) snprintf(error, error_len, "Failed to allocate memory for DXIL");
+        fclose(dxil_file);
+        DeleteFileA(src_path);
+        DeleteFileA(out_path);
+        RemoveDirectoryA(temp_dir);
         return nullptr;
     }
 
-    memcpy(dxil, bytecode->GetBufferPointer(), bytecode_size);
-    *out_dxil_len = bytecode_size;
+    fread(dxil, 1, dxil_size, dxil_file);
+    fclose(dxil_file);
+
+    /* Cleanup temp files */
+    DeleteFileA(src_path);
+    DeleteFileA(out_path);
+    RemoveDirectoryA(temp_dir);
+
+    *out_dxil_len = dxil_size;
     return dxil;
 }
 
