@@ -32,10 +32,10 @@ type funcTable struct {
 	setToolPath      uintptr
 	getToolPath      uintptr
 	mentalAtexit     uintptr
-	stdrec           uintptr
-	stdrecPeer       uintptr
-	stdrecSend       uintptr
-	stdrecRecv       uintptr
+	stdlink           uintptr
+	stdlinkPeer       uintptr
+	stdlinkSend       uintptr
+	stdlinkRecv       uintptr
 }
 
 var (
@@ -127,10 +127,10 @@ var symbolNames = [...]struct {
 	{"mental_set_tool_path", offsetOf_setToolPath},
 	{"mental_get_tool_path", offsetOf_getToolPath},
 	{"mental_atexit", offsetOf_mentalAtexit},
-	{"mental_stdrec", offsetOf_stdrec},
-	{"mental_stdrec_peer", offsetOf_stdrecPeer},
-	{"mental_stdrec_send", offsetOf_stdrecSend},
-	{"mental_stdrec_recv", offsetOf_stdrecRecv},
+	{"mental_stdlink", offsetOf_stdlink},
+	{"mental_stdlink_peer", offsetOf_stdlinkPeer},
+	{"mental_stdlink_send", offsetOf_stdlinkSend},
+	{"mental_stdlink_recv", offsetOf_stdlinkRecv},
 }
 
 // Field offsets computed via unsafe.Offsetof — kept in a single place
@@ -158,10 +158,10 @@ var (
 	offsetOf_setToolPath      = ptrOffset(19)
 	offsetOf_getToolPath      = ptrOffset(20)
 	offsetOf_mentalAtexit = ptrOffset(21)
-	offsetOf_stdrec       = ptrOffset(22)
-	offsetOf_stdrecPeer   = ptrOffset(23)
-	offsetOf_stdrecSend   = ptrOffset(24)
-	offsetOf_stdrecRecv   = ptrOffset(25)
+	offsetOf_stdlink       = ptrOffset(22)
+	offsetOf_stdlinkPeer   = ptrOffset(23)
+	offsetOf_stdlinkSend   = ptrOffset(24)
+	offsetOf_stdlinkRecv   = ptrOffset(25)
 )
 
 func ptrOffset(index int) uintptr {

@@ -22,7 +22,7 @@ endif()
 # Source files
 set(MENTAL_SOURCES
     mental.c
-    stdrec.c
+    stdlink.c
     transpile.c
     transpile_other.c
 )

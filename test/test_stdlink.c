@@ -1,4 +1,4 @@
-/* stdrec test: round-trip send/recv via socketpair */
+/* stdlink test: round-trip send/recv via socketpair */
 #include "../mental.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,21 +54,21 @@ static void *echo_thread(void *arg) {
 #endif /* _WIN32 */
 
 int main(void) {
-    printf("Testing stdrec...\n");
+    printf("Testing stdlink...\n");
 
     /* Test fd creation */
-    int fd = mental_stdrec();
-    printf("  stdrec fd = %d\n", fd);
-    ASSERT(fd >= 0, "mental_stdrec() returned -1");
+    int fd = mental_stdlink();
+    printf("  stdlink fd = %d\n", fd);
+    ASSERT(fd >= 0, "mental_stdlink() returned -1");
 
-    int peer = mental_stdrec_peer();
-    printf("  stdrec peer fd = %d\n", peer);
-    ASSERT(peer >= 0, "mental_stdrec_peer() returned -1");
+    int peer = mental_stdlink_peer();
+    printf("  stdlink peer fd = %d\n", peer);
+    ASSERT(peer >= 0, "mental_stdlink_peer() returned -1");
     ASSERT(fd != peer, "near and far fds must differ");
 
     /* Test idempotency */
-    ASSERT(mental_stdrec() == fd, "mental_stdrec() not idempotent");
-    ASSERT(mental_stdrec_peer() == peer, "mental_stdrec_peer() not idempotent");
+    ASSERT(mental_stdlink() == fd, "mental_stdlink() not idempotent");
+    ASSERT(mental_stdlink_peer() == peer, "mental_stdlink_peer() not idempotent");
 
 #ifndef _WIN32
     /* Round-trip: send from near, echo thread reads from far and writes back,
@@ -78,14 +78,14 @@ int main(void) {
     ASSERT(pthread_create(&tid, NULL, echo_thread, &ctx) == 0,
            "Failed to create echo thread");
 
-    const char *msg = "hello stdrec";
-    int rc = mental_stdrec_send(msg, strlen(msg));
-    ASSERT(rc == 0, "mental_stdrec_send failed");
+    const char *msg = "hello stdlink";
+    int rc = mental_stdlink_send(msg, strlen(msg));
+    ASSERT(rc == 0, "mental_stdlink_send failed");
 
     char buf[256];
     size_t out_len = 0;
-    rc = mental_stdrec_recv(buf, sizeof(buf), &out_len);
-    ASSERT(rc == 0, "mental_stdrec_recv failed");
+    rc = mental_stdlink_recv(buf, sizeof(buf), &out_len);
+    ASSERT(rc == 0, "mental_stdlink_recv failed");
     ASSERT(out_len == strlen(msg), "recv length mismatch");
     ASSERT(memcmp(buf, msg, out_len) == 0, "recv data mismatch");
 
@@ -99,12 +99,12 @@ int main(void) {
     ASSERT(pthread_create(&tid, NULL, echo_thread, &ctx2) == 0,
            "Failed to create echo thread for empty record");
 
-    rc = mental_stdrec_send(NULL, 0);
-    ASSERT(rc == 0, "mental_stdrec_send(NULL, 0) failed");
+    rc = mental_stdlink_send(NULL, 0);
+    ASSERT(rc == 0, "mental_stdlink_send(NULL, 0) failed");
 
     out_len = 999;
-    rc = mental_stdrec_recv(buf, sizeof(buf), &out_len);
-    ASSERT(rc == 0, "mental_stdrec_recv for empty record failed");
+    rc = mental_stdlink_recv(buf, sizeof(buf), &out_len);
+    ASSERT(rc == 0, "mental_stdlink_recv for empty record failed");
     ASSERT(out_len == 0, "empty record should have length 0");
 
     pthread_join(tid, NULL);
@@ -113,6 +113,6 @@ int main(void) {
     printf("  (round-trip test skipped on Windows — needs thread helper)\n");
 #endif
 
-    printf("PASS: stdrec\n");
+    printf("PASS: stdlink\n");
     return 0;
 }

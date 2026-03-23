@@ -1,5 +1,5 @@
 /*
- * Mental - Standard Record Channel (stdrec)
+ * Mental - Standard Link (stdlink)
  *
  * Provides a bidirectional fd for length-prefixed record exchange.
  * Unix: socketpair(AF_UNIX, SOCK_STREAM)
@@ -33,23 +33,23 @@ static HANDLE g_near_read  = INVALID_HANDLE_VALUE;
 static HANDLE g_near_write = INVALID_HANDLE_VALUE;
 static HANDLE g_far_read   = INVALID_HANDLE_VALUE;
 static HANDLE g_far_write  = INVALID_HANDLE_VALUE;
-static int g_stdrec_init   = 0;
-static CRITICAL_SECTION g_stdrec_cs;
+static int g_stdlink_init   = 0;
+static CRITICAL_SECTION g_stdlink_cs;
 static int g_cs_init = 0;
 
-static void stdrec_init_lock(void) {
+static void stdlink_init_lock(void) {
     if (!g_cs_init) {
-        InitializeCriticalSection(&g_stdrec_cs);
+        InitializeCriticalSection(&g_stdlink_cs);
         g_cs_init = 1;
     }
-    EnterCriticalSection(&g_stdrec_cs);
+    EnterCriticalSection(&g_stdlink_cs);
 }
 
-static void stdrec_init_unlock(void) {
-    LeaveCriticalSection(&g_stdrec_cs);
+static void stdlink_init_unlock(void) {
+    LeaveCriticalSection(&g_stdlink_cs);
 }
 
-static int stdrec_create(void) {
+static int stdlink_create(void) {
     HANDLE nr, nw, fr, fw;
     if (!CreatePipe(&fr, &nw, NULL, 0)) return -1;
     if (!CreatePipe(&nr, &fw, NULL, 0)) {
@@ -94,25 +94,25 @@ static int read_all(HANDLE h, void *buf, size_t n) {
 
 #else /* Unix */
 
-static int g_stdrec_near = -1;
-static int g_stdrec_far  = -1;
-static int g_stdrec_init = 0;
-static pthread_mutex_t g_stdrec_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_stdlink_near = -1;
+static int g_stdlink_far  = -1;
+static int g_stdlink_init = 0;
+static pthread_mutex_t g_stdlink_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static void stdrec_init_lock(void) {
-    pthread_mutex_lock(&g_stdrec_lock);
+static void stdlink_init_lock(void) {
+    pthread_mutex_lock(&g_stdlink_lock);
 }
 
-static void stdrec_init_unlock(void) {
-    pthread_mutex_unlock(&g_stdrec_lock);
+static void stdlink_init_unlock(void) {
+    pthread_mutex_unlock(&g_stdlink_lock);
 }
 
-static int stdrec_create(void) {
+static int stdlink_create(void) {
     int fds[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0)
         return -1;
-    g_stdrec_near = fds[0];
-    g_stdrec_far  = fds[1];
+    g_stdlink_near = fds[0];
+    g_stdlink_far  = fds[1];
     return 0;
 }
 
@@ -154,44 +154,44 @@ static int read_all_fd(int fd, void *buf, size_t n) {
  * Lazy initialization
  */
 
-static int ensure_stdrec(void) {
-    if (g_stdrec_init) return 0;
+static int ensure_stdlink(void) {
+    if (g_stdlink_init) return 0;
 
-    stdrec_init_lock();
-    if (!g_stdrec_init) {
-        if (stdrec_create() == 0)
-            g_stdrec_init = 1;
+    stdlink_init_lock();
+    if (!g_stdlink_init) {
+        if (stdlink_create() == 0)
+            g_stdlink_init = 1;
     }
-    stdrec_init_unlock();
-    return g_stdrec_init ? 0 : -1;
+    stdlink_init_unlock();
+    return g_stdlink_init ? 0 : -1;
 }
 
 /*
  * Public API
  */
 
-int mental_stdrec(void) {
-    if (ensure_stdrec() < 0) return -1;
+int mental_stdlink(void) {
+    if (ensure_stdlink() < 0) return -1;
 #ifdef _WIN32
     /* On Windows return a pseudo-fd (the HANDLE cast to int).
      * Callers needing the raw HANDLE can cast back. */
     return (int)(intptr_t)g_near_read;
 #else
-    return g_stdrec_near;
+    return g_stdlink_near;
 #endif
 }
 
-int mental_stdrec_peer(void) {
-    if (ensure_stdrec() < 0) return -1;
+int mental_stdlink_peer(void) {
+    if (ensure_stdlink() < 0) return -1;
 #ifdef _WIN32
     return (int)(intptr_t)g_far_read;
 #else
-    return g_stdrec_far;
+    return g_stdlink_far;
 #endif
 }
 
-int mental_stdrec_send(const void *data, size_t len) {
-    if (ensure_stdrec() < 0) return -1;
+int mental_stdlink_send(const void *data, size_t len) {
+    if (ensure_stdlink() < 0) return -1;
     if (!data && len > 0) return -1;
 
     /* Frame: [4 bytes length (network order)][payload] */
@@ -201,21 +201,21 @@ int mental_stdrec_send(const void *data, size_t len) {
     if (write_all(g_near_write, &net_len, 4) < 0) return -1;
     if (len > 0 && write_all(g_near_write, data, len) < 0) return -1;
 #else
-    if (write_all_fd(g_stdrec_near, &net_len, 4) < 0) return -1;
-    if (len > 0 && write_all_fd(g_stdrec_near, data, len) < 0) return -1;
+    if (write_all_fd(g_stdlink_near, &net_len, 4) < 0) return -1;
+    if (len > 0 && write_all_fd(g_stdlink_near, data, len) < 0) return -1;
 #endif
     return 0;
 }
 
-int mental_stdrec_recv(void *buf, size_t buf_len, size_t *out_len) {
-    if (ensure_stdrec() < 0) return -1;
+int mental_stdlink_recv(void *buf, size_t buf_len, size_t *out_len) {
+    if (ensure_stdlink() < 0) return -1;
 
     /* Read 4-byte length header */
     uint32_t net_len;
 #ifdef _WIN32
     if (read_all(g_near_read, &net_len, 4) < 0) return -1;
 #else
-    if (read_all_fd(g_stdrec_near, &net_len, 4) < 0) return -1;
+    if (read_all_fd(g_stdlink_near, &net_len, 4) < 0) return -1;
 #endif
 
     uint32_t payload_len = ntohl(net_len);
@@ -235,11 +235,11 @@ int mental_stdrec_recv(void *buf, size_t buf_len, size_t *out_len) {
         to_discard -= chunk;
     }
 #else
-    if (to_copy > 0 && read_all_fd(g_stdrec_near, buf, to_copy) < 0) return -1;
+    if (to_copy > 0 && read_all_fd(g_stdlink_near, buf, to_copy) < 0) return -1;
     while (to_discard > 0) {
         char tmp[512];
         size_t chunk = to_discard < sizeof(tmp) ? to_discard : sizeof(tmp);
-        if (read_all_fd(g_stdrec_near, tmp, chunk) < 0) return -1;
+        if (read_all_fd(g_stdlink_near, tmp, chunk) < 0) return -1;
         to_discard -= chunk;
     }
 #endif
