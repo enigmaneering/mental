@@ -55,6 +55,10 @@ add_executable(test_paths_debug test_paths_debug.c)
 target_link_libraries(test_paths_debug mental-static)
 add_test(NAME PathDebug COMMAND test_paths_debug)
 
+add_executable(test_stdrec test_stdrec.c)
+target_link_libraries(test_stdrec mental-static)
+add_test(NAME Stdrec COMMAND test_stdrec)
+
 add_executable(test_hlsl_debug test_hlsl_debug.c)
 target_link_libraries(test_hlsl_debug mental-static)
 

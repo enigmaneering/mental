@@ -31,7 +31,11 @@ type funcTable struct {
 	getErrorMsg      uintptr
 	setToolPath      uintptr
 	getToolPath      uintptr
-	mentalAtexit uintptr
+	mentalAtexit     uintptr
+	stdrec           uintptr
+	stdrecPeer       uintptr
+	stdrecSend       uintptr
+	stdrecRecv       uintptr
 }
 
 var (
@@ -123,6 +127,10 @@ var symbolNames = [...]struct {
 	{"mental_set_tool_path", offsetOf_setToolPath},
 	{"mental_get_tool_path", offsetOf_getToolPath},
 	{"mental_atexit", offsetOf_mentalAtexit},
+	{"mental_stdrec", offsetOf_stdrec},
+	{"mental_stdrec_peer", offsetOf_stdrecPeer},
+	{"mental_stdrec_send", offsetOf_stdrecSend},
+	{"mental_stdrec_recv", offsetOf_stdrecRecv},
 }
 
 // Field offsets computed via unsafe.Offsetof — kept in a single place
@@ -150,6 +158,10 @@ var (
 	offsetOf_setToolPath      = ptrOffset(19)
 	offsetOf_getToolPath      = ptrOffset(20)
 	offsetOf_mentalAtexit = ptrOffset(21)
+	offsetOf_stdrec       = ptrOffset(22)
+	offsetOf_stdrecPeer   = ptrOffset(23)
+	offsetOf_stdrecSend   = ptrOffset(24)
+	offsetOf_stdrecRecv   = ptrOffset(25)
 )
 
 func ptrOffset(index int) uintptr {
@@ -159,7 +171,7 @@ func ptrOffset(index int) uintptr {
 const ptrSize = 8 // all supported platforms are 64-bit
 
 func resolveSymbols(handle uintptr) error {
-	base := (*[22]uintptr)(unsafePointer(&ft))
+	base := (*[26]uintptr)(unsafePointer(&ft))
 	for i, sym := range symbolNames {
 		addr, err := lookupSymbol(handle, sym.name)
 		if err != nil {

@@ -146,6 +146,41 @@ mental_error mental_get_error(void);
 const char* mental_get_error_message(void);
 
 /*
+ * Standard Record Channel (stdrec)
+ *
+ * A bidirectional file descriptor for structured record exchange,
+ * sitting alongside stdin(0), stdout(1), stderr(2) as fd 3.
+ *
+ * Backed by socketpair(AF_UNIX, SOCK_STREAM) on Unix and a pipe pair
+ * on Windows.  Created lazily on first call to mental_stdrec().
+ *
+ * Records are length-prefixed on the wire:
+ *   [4 bytes: uint32 payload length, network byte order][payload]
+ *
+ * In the future, sparked child processes will inherit the peer end of
+ * this channel as their own stdrec, forming a parent<->child record bus.
+ */
+
+/* Get the local stdrec file descriptor.  Returns -1 on failure.
+ * The fd is created once and reused for the lifetime of the process. */
+int mental_stdrec(void);
+
+/* Get the peer (far) end of the stdrec channel.
+ * When sparking, this fd is passed to the child process. */
+int mental_stdrec_peer(void);
+
+/* Send a length-prefixed record on the local stdrec fd.
+ * Returns 0 on success, -1 on error. */
+int mental_stdrec_send(const void *data, size_t len);
+
+/* Receive the next length-prefixed record from the local stdrec fd.
+ * Blocks until a complete record is available.
+ * On success, writes up to buf_len bytes into buf, stores the full
+ * record length in *out_len (may exceed buf_len — excess is discarded),
+ * and returns 0.  Returns -1 on error. */
+int mental_stdrec_recv(void *buf, size_t buf_len, size_t *out_len);
+
+/*
  * Lifecycle Management
  *
  * Register callbacks for automatic cleanup at process exit.
