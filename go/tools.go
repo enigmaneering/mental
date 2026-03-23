@@ -68,11 +68,10 @@ func configureTools() {
 			continue
 		}
 
-		// DXC on Linux/Darwin expects libs at ../lib/ relative to the binary
+		// On Unix, DXC expects libs at ../lib/ relative to the binary
 		// (rpath is @executable_path/../lib on macOS, $ORIGIN/../lib on Linux).
-		// Place executable in bin/ and libs in lib/ to match.
+		// On Windows, DLLs must be siblings of the executable.
 		binDir := filepath.Join(tmpDir, "bin")
-		libDir := filepath.Join(tmpDir, "lib")
 		if err := os.MkdirAll(binDir, 0755); err != nil {
 			os.RemoveAll(tmpDir)
 			continue
@@ -86,12 +85,13 @@ func configureTools() {
 
 		// Extract companion shared libraries.
 		if len(t.libs) > 0 {
-			libsExtracted := extractCompanionLibs(embedDir, t.libs, libDir)
-			if libsExtracted {
-				if err := os.MkdirAll(libDir, 0755); err != nil {
-					// libDir already created by extractCompanionLibs
-				}
+			var libDir string
+			if runtime.GOOS == "windows" {
+				libDir = binDir // DLLs go alongside the .exe
+			} else {
+				libDir = filepath.Join(tmpDir, "lib") // rpath: ../lib/
 			}
+			extractCompanionLibs(embedDir, t.libs, libDir)
 		}
 
 		setToolPath(t.id, exePath)
