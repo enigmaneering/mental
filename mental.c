@@ -510,14 +510,9 @@ const char* mental_get_error_message(void) {
  */
 
 #define MENTAL_MAX_ATEXIT 32
-#define MENTAL_MAX_TEMP_FILES 64
 
 static void (*g_atexit_fns[MENTAL_MAX_ATEXIT])(void);
 static int g_atexit_count = 0;
-
-static char g_temp_files[MENTAL_MAX_TEMP_FILES][4096];
-static int g_temp_file_count = 0;
-
 static int g_shutdown_registered = 0;
 
 static void mental_shutdown_handler(void) {
@@ -527,31 +522,14 @@ static void mental_shutdown_handler(void) {
             g_atexit_fns[i]();
         }
     }
-    /* Remove registered temporary files */
-    for (int i = 0; i < g_temp_file_count; i++) {
-        remove(g_temp_files[i]);
-    }
 }
 
-static void ensure_shutdown_registered(void) {
+void mental_atexit(void (*fn)(void)) {
     if (!g_shutdown_registered) {
         atexit(mental_shutdown_handler);
         g_shutdown_registered = 1;
     }
-}
-
-void mental_atexit(void (*fn)(void)) {
-    ensure_shutdown_registered();
     if (g_atexit_count < MENTAL_MAX_ATEXIT && fn) {
         g_atexit_fns[g_atexit_count++] = fn;
-    }
-}
-
-void mental_register_temp_file(const char* path) {
-    ensure_shutdown_registered();
-    if (g_temp_file_count < MENTAL_MAX_TEMP_FILES && path) {
-        strncpy(g_temp_files[g_temp_file_count], path, 4095);
-        g_temp_files[g_temp_file_count][4095] = '\0';
-        g_temp_file_count++;
     }
 }

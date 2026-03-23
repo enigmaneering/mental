@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 )
 
 // funcTable holds resolved C function pointers for the mental library.
@@ -30,8 +31,7 @@ type funcTable struct {
 	getErrorMsg      uintptr
 	setToolPath      uintptr
 	getToolPath      uintptr
-	mentalAtexit     uintptr
-	registerTempFile uintptr
+	mentalAtexit uintptr
 }
 
 var (
@@ -87,7 +87,10 @@ func doInit() error {
 	}
 	configureTools()
 	if embedTmpPath != "" {
-		registerTempFilePath(embedTmpPath)
+		path := embedTmpPath
+		Defer(func(_ *sync.WaitGroup) {
+			os.Remove(path)
+		})
 	}
 	setupLifecycle()
 	return nil
@@ -120,7 +123,6 @@ var symbolNames = [...]struct {
 	{"mental_set_tool_path", offsetOf_setToolPath},
 	{"mental_get_tool_path", offsetOf_getToolPath},
 	{"mental_atexit", offsetOf_mentalAtexit},
-	{"mental_register_temp_file", offsetOf_registerTempFile},
 }
 
 // Field offsets computed via unsafe.Offsetof — kept in a single place
@@ -147,8 +149,7 @@ var (
 	offsetOf_getErrorMsg      = ptrOffset(18)
 	offsetOf_setToolPath      = ptrOffset(19)
 	offsetOf_getToolPath      = ptrOffset(20)
-	offsetOf_mentalAtexit     = ptrOffset(21)
-	offsetOf_registerTempFile = ptrOffset(22)
+	offsetOf_mentalAtexit = ptrOffset(21)
 )
 
 func ptrOffset(index int) uintptr {
@@ -158,7 +159,7 @@ func ptrOffset(index int) uintptr {
 const ptrSize = 8 // all supported platforms are 64-bit
 
 func resolveSymbols(handle uintptr) error {
-	base := (*[23]uintptr)(unsafePointer(&ft))
+	base := (*[22]uintptr)(unsafePointer(&ft))
 	for i, sym := range symbolNames {
 		addr, err := lookupSymbol(handle, sym.name)
 		if err != nil {

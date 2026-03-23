@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"unsafe"
 )
 
@@ -27,9 +28,11 @@ var tools = []toolSpec{
 
 // configureTools is called once during init after symbols are resolved.
 // For each tool it checks: system PATH first, then extracts the embedded
-// binary to a temporary file as a fallback. Temp files are registered with
-// the C library for automatic cleanup at process exit.
+// binary to a temporary file as a fallback. Extracted temp files are
+// automatically cleaned up at process exit via Defer.
 func configureTools() {
+	var tempPaths []string
+
 	for _, t := range tools {
 		exeName := t.name
 		if runtime.GOOS == "windows" {
@@ -69,7 +72,15 @@ func configureTools() {
 		}
 
 		setToolPath(t.id, tmpPath)
-		registerTempFilePath(tmpPath)
+		tempPaths = append(tempPaths, tmpPath)
+	}
+
+	if len(tempPaths) > 0 {
+		Defer(func(_ *sync.WaitGroup) {
+			for _, p := range tempPaths {
+				os.Remove(p)
+			}
+		})
 	}
 }
 
@@ -77,11 +88,4 @@ func configureTools() {
 func setToolPath(tool int, path string) {
 	cstr := append([]byte(path), 0) // null-terminated
 	call2(ft.setToolPath, uintptr(tool), uintptr(unsafe.Pointer(&cstr[0])))
-}
-
-// registerTempFilePath calls mental_register_temp_file in the C library.
-// The C library's atexit handler will remove these files at process exit.
-func registerTempFilePath(path string) {
-	cstr := append([]byte(path), 0) // null-terminated
-	call1(ft.registerTempFile, uintptr(unsafe.Pointer(&cstr[0])))
 }
