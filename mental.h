@@ -245,6 +245,60 @@ uint64_t mental_counter_reset(mental_counter ctr, int to_empty);
 void mental_counter_finalize(mental_counter ctr);
 
 /*
+ * Ref (UUID-scoped Shared Memory)
+ *
+ * Named shared memory regions scoped by a per-process UUID.
+ * Each process generates a UUID on first use, and all refs it creates
+ * live under that namespace: /mental-{uuid}/{name}.
+ *
+ * Owner (creator):
+ *   mental_ref_create("Velocity", 4096) allocates 4096 bytes of shared
+ *   memory at /mental-{my_uuid}/Velocity.  Returns a handle to read/write
+ *   via mental_ref_data().
+ *
+ * Observer (sparked child or peer):
+ *   mental_ref_open(peer_uuid, "Velocity") maps the owner's region.
+ *   Returns NULL gracefully if the owner has exited and the region is gone.
+ *
+ * Cleanup:
+ *   All owned refs are automatically unlinked when the process exits
+ *   (via atexit).  Calling mental_ref_close() on an owned ref also
+ *   unlinks it immediately.  Observers should close their handles but
+ *   the underlying region persists until the owner exits or closes.
+ *
+ * The intended pattern is for refs to flow down the spark chain:
+ * parent creates, children observe.  Sharing outside the spark chain
+ * works but fails gracefully if the owner is gone.
+ */
+
+/* Opaque handle */
+typedef struct mental_ref_t* mental_ref;
+
+/* Get this process's UUID (32 hex chars, no dashes).  Read-only.
+ * Generated once on first call, stable for process lifetime. */
+const char* mental_uuid(void);
+
+/* Create a named shared memory region of the given size.
+ * The region is scoped to this process's UUID namespace.
+ * Returns NULL on failure (e.g., name too long, allocation failed). */
+mental_ref mental_ref_create(const char *name, size_t size);
+
+/* Open an existing ref created by another process.
+ * Returns NULL gracefully if the owner has exited or the ref doesn't exist. */
+mental_ref mental_ref_open(const char *peer_uuid, const char *name);
+
+/* Get a pointer to the mapped shared memory.  The pointer is valid
+ * for reads and writes until mental_ref_close() is called. */
+void* mental_ref_data(mental_ref ref);
+
+/* Get the size of the mapped region in bytes. */
+size_t mental_ref_size(mental_ref ref);
+
+/* Close the ref handle.  If this process owns the ref, the shared
+ * memory is unlinked (destroyed).  Observer handles are simply unmapped. */
+void mental_ref_close(mental_ref ref);
+
+/*
  * Lifecycle Management
  *
  * Register callbacks for automatic cleanup at process exit.

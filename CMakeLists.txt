@@ -23,6 +23,7 @@ endif()
 set(MENTAL_SOURCES
     mental.c
     monotonic.c
+    ref.c
     stdlink.c
     transpile.c
     transpile_other.c
@@ -199,7 +200,7 @@ elseif(PLATFORM_LINUX)
     # Common dependencies for both shared and static
     set(LINUX_LIBS
         Vulkan::Vulkan
-        stdc++ pthread
+        stdc++ pthread rt
     )
 
     if(OpenCL_FOUND)

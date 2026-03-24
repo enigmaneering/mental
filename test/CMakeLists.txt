@@ -63,6 +63,10 @@ add_executable(test_monotonic test_monotonic.c)
 target_link_libraries(test_monotonic mental-static)
 add_test(NAME Monotonic COMMAND test_monotonic)
 
+add_executable(test_ref test_ref.c)
+target_link_libraries(test_ref mental-static)
+add_test(NAME Ref COMMAND test_ref)
+
 add_executable(test_hlsl_debug test_hlsl_debug.c)
 target_link_libraries(test_hlsl_debug mental-static)
 

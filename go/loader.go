@@ -43,6 +43,12 @@ type funcTable struct {
 	counterEmpty      uintptr
 	counterReset      uintptr
 	counterFinalize   uintptr
+	uuid              uintptr
+	refCreate         uintptr
+	refOpen           uintptr
+	refData           uintptr
+	refSize           uintptr
+	refClose          uintptr
 }
 
 var (
@@ -145,6 +151,12 @@ var symbolNames = [...]struct {
 	{"mental_counter_empty", offsetOf_counterEmpty},
 	{"mental_counter_reset", offsetOf_counterReset},
 	{"mental_counter_finalize", offsetOf_counterFinalize},
+	{"mental_uuid", offsetOf_uuid},
+	{"mental_ref_create", offsetOf_refCreate},
+	{"mental_ref_open", offsetOf_refOpen},
+	{"mental_ref_data", offsetOf_refData},
+	{"mental_ref_size", offsetOf_refSize},
+	{"mental_ref_close", offsetOf_refClose},
 }
 
 // Field offsets computed via unsafe.Offsetof — kept in a single place
@@ -183,6 +195,12 @@ var (
 	offsetOf_counterEmpty      = ptrOffset(30)
 	offsetOf_counterReset      = ptrOffset(31)
 	offsetOf_counterFinalize   = ptrOffset(32)
+	offsetOf_uuid              = ptrOffset(33)
+	offsetOf_refCreate         = ptrOffset(34)
+	offsetOf_refOpen           = ptrOffset(35)
+	offsetOf_refData           = ptrOffset(36)
+	offsetOf_refSize           = ptrOffset(37)
+	offsetOf_refClose          = ptrOffset(38)
 )
 
 func ptrOffset(index int) uintptr {
@@ -192,7 +210,7 @@ func ptrOffset(index int) uintptr {
 const ptrSize = 8 // all supported platforms are 64-bit
 
 func resolveSymbols(handle uintptr) error {
-	base := (*[33]uintptr)(unsafePointer(&ft))
+	base := (*[39]uintptr)(unsafePointer(&ft))
 	for i, sym := range symbolNames {
 		addr, err := lookupSymbol(handle, sym.name)
 		if err != nil {
