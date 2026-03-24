@@ -190,11 +190,44 @@ static int build_shm_path(char *dst, size_t dst_len,
     return (n > 0 && (size_t)n < dst_len) ? 0 : -1;
 }
 
+/* ── Disclosure header (lives at offset 0 in the shm region) ───── */
+
+/*
+ * The disclosure header is the first thing in every shared memory region.
+ * It controls access: the owning process evaluates it before granting
+ * data access to observers.
+ *
+ * Layout (64 bytes, fixed):
+ *   [0..3]   uint32_t mode    (atomic — owner can flip on the fly)
+ *   [4..67]  char passphrase[64]  (NUL-terminated, set by owner)
+ *
+ * User data starts at offset DISCLOSURE_HEADER_SIZE.
+ */
+
+#define DISCLOSURE_PASSPHRASE_MAX 64
+#define DISCLOSURE_HEADER_SIZE    128  /* padded for alignment */
+
+#ifdef _MSC_VER
+#include <intrin.h>
+#define ATOMIC_LOAD32(p)    (*(volatile uint32_t*)(p))
+#define ATOMIC_STORE32(p,v) (*(volatile uint32_t*)(p) = (v))
+#else
+#include <stdatomic.h>
+#define ATOMIC_LOAD32(p)    atomic_load_explicit((_Atomic uint32_t*)(p), memory_order_acquire)
+#define ATOMIC_STORE32(p,v) atomic_store_explicit((_Atomic uint32_t*)(p), (v), memory_order_release)
+#endif
+
+struct disclosure_header {
+    uint32_t mode;                              /* mental_disclosure enum */
+    char     passphrase[DISCLOSURE_PASSPHRASE_MAX]; /* NUL-terminated */
+};
+
 /* ── Ref structure ─────────────────────────────────────────────── */
 
 struct mental_ref_t {
-    void  *addr;       /* mmap'd / MapViewOfFile address */
-    size_t size;       /* mapped size */
+    void  *addr;       /* mmap'd / MapViewOfFile address (includes header) */
+    size_t total_size; /* total mapped size (header + user data) */
+    size_t user_size;  /* user-visible data size */
     int    owner;      /* 1 = we created it, 0 = observer */
     char   path[320];  /* shm path for cleanup */
 #ifdef _WIN32
@@ -215,20 +248,23 @@ mental_ref mental_ref_create(const char *name, size_t size) {
     if (build_shm_path(path, sizeof(path), g_uuid, name) < 0)
         return NULL;
 
+    size_t total = DISCLOSURE_HEADER_SIZE + size;
+
     mental_ref ref = calloc(1, sizeof(struct mental_ref_t));
     if (!ref) return NULL;
 
     strncpy(ref->path, path, sizeof(ref->path) - 1);
-    ref->size  = size;
+    ref->total_size = total;
+    ref->user_size  = size;
     ref->owner = 1;
 
 #ifdef _WIN32
     ref->hMap = CreateFileMappingA(
         INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
-        (DWORD)(size >> 32), (DWORD)size, path + 1); /* skip '/' */
+        (DWORD)(total >> 32), (DWORD)total, path + 1); /* skip '/' */
     if (!ref->hMap) { free(ref); return NULL; }
 
-    ref->addr = MapViewOfFile(ref->hMap, FILE_MAP_ALL_ACCESS, 0, 0, size);
+    ref->addr = MapViewOfFile(ref->hMap, FILE_MAP_ALL_ACCESS, 0, 0, total);
     if (!ref->addr) {
         CloseHandle(ref->hMap);
         free(ref);
@@ -239,14 +275,14 @@ mental_ref mental_ref_create(const char *name, size_t size) {
     int fd = shm_open(path, O_CREAT | O_EXCL | O_RDWR, 0600);
     if (fd < 0) { free(ref); return NULL; }
 
-    if (ftruncate(fd, (off_t)size) < 0) {
+    if (ftruncate(fd, (off_t)total) < 0) {
         close(fd);
         shm_unlink(path);
         free(ref);
         return NULL;
     }
 
-    void *addr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void *addr = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (addr == MAP_FAILED) {
         close(fd);
         shm_unlink(path);
@@ -257,6 +293,11 @@ mental_ref mental_ref_create(const char *name, size_t size) {
     ref->fd   = fd;
     ref->addr = addr;
 #endif
+
+    /* Initialize disclosure: open by default, no passphrase */
+    struct disclosure_header *hdr = (struct disclosure_header *)ref->addr;
+    memset(hdr, 0, DISCLOSURE_HEADER_SIZE);
+    ATOMIC_STORE32(&hdr->mode, MENTAL_RELATIONALLY_OPEN);
 
     track_ref(path);
     return ref;
@@ -286,7 +327,6 @@ mental_ref mental_ref_open(const char *peer_uuid, const char *name) {
         return NULL;
     }
 
-    /* Query the mapping size */
     MEMORY_BASIC_INFORMATION info;
     ref->addr = MapViewOfFile(ref->hMap, FILE_MAP_ALL_ACCESS, 0, 0, 0);
     if (!ref->addr) {
@@ -295,7 +335,9 @@ mental_ref mental_ref_open(const char *peer_uuid, const char *name) {
         return NULL;
     }
     VirtualQuery(ref->addr, &info, sizeof(info));
-    ref->size = info.RegionSize;
+    ref->total_size = info.RegionSize;
+    ref->user_size  = (ref->total_size > DISCLOSURE_HEADER_SIZE)
+                    ? ref->total_size - DISCLOSURE_HEADER_SIZE : 0;
 #else
     int fd = shm_open(path, O_RDWR, 0);
     if (fd < 0) {
@@ -319,22 +361,114 @@ mental_ref mental_ref_open(const char *peer_uuid, const char *name) {
         return NULL;
     }
 
-    ref->fd   = fd;
-    ref->addr = addr;
-    ref->size = (size_t)st.st_size;
+    ref->fd         = fd;
+    ref->addr       = addr;
+    ref->total_size = (size_t)st.st_size;
+    ref->user_size  = (ref->total_size > DISCLOSURE_HEADER_SIZE)
+                    ? ref->total_size - DISCLOSURE_HEADER_SIZE : 0;
 #endif
 
     return ref;
 }
 
-/* ── Accessors ─────────────────────────────────────────────────── */
+/* ── Disclosure helpers ─────────────────────────────────────────── */
 
-void* mental_ref_data(mental_ref ref) {
-    return ref ? ref->addr : NULL;
+static struct disclosure_header* ref_header(mental_ref ref) {
+    return (struct disclosure_header *)ref->addr;
+}
+
+static void* ref_user_data(mental_ref ref) {
+    return (char *)ref->addr + DISCLOSURE_HEADER_SIZE;
+}
+
+static int passphrase_matches(struct disclosure_header *hdr,
+                               const char *passphrase) {
+    if (!passphrase) return 0;
+    return strncmp(hdr->passphrase, passphrase,
+                   DISCLOSURE_PASSPHRASE_MAX) == 0;
+}
+
+/* ── Disclosure API ────────────────────────────────────────────── */
+
+mental_disclosure mental_ref_get_disclosure(mental_ref ref) {
+    if (!ref || !ref->addr) return MENTAL_RELATIONALLY_OPEN;
+    return (mental_disclosure)ATOMIC_LOAD32(&ref_header(ref)->mode);
+}
+
+void mental_ref_set_disclosure(mental_ref ref, mental_disclosure mode) {
+    if (!ref || !ref->addr || !ref->owner) return;
+    ATOMIC_STORE32(&ref_header(ref)->mode, (uint32_t)mode);
+}
+
+void mental_ref_set_passphrase(mental_ref ref, const char *passphrase) {
+    if (!ref || !ref->addr || !ref->owner) return;
+    struct disclosure_header *hdr = ref_header(ref);
+    if (passphrase) {
+        strncpy(hdr->passphrase, passphrase, DISCLOSURE_PASSPHRASE_MAX - 1);
+        hdr->passphrase[DISCLOSURE_PASSPHRASE_MAX - 1] = '\0';
+    } else {
+        memset(hdr->passphrase, 0, DISCLOSURE_PASSPHRASE_MAX);
+    }
+}
+
+/* ── Accessors (disclosure-aware) ──────────────────────────────── */
+
+void* mental_ref_data(mental_ref ref, const char *passphrase) {
+    if (!ref || !ref->addr) return NULL;
+
+    /* Owner always has full access */
+    if (ref->owner) return ref_user_data(ref);
+
+    struct disclosure_header *hdr = ref_header(ref);
+    mental_disclosure mode = (mental_disclosure)ATOMIC_LOAD32(&hdr->mode);
+
+    switch (mode) {
+    case MENTAL_RELATIONALLY_OPEN:
+        return ref_user_data(ref);
+
+    case MENTAL_RELATIONALLY_INCLUSIVE:
+        /* Read-only access without passphrase — return the pointer.
+         * The "read-only" semantic is advisory at this level; the
+         * owner trusts the spark chain.  With passphrase: full access. */
+        return ref_user_data(ref);
+
+    case MENTAL_RELATIONALLY_EXCLUSIVE:
+        /* All access requires passphrase */
+        if (passphrase_matches(hdr, passphrase))
+            return ref_user_data(ref);
+        return NULL; /* graceful denial */
+    }
+
+    return NULL;
 }
 
 size_t mental_ref_size(mental_ref ref) {
-    return ref ? ref->size : 0;
+    return ref ? ref->user_size : 0;
+}
+
+int mental_ref_writable(mental_ref ref, const char *passphrase) {
+    if (!ref || !ref->addr) return 0;
+
+    /* Owner always writable */
+    if (ref->owner) return 1;
+
+    struct disclosure_header *hdr = ref_header(ref);
+    mental_disclosure mode = (mental_disclosure)ATOMIC_LOAD32(&hdr->mode);
+
+    switch (mode) {
+    case MENTAL_RELATIONALLY_OPEN:
+        return 1;
+
+    case MENTAL_RELATIONALLY_INCLUSIVE:
+        /* Writable only with passphrase */
+        return passphrase_matches(hdr, passphrase) ? 1 : 0;
+
+    case MENTAL_RELATIONALLY_EXCLUSIVE:
+        /* All access requires passphrase */
+        return passphrase_matches(hdr, passphrase) ? 1 : 0;
+    }
+
+    return 0;
 }
 
 /* ── Close ─────────────────────────────────────────────────────── */
@@ -346,12 +480,11 @@ void mental_ref_close(mental_ref ref) {
     if (ref->addr) UnmapViewOfFile(ref->addr);
     if (ref->hMap) CloseHandle(ref->hMap);
     if (ref->owner) {
-        /* Windows auto-cleans when all handles close, but untrack */
         untrack_ref(ref->path);
     }
 #else
     if (ref->addr && ref->addr != MAP_FAILED)
-        munmap(ref->addr, ref->size);
+        munmap(ref->addr, ref->total_size);
     if (ref->fd >= 0)
         close(ref->fd);
     if (ref->owner) {

@@ -274,12 +274,37 @@ void mental_counter_finalize(mental_counter ctr);
 /* Opaque handle */
 typedef struct mental_ref_t* mental_ref;
 
+/* Disclosure — controls observer access to a ref.
+ *
+ * The disclosure lives in shared memory so the owner can change it
+ * on-the-fly and every observer sees the change immediately.
+ *
+ *   RELATIONALLY_OPEN (default):
+ *     Anyone can read and write.  No passphrase required.
+ *
+ *   RELATIONALLY_INCLUSIVE:
+ *     Read-only access without passphrase.
+ *     Write access requires the passphrase.
+ *
+ *   RELATIONALLY_EXCLUSIVE:
+ *     All access (read or write) requires the passphrase.
+ *     Without it, mental_ref_data() returns NULL.
+ *
+ * The owner always has full access regardless of disclosure mode.
+ */
+typedef enum {
+    MENTAL_RELATIONALLY_OPEN      = 0,
+    MENTAL_RELATIONALLY_INCLUSIVE  = 1,
+    MENTAL_RELATIONALLY_EXCLUSIVE = 2
+} mental_disclosure;
+
 /* Get this process's UUID (32 hex chars, no dashes).  Read-only.
  * Generated once on first call, stable for process lifetime. */
 const char* mental_uuid(void);
 
 /* Create a named shared memory region of the given size.
  * The region is scoped to this process's UUID namespace.
+ * Disclosure defaults to RELATIONALLY_OPEN with no passphrase.
  * Returns NULL on failure (e.g., name too long, allocation failed). */
 mental_ref mental_ref_create(const char *name, size_t size);
 
@@ -287,12 +312,29 @@ mental_ref mental_ref_create(const char *name, size_t size);
  * Returns NULL gracefully if the owner has exited or the ref doesn't exist. */
 mental_ref mental_ref_open(const char *peer_uuid, const char *name);
 
-/* Get a pointer to the mapped shared memory.  The pointer is valid
- * for reads and writes until mental_ref_close() is called. */
-void* mental_ref_data(mental_ref ref);
+/* Get a pointer to the mapped shared memory.
+ * Pass NULL for passphrase when disclosure is open or inclusive (read).
+ * Returns NULL if the disclosure denies access.
+ * The owner always gets full access regardless of disclosure. */
+void* mental_ref_data(mental_ref ref, const char *passphrase);
 
-/* Get the size of the mapped region in bytes. */
+/* Get the size of the mapped region in bytes (user data only). */
 size_t mental_ref_size(mental_ref ref);
+
+/* Check if write access is permitted under the current disclosure.
+ * Returns 1 if writable, 0 if read-only or denied.
+ * The owner always returns 1. */
+int mental_ref_writable(mental_ref ref, const char *passphrase);
+
+/* Get the current disclosure mode. */
+mental_disclosure mental_ref_get_disclosure(mental_ref ref);
+
+/* Set the disclosure mode (owner only — no-op for observers). */
+void mental_ref_set_disclosure(mental_ref ref, mental_disclosure mode);
+
+/* Set the passphrase (owner only — no-op for observers).
+ * Pass NULL to clear the passphrase. Max 63 chars. */
+void mental_ref_set_passphrase(mental_ref ref, const char *passphrase);
 
 /* Close the ref handle.  If this process owns the ref, the shared
  * memory is unlinked (destroyed).  Observer handles are simply unmapped. */

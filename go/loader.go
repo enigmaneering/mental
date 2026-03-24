@@ -48,6 +48,10 @@ type funcTable struct {
 	refOpen           uintptr
 	refData           uintptr
 	refSize           uintptr
+	refWritable       uintptr
+	refGetDisclosure  uintptr
+	refSetDisclosure  uintptr
+	refSetPassphrase  uintptr
 	refClose          uintptr
 }
 
@@ -156,6 +160,10 @@ var symbolNames = [...]struct {
 	{"mental_ref_open", offsetOf_refOpen},
 	{"mental_ref_data", offsetOf_refData},
 	{"mental_ref_size", offsetOf_refSize},
+	{"mental_ref_writable", offsetOf_refWritable},
+	{"mental_ref_get_disclosure", offsetOf_refGetDisclosure},
+	{"mental_ref_set_disclosure", offsetOf_refSetDisclosure},
+	{"mental_ref_set_passphrase", offsetOf_refSetPassphrase},
 	{"mental_ref_close", offsetOf_refClose},
 }
 
@@ -200,7 +208,11 @@ var (
 	offsetOf_refOpen           = ptrOffset(35)
 	offsetOf_refData           = ptrOffset(36)
 	offsetOf_refSize           = ptrOffset(37)
-	offsetOf_refClose          = ptrOffset(38)
+	offsetOf_refWritable       = ptrOffset(38)
+	offsetOf_refGetDisclosure  = ptrOffset(39)
+	offsetOf_refSetDisclosure  = ptrOffset(40)
+	offsetOf_refSetPassphrase  = ptrOffset(41)
+	offsetOf_refClose          = ptrOffset(42)
 )
 
 func ptrOffset(index int) uintptr {
@@ -210,7 +222,7 @@ func ptrOffset(index int) uintptr {
 const ptrSize = 8 // all supported platforms are 64-bit
 
 func resolveSymbols(handle uintptr) error {
-	base := (*[39]uintptr)(unsafePointer(&ft))
+	base := (*[43]uintptr)(unsafePointer(&ft))
 	for i, sym := range symbolNames {
 		addr, err := lookupSymbol(handle, sym.name)
 		if err != nil {
