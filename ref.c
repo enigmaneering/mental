@@ -603,6 +603,49 @@ int mental_ref_writable(mental_ref ref,
     return writable;
 }
 
+/* ── Ownership query ───────────────────────────────────────────── */
+
+int mental_ref_is_owner(mental_ref ref) {
+    if (!ref) return 0;
+    return ref->owner;
+}
+
+/* ── Clone (snapshot into local ref) ───────────────────────────── */
+
+/*
+ * Clone creates a new locally-owned ref seeded with the current value
+ * of the source.  If the source is a cross-process observer handle,
+ * this breaks the linkage — the result is an independent local copy
+ * under this process's UUID namespace.
+ *
+ * The caller provides a new_name for the clone.  The credential is
+ * used to obtain read access on the source (required for exclusive
+ * disclosure; ignored for open/inclusive).
+ *
+ * Returns NULL if the source is inaccessible or allocation fails.
+ */
+mental_ref mental_ref_clone(mental_ref ref, const char *new_name,
+                             const void *credential, size_t credential_len) {
+    if (!ref || !ref->addr || !new_name || !new_name[0])
+        return NULL;
+
+    /* Read the source data (disclosure-checked) */
+    void *src = mental_ref_data(ref, credential, credential_len);
+    if (!src) return NULL;
+
+    size_t sz = ref->user_size;
+
+    /* Create a new owned ref with the same data size */
+    mental_ref clone = mental_ref_create(new_name, sz);
+    if (!clone) return NULL;
+
+    /* Copy the current observed value */
+    void *dst = ref_user_data(clone);
+    memcpy(dst, src, sz);
+
+    return clone;
+}
+
 /* ── Close ─────────────────────────────────────────────────────── */
 
 void mental_ref_close(mental_ref ref) {

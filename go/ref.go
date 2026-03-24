@@ -66,6 +66,7 @@ const (
 // automatically unlinked.
 type Ref[TData any, TDisclosure any] struct {
 	ptr          uintptr
+	name         string             // ref name (for clone name generation)
 	credentialFn func() TDisclosure // evaluated fresh each access check
 	mu           sync.Mutex         // serializes provider evaluation + C call
 }
@@ -88,7 +89,7 @@ func RefCreate[TData any, TDisclosure any](name string) *Ref[TData, TDisclosure]
 	if ptr == 0 {
 		return nil
 	}
-	ref := &Ref[TData, TDisclosure]{ptr: ptr}
+	ref := &Ref[TData, TDisclosure]{ptr: ptr, name: name}
 	runtime.SetFinalizer(ref, (*Ref[TData, TDisclosure]).Close)
 	return ref
 }
@@ -105,7 +106,7 @@ func RefOpen[TData any, TDisclosure any](peerUUID, name string) *Ref[TData, TDis
 	if ptr == 0 {
 		return nil
 	}
-	ref := &Ref[TData, TDisclosure]{ptr: ptr}
+	ref := &Ref[TData, TDisclosure]{ptr: ptr, name: name}
 	runtime.SetFinalizer(ref, (*Ref[TData, TDisclosure]).Close)
 	return ref
 }
@@ -204,6 +205,55 @@ func (r *Ref[TData, TDisclosure]) Writable(credential ...TDisclosure) bool {
 	result := call3(ft.refWritable, r.ptr, cp, cl)
 	r.mu.Unlock()
 	return result != 0
+}
+
+// IsOwner reports whether this handle owns the ref (i.e., this process
+// created it).  Owner handles have full access regardless of disclosure
+// and control the ref's lifecycle — closing an owner handle unlinks
+// the shared memory.
+func (r *Ref[TData, TDisclosure]) IsOwner() bool {
+	if r == nil || r.ptr == 0 {
+		return false
+	}
+	return call1(ft.refIsOwner, r.ptr) != 0
+}
+
+// Clone snapshots the ref into a new locally-owned region.
+//
+// If this is a cross-process observer handle, Clone breaks the linkage:
+// the returned ref is an independent local copy under this process's
+// UUID namespace — changes to the original are no longer visible.
+//
+// If this is already an owner handle, Clone creates a sibling snapshot
+// with its own name and lifecycle.
+//
+// The clone's disclosure defaults to [RelationallyOpen] with no credential.
+//
+//	local := observed.Clone()           // open source
+//	local := observed.Clone(myCred)     // exclusive source
+func (r *Ref[TData, TDisclosure]) Clone(credential ...TDisclosure) *Ref[TData, TDisclosure] {
+	if r == nil || r.ptr == 0 {
+		return nil
+	}
+
+	// Generate a unique name for the clone
+	seq := NextCount()
+	cloneName := fmt.Sprintf("%s-%d", r.name, seq)
+	cname := append([]byte(cloneName), 0)
+
+	r.mu.Lock()
+	cp, cl := r.resolveCredential(credential)
+	ptr := call4(ft.refClone, r.ptr,
+		uintptr(unsafe.Pointer(&cname[0])),
+		cp, cl)
+	r.mu.Unlock()
+
+	if ptr == 0 {
+		return nil
+	}
+	ref := &Ref[TData, TDisclosure]{ptr: ptr, name: cloneName}
+	runtime.SetFinalizer(ref, (*Ref[TData, TDisclosure]).Close)
+	return ref
 }
 
 // GetDisclosure returns the current disclosure mode.

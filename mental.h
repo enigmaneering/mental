@@ -360,6 +360,18 @@ typedef void (*mental_credential_fn)(void *ctx,
 void mental_ref_set_credential_provider(mental_ref ref,
                                          mental_credential_fn fn, void *ctx);
 
+/* Returns 1 if this handle owns the ref (creator), 0 if observer. */
+int mental_ref_is_owner(mental_ref ref);
+
+/* Clone the ref into a new locally-owned region.
+ * Snapshots the current observed value into a fresh ref under this
+ * process's UUID namespace.  If the source is a cross-process observer
+ * handle, this breaks the linkage — the result is an independent copy.
+ * The credential is used to obtain read access on the source.
+ * Returns NULL if the source is inaccessible or allocation fails. */
+mental_ref mental_ref_clone(mental_ref ref, const char *new_name,
+                             const void *credential, size_t credential_len);
+
 /* Close the ref handle.  If this process owns the ref, the shared
  * memory is unlinked (destroyed).  Observer handles are simply unmapped. */
 void mental_ref_close(mental_ref ref);
