@@ -27,8 +27,11 @@ int main(void) {
 
     /* Create buffer for viewport */
     size_t size = 1920 * 1080 * 4; /* RGBA8 1080p */
-    mental_reference ref = mental_alloc(dev, size);
-    ASSERT(ref != NULL, "Failed to allocate buffer");
+    mental_reference ref = mental_reference_create("viewport-buf", size);
+    ASSERT(ref != NULL, "Failed to create reference");
+    ASSERT_NO_ERROR();
+
+    mental_reference_pin(ref, dev);
     ASSERT_NO_ERROR();
 
     /* Fill with test pattern */
@@ -36,7 +39,7 @@ int main(void) {
     for (size_t i = 0; i < size; i++) {
         pattern[i] = (unsigned char)(i % 256);
     }
-    mental_write(ref, pattern, size);
+    mental_reference_write(ref, pattern, size);
     free(pattern);
     ASSERT_NO_ERROR();
 
@@ -79,8 +82,8 @@ int main(void) {
     }
 
     /* Cleanup */
-    mental_finalize(ref);
-    
+    mental_reference_close(ref);
+
 
     printf("PASS: All viewport tests passed\n");
     return 0;

@@ -103,15 +103,29 @@ static int test_shader(const char* name, const char* shader_source, mental_devic
     size_t count = 256;
     size_t size = count * sizeof(float);
 
-    mental_reference input0 = mental_alloc(dev, size);
-    mental_reference input1 = mental_alloc(dev, size);
-    mental_reference output = mental_alloc(dev, size);
+    /* Build unique reference names from shader language name */
+    char name_in0[64], name_in1[64], name_out[64];
+    char lower[16];
+    for (int i = 0; name[i] && i < 15; i++) {
+        lower[i] = (name[i] >= 'A' && name[i] <= 'Z') ? name[i] + 32 : name[i];
+        lower[i+1] = '\0';
+    }
+    snprintf(name_in0, sizeof(name_in0), "%s-in0", lower);
+    snprintf(name_in1, sizeof(name_in1), "%s-in1", lower);
+    snprintf(name_out, sizeof(name_out), "%s-out", lower);
+
+    mental_reference input0 = mental_reference_create(name_in0, size);
+    mental_reference_pin(input0, dev);
+    mental_reference input1 = mental_reference_create(name_in1, size);
+    mental_reference_pin(input1, dev);
+    mental_reference output = mental_reference_create(name_out, size);
+    mental_reference_pin(output, dev);
 
     if (!input0 || !input1 || !output) {
         printf("    FAIL: Failed to allocate buffers\n");
-        if (input0) mental_finalize(input0);
-        if (input1) mental_finalize(input1);
-        if (output) mental_finalize(output);
+        if (input0) mental_reference_close(input0);
+        if (input1) mental_reference_close(input1);
+        if (output) mental_reference_close(output);
         mental_kernel_finalize(kernel);
         return 1;
     }
@@ -122,8 +136,8 @@ static int test_shader(const char* name, const char* shader_source, mental_devic
         data0[i] = (float)i;
         data1[i] = (float)i * 2.0f;
     }
-    mental_write(input0, data0, size);
-    mental_write(input1, data1, size);
+    mental_reference_write(input0, data0, size);
+    mental_reference_write(input1, data1, size);
 
     /* Dispatch kernel */
     mental_reference inputs[] = { input0, input1 };
@@ -131,16 +145,16 @@ static int test_shader(const char* name, const char* shader_source, mental_devic
 
     if (mental_get_error() != MENTAL_SUCCESS) {
         printf("    FAIL: Dispatch failed: %s\n", mental_get_error_message());
-        mental_finalize(input0);
-        mental_finalize(input1);
-        mental_finalize(output);
+        mental_reference_close(input0);
+        mental_reference_close(input1);
+        mental_reference_close(output);
         mental_kernel_finalize(kernel);
         return 1;
     }
 
     /* Read and verify results */
     float results[256];
-    mental_read(output, results, size);
+    mental_reference_read(output, results, size);
 
     int errors = 0;
     for (int i = 0; i < 256 && errors < 5; i++) {
@@ -152,9 +166,9 @@ static int test_shader(const char* name, const char* shader_source, mental_devic
     }
 
     /* Cleanup */
-    mental_finalize(input0);
-    mental_finalize(input1);
-    mental_finalize(output);
+    mental_reference_close(input0);
+    mental_reference_close(input1);
+    mental_reference_close(output);
     mental_kernel_finalize(kernel);
 
     if (errors > 0) {

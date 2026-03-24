@@ -42,10 +42,10 @@ void* thread_worker(void* arg) {
 
     /* Each thread writes and reads from the same buffer */
     float value = (float)data->thread_id;
-    mental_write(data->ref, &value, sizeof(float));
+    mental_reference_write(data->ref, &value, sizeof(float));
 
     float read_value;
-    mental_read(data->ref, &read_value, sizeof(float));
+    mental_reference_read(data->ref, &read_value, sizeof(float));
 
     /* If locking works, we should read back what we wrote */
     data->success = (read_value == value);
@@ -63,19 +63,25 @@ int main(void) {
     /* Test 1: Full compute pipeline */
     printf("  Test 1: Full compute pipeline\n");
 
-    size_t count = 1024;
+    int count = 1024;
     size_t size = count * sizeof(float);
 
-    mental_reference input = mental_alloc(dev, size);
-    mental_reference output = mental_alloc(dev, size);
-    ASSERT(input && output, "Failed to allocate buffers");
+    mental_reference input = mental_reference_create("integ-in0", size);
+    ASSERT(input != NULL, "Failed to create input reference");
+    mental_reference_pin(input, dev);
+    ASSERT_NO_ERROR();
+
+    mental_reference output = mental_reference_create("integ-out", size);
+    ASSERT(output != NULL, "Failed to create output reference");
+    mental_reference_pin(output, dev);
+    ASSERT_NO_ERROR();
 
     /* Fill input */
     float* input_data = malloc(size);
     for (int i = 0; i < count; i++) {
         input_data[i] = (float)i;
     }
-    mental_write(input, input_data, size);
+    mental_reference_write(input, input_data, size);
 
     /* Compile and run kernel */
     mental_kernel kernel = mental_compile(dev, multiply_shader, strlen(multiply_shader));
@@ -86,7 +92,7 @@ int main(void) {
 
     /* Read and verify results */
     float* output_data = malloc(size);
-    mental_read(output, output_data, size);
+    mental_reference_read(output, output_data, size);
 
     int match = 1;
     for (int i = 0; i < count; i++) {
@@ -106,30 +112,30 @@ int main(void) {
     printf("  Test 2: Multiple operations on same buffer\n");
 
     float test_val = 42.0f;
-    mental_write(input, &test_val, sizeof(float));
-    mental_read(input, &test_val, sizeof(float));
+    mental_reference_write(input, &test_val, sizeof(float));
+    mental_reference_read(input, &test_val, sizeof(float));
     ASSERT(test_val == 42.0f, "Multiple ops failed");
 
     /* Test 3: Clone and independent operations */
     printf("  Test 3: Clone and independent operations\n");
 
-    mental_reference clone = mental_clone(input);
+    mental_reference clone = mental_reference_clone(input, "integ-clone", dev, NULL, 0);
     ASSERT(clone != NULL, "Clone failed");
 
     float orig_val = 100.0f;
     float clone_val = 200.0f;
 
-    mental_write(input, &orig_val, sizeof(float));
-    mental_write(clone, &clone_val, sizeof(float));
+    mental_reference_write(input, &orig_val, sizeof(float));
+    mental_reference_write(clone, &clone_val, sizeof(float));
 
     float read_orig, read_clone;
-    mental_read(input, &read_orig, sizeof(float));
-    mental_read(clone, &read_clone, sizeof(float));
+    mental_reference_read(input, &read_orig, sizeof(float));
+    mental_reference_read(clone, &read_clone, sizeof(float));
 
     ASSERT(read_orig == orig_val && read_clone == clone_val,
            "Clone buffers not independent");
 
-    mental_finalize(clone);
+    mental_reference_close(clone);
 
     /* Test 4: Thread safety */
     printf("  Test 4: Thread safety\n");
@@ -138,7 +144,10 @@ int main(void) {
     pthread_t threads[num_threads];
     thread_test_data thread_data[num_threads];
 
-    mental_reference shared_ref = mental_alloc(dev, sizeof(float));
+    mental_reference shared_ref = mental_reference_create("integ-thread-shared", sizeof(float));
+    ASSERT(shared_ref != NULL, "Failed to create shared reference");
+    mental_reference_pin(shared_ref, dev);
+    ASSERT_NO_ERROR();
 
     for (int i = 0; i < num_threads; i++) {
         thread_data[i].ref = shared_ref;
@@ -152,26 +161,28 @@ int main(void) {
         ASSERT(thread_data[i].success, "Thread safety test failed");
     }
 
-    mental_finalize(shared_ref);
+    mental_reference_close(shared_ref);
 
     /* Test 5: Error recovery */
     printf("  Test 5: Error recovery\n");
 
     /* Try to read from freed buffer (should error) */
-    mental_reference temp = mental_alloc(dev, 1024);
-    mental_finalize(temp);
+    mental_reference temp = mental_reference_create("integ-temp", 1024);
+    ASSERT(temp != NULL, "Failed to create temp reference");
+    mental_reference_pin(temp, dev);
+    mental_reference_close(temp);
 
     float dummy;
-    mental_read(temp, &dummy, sizeof(float));
+    mental_reference_read(temp, &dummy, sizeof(float));
     ASSERT(mental_get_error_message() != MENTAL_SUCCESS, "Expected error for invalid reference");
 
     /* Clear error and continue */
     printf("  Error recovery successful\n");
 
     /* Cleanup */
-    mental_finalize(input);
-    mental_finalize(output);
-    
+    mental_reference_close(input);
+    mental_reference_close(output);
+
 
     printf("PASS: All integration tests passed\n");
     return 0;

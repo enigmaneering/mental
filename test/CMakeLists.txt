@@ -59,16 +59,19 @@ add_executable(test_stdlink test_stdlink.c)
 target_link_libraries(test_stdlink mental-static)
 add_test(NAME Stdlink COMMAND test_stdlink)
 
-add_executable(test_monotonic test_monotonic.c)
-target_link_libraries(test_monotonic mental-static)
-add_test(NAME Monotonic COMMAND test_monotonic)
+add_executable(test_reference test_reference.c)
+target_link_libraries(test_reference mental-static)
+add_test(NAME Reference COMMAND test_reference)
 
-add_executable(test_ref test_ref.c)
-target_link_libraries(test_ref mental-static)
-add_test(NAME Ref COMMAND test_ref)
+add_executable(test_clone test_clone.c)
+target_link_libraries(test_clone mental-static)
+add_test(NAME Clone COMMAND test_clone)
 
 add_executable(test_hlsl_debug test_hlsl_debug.c)
 target_link_libraries(test_hlsl_debug mental-static)
+
+add_executable(test_external_compilers test_external_compilers.c)
+target_link_libraries(test_external_compilers mental-static)
 
 # Real window viewport tests (platform-specific)
 if(APPLE)

@@ -59,9 +59,12 @@ int main(void) {
     size_t count = 256;
     size_t size = count * sizeof(float);
 
-    mental_reference input0 = mental_alloc(dev, size);
-    mental_reference input1 = mental_alloc(dev, size);
-    mental_reference output = mental_alloc(dev, size);
+    mental_reference input0 = mental_reference_create("metal-in0", size);
+    mental_reference_pin(input0, dev);
+    mental_reference input1 = mental_reference_create("metal-in1", size);
+    mental_reference_pin(input1, dev);
+    mental_reference output = mental_reference_create("metal-out", size);
+    mental_reference_pin(output, dev);
 
     ASSERT(input0 && input1 && output, "Failed to allocate buffers");
 
@@ -71,8 +74,8 @@ int main(void) {
         data0[i] = (float)i;
         data1[i] = (float)i * 2.0f;
     }
-    mental_write(input0, data0, size);
-    mental_write(input1, data1, size);
+    mental_reference_write(input0, data0, size);
+    mental_reference_write(input1, data1, size);
     printf("  Buffers filled\n");
 
     /* Dispatch kernel */
@@ -81,9 +84,9 @@ int main(void) {
 
     if (mental_get_error() != MENTAL_SUCCESS) {
         printf("FAIL: Dispatch failed: %s\n", mental_get_error_message());
-        mental_finalize(input0);
-        mental_finalize(input1);
-        mental_finalize(output);
+        mental_reference_close(input0);
+        mental_reference_close(input1);
+        mental_reference_close(output);
         mental_kernel_finalize(kernel);
         return 1;
     }
@@ -91,7 +94,7 @@ int main(void) {
 
     /* Read and verify results */
     float results[256];
-    mental_read(output, results, size);
+    mental_reference_read(output, results, size);
 
     int errors = 0;
     for (int i = 0; i < 256 && errors < 10; i++) {
@@ -103,9 +106,9 @@ int main(void) {
     }
 
     /* Cleanup */
-    mental_finalize(input0);
-    mental_finalize(input1);
-    mental_finalize(output);
+    mental_reference_close(input0);
+    mental_reference_close(input1);
+    mental_reference_close(output);
     mental_kernel_finalize(kernel);
 
     if (errors > 0) {
