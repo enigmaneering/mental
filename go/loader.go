@@ -40,6 +40,7 @@ type funcTable struct {
 	counterCreate     uintptr
 	counterIncrement  uintptr
 	counterDecrement  uintptr
+	counterEmpty      uintptr
 	counterReset      uintptr
 	counterFinalize   uintptr
 }
@@ -141,6 +142,7 @@ var symbolNames = [...]struct {
 	{"mental_counter_create", offsetOf_counterCreate},
 	{"mental_counter_increment", offsetOf_counterIncrement},
 	{"mental_counter_decrement", offsetOf_counterDecrement},
+	{"mental_counter_empty", offsetOf_counterEmpty},
 	{"mental_counter_reset", offsetOf_counterReset},
 	{"mental_counter_finalize", offsetOf_counterFinalize},
 }
@@ -178,8 +180,9 @@ var (
 	offsetOf_counterCreate     = ptrOffset(27)
 	offsetOf_counterIncrement  = ptrOffset(28)
 	offsetOf_counterDecrement  = ptrOffset(29)
-	offsetOf_counterReset      = ptrOffset(30)
-	offsetOf_counterFinalize   = ptrOffset(31)
+	offsetOf_counterEmpty      = ptrOffset(30)
+	offsetOf_counterReset      = ptrOffset(31)
+	offsetOf_counterFinalize   = ptrOffset(32)
 )
 
 func ptrOffset(index int) uintptr {
@@ -189,7 +192,7 @@ func ptrOffset(index int) uintptr {
 const ptrSize = 8 // all supported platforms are 64-bit
 
 func resolveSymbols(handle uintptr) error {
-	base := (*[32]uintptr)(unsafePointer(&ft))
+	base := (*[33]uintptr)(unsafePointer(&ft))
 	for i, sym := range symbolNames {
 		addr, err := lookupSymbol(handle, sym.name)
 		if err != nil {

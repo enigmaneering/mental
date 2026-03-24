@@ -15,13 +15,18 @@ func Count() uint64 {
 // Counter is a heap-allocated, lock-free, atomic uint64 counter.
 // Unlike the global Count, each Counter is an independent instance.
 //
+// A Counter starts in the "empty" state — distinct from zero.
+// Incrementing from empty treats it as 0 (empty + 1 = 1).
+// Decrementing below zero transitions back to empty.
+// Use [Counter.Empty] to test for the empty state.
+//
 // The underlying C counter is freed automatically via GC finalizer,
 // or explicitly via Close.
 type Counter struct {
 	ptr uintptr
 }
 
-// NewCounter creates a new counter initialized to 0.
+// NewCounter creates a new counter in the empty state.
 func NewCounter() *Counter {
 	ptr := call0(ft.counterCreate)
 	if ptr == 0 {
@@ -38,12 +43,21 @@ func (c *Counter) Increment(delta uint64) uint64 {
 }
 
 // Decrement atomically subtracts delta and returns the new value.
-// Saturates at 0 (will not wrap below zero).
+// If the current value is less than delta, the counter becomes empty
+// and 0 is returned. Decrementing an already-empty counter returns 0.
 func (c *Counter) Decrement(delta uint64) uint64 {
 	return uint64(call2(ft.counterDecrement, c.ptr, uintptr(delta)))
 }
 
+// Empty reports whether the counter is in the empty state.
+// A counter starts empty and returns to empty only by decrementing
+// below zero. Reset sets the counter to 0, not empty.
+func (c *Counter) Empty() bool {
+	return call1(ft.counterEmpty, c.ptr) != 0
+}
+
 // Reset atomically sets the counter to 0 and returns the previous value.
+// If the counter was empty, returns 0.
 func (c *Counter) Reset() uint64 {
 	return uint64(call1(ft.counterReset, c.ptr))
 }

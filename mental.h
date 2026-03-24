@@ -200,11 +200,17 @@ int mental_stdlink_recv(void *buf, size_t buf_len, size_t *out_len);
 uint64_t mental_count(void);
 
 /*
- * Counter (Named Counting Primitive)
+ * Counter (Counting Primitive)
  *
  * A heap-allocated, lock-free, 64-bit atomic counter.
  * Unlike the global count, counters are independent instances that can
  * be created, incremented, decremented, reset, and finalized.
+ *
+ * Counters start in an "empty" state — distinct from zero.
+ * Incrementing from empty treats it as 0 (empty + 1 = 1).
+ * Decrementing below zero transitions to empty.
+ * Empty is the only way to represent "no value" and can only be
+ * reinstated by decrementing below zero.
  *
  * Useful for spark-relevant counting: tracking in-flight messages,
  * coordinating stages, reference counting shared resources, etc.
@@ -215,17 +221,22 @@ uint64_t mental_count(void);
 /* Opaque handle */
 typedef struct mental_counter_t* mental_counter;
 
-/* Create a new counter initialized to 0.  Returns NULL on failure. */
+/* Create a new counter in the empty state.  Returns NULL on failure. */
 mental_counter mental_counter_create(void);
 
-/* Atomically add delta and return the new value. */
+/* Atomically add delta and return the new value.
+ * If the counter is empty, it is treated as 0. */
 uint64_t mental_counter_increment(mental_counter ctr, uint64_t delta);
 
 /* Atomically subtract delta and return the new value.
- * Saturates at 0 (will not wrap below zero). */
+ * If value < delta, the counter becomes empty and returns 0. */
 uint64_t mental_counter_decrement(mental_counter ctr, uint64_t delta);
 
-/* Atomically reset to 0 and return the previous value. */
+/* Returns 1 if the counter is in the empty state, 0 otherwise. */
+int mental_counter_empty(mental_counter ctr);
+
+/* Atomically reset to 0 and return the previous value.
+ * If the counter was empty, returns 0. */
 uint64_t mental_counter_reset(mental_counter ctr);
 
 /* Destroy the counter and free its memory. */

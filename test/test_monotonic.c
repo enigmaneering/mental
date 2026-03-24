@@ -98,39 +98,73 @@ int main(void) {
     mental_counter ctr = mental_counter_create();
     ASSERT(ctr != NULL, "counter creation must succeed");
 
-    /* Increment by various deltas */
+    /* Starts empty */
+    ASSERT(mental_counter_empty(ctr) == 1, "new counter must be empty");
+    printf("  create: empty  OK\n");
+
+    /* Increment from empty treats it as 0 */
     uint64_t v;
     v = mental_counter_increment(ctr, 1);
-    ASSERT(v == 1, "increment(1) from 0 should return 1");
+    ASSERT(v == 1, "increment(1) from empty should return 1");
+    ASSERT(mental_counter_empty(ctr) == 0, "no longer empty after increment");
 
     v = mental_counter_increment(ctr, 5);
     ASSERT(v == 6, "increment(5) from 1 should return 6");
 
     v = mental_counter_increment(ctr, 100);
     ASSERT(v == 106, "increment(100) from 6 should return 106");
-    printf("  increment: 0 +1=1, +5=6, +100=106  OK\n");
+    printf("  increment: empty +1=1, +5=6, +100=106  OK\n");
 
-    /* Decrement */
+    /* Decrement within range */
     v = mental_counter_decrement(ctr, 6);
     ASSERT(v == 100, "decrement(6) from 106 should return 100");
+    ASSERT(mental_counter_empty(ctr) == 0, "not empty at 100");
 
     v = mental_counter_decrement(ctr, 50);
     ASSERT(v == 50, "decrement(50) from 100 should return 50");
     printf("  decrement: 106 -6=100, -50=50  OK\n");
 
-    /* Decrement saturation at 0 */
+    /* Decrement below zero → empty */
     v = mental_counter_decrement(ctr, 9999);
-    ASSERT(v == 0, "decrement past 0 should saturate at 0");
-    printf("  saturating decrement: 50 -9999=0  OK\n");
+    ASSERT(v == 0, "decrement past 0 should return 0");
+    ASSERT(mental_counter_empty(ctr) == 1, "must be empty after decrement past 0");
+    printf("  decrement below zero: 50 -9999 → empty  OK\n");
 
-    /* Reset */
-    mental_counter_increment(ctr, 42);
+    /* Decrement from empty stays empty */
+    v = mental_counter_decrement(ctr, 1);
+    ASSERT(v == 0, "decrement from empty should return 0");
+    ASSERT(mental_counter_empty(ctr) == 1, "still empty");
+    printf("  decrement from empty: stays empty  OK\n");
+
+    /* Increment from empty again */
+    v = mental_counter_increment(ctr, 7);
+    ASSERT(v == 7, "increment(7) from empty should return 7");
+    ASSERT(mental_counter_empty(ctr) == 0, "no longer empty");
+    printf("  increment from empty: empty +7=7  OK\n");
+
+    /* Reset goes to 0, not empty */
     v = mental_counter_reset(ctr);
-    ASSERT(v == 42, "reset should return previous value");
+    ASSERT(v == 7, "reset should return previous value");
+    ASSERT(mental_counter_empty(ctr) == 0, "reset goes to 0, not empty");
 
     v = mental_counter_increment(ctr, 1);
     ASSERT(v == 1, "after reset, increment(1) should return 1");
-    printf("  reset: set to 42, reset returns 42, +1=1  OK\n");
+    printf("  reset: 7 → reset returns 7, value is 0, +1=1  OK\n");
+
+    /* Reset from empty returns 0, sets to 0 */
+    mental_counter_decrement(ctr, 9999);
+    ASSERT(mental_counter_empty(ctr) == 1, "must be empty");
+    v = mental_counter_reset(ctr);
+    ASSERT(v == 0, "reset from empty returns 0");
+    ASSERT(mental_counter_empty(ctr) == 0, "after reset, at 0, not empty");
+    printf("  reset from empty: returns 0, now at 0  OK\n");
+
+    /* Exact decrement to 0 is not empty */
+    mental_counter_increment(ctr, 5);
+    v = mental_counter_decrement(ctr, 5);
+    ASSERT(v == 0, "exact decrement to 0");
+    ASSERT(mental_counter_empty(ctr) == 0, "0 is not empty");
+    printf("  exact decrement: 5 -5=0, not empty  OK\n");
 
     mental_counter_finalize(ctr);
 
