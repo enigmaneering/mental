@@ -51,8 +51,9 @@ type funcTable struct {
 	refWritable       uintptr
 	refGetDisclosure  uintptr
 	refSetDisclosure  uintptr
-	refSetCredential  uintptr
-	refClose          uintptr
+	refSetCredential         uintptr
+	refSetCredentialProvider uintptr
+	refClose                uintptr
 }
 
 var (
@@ -164,6 +165,7 @@ var symbolNames = [...]struct {
 	{"mental_ref_get_disclosure", offsetOf_refGetDisclosure},
 	{"mental_ref_set_disclosure", offsetOf_refSetDisclosure},
 	{"mental_ref_set_credential", offsetOf_refSetCredential},
+	{"mental_ref_set_credential_provider", offsetOf_refSetCredentialProvider},
 	{"mental_ref_close", offsetOf_refClose},
 }
 
@@ -211,8 +213,9 @@ var (
 	offsetOf_refWritable       = ptrOffset(38)
 	offsetOf_refGetDisclosure  = ptrOffset(39)
 	offsetOf_refSetDisclosure  = ptrOffset(40)
-	offsetOf_refSetCredential  = ptrOffset(41)
-	offsetOf_refClose          = ptrOffset(42)
+	offsetOf_refSetCredential         = ptrOffset(41)
+	offsetOf_refSetCredentialProvider = ptrOffset(42)
+	offsetOf_refClose                = ptrOffset(43)
 )
 
 func ptrOffset(index int) uintptr {
@@ -222,7 +225,7 @@ func ptrOffset(index int) uintptr {
 const ptrSize = 8 // all supported platforms are 64-bit
 
 func resolveSymbols(handle uintptr) error {
-	base := (*[43]uintptr)(unsafePointer(&ft))
+	base := (*[44]uintptr)(unsafePointer(&ft))
 	for i, sym := range symbolNames {
 		addr, err := lookupSymbol(handle, sym.name)
 		if err != nil {

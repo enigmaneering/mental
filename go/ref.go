@@ -3,6 +3,7 @@ package mental
 import (
 	"fmt"
 	"runtime"
+	"sync"
 	"unsafe"
 )
 
@@ -64,7 +65,9 @@ const (
 // owner's UUID.  When the owner process exits, all its regions are
 // automatically unlinked.
 type Ref[TData any, TDisclosure any] struct {
-	ptr uintptr
+	ptr          uintptr
+	credentialFn func() TDisclosure // evaluated fresh each access check
+	mu           sync.Mutex         // serializes provider evaluation + C call
 }
 
 // RefCreate allocates a named shared memory region sized to hold TData.
@@ -107,6 +110,34 @@ func RefOpen[TData any, TDisclosure any](peerUUID, name string) *Ref[TData, TDis
 	return ref
 }
 
+// resolveCredential evaluates the credential provider (if set) and
+// refreshes the shm credential, then returns the credential bytes to
+// present for the access check.  Must be called under r.mu.
+func (r *Ref[TData, TDisclosure]) resolveCredential(explicit []TDisclosure) (uintptr, uintptr) {
+	// Evaluate provider — this IS the credential, produced fresh right now
+	if r.credentialFn != nil {
+		cred := r.credentialFn()
+		b := discloseBytes(cred)
+		if len(b) > 0 {
+			// Refresh owner credential in shm (no-op if observer)
+			call3(ft.refSetCredential, r.ptr,
+				uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
+			// Also present as observer credential
+			return uintptr(unsafe.Pointer(&b[0])), uintptr(len(b))
+		}
+	}
+
+	// Explicit credential passed by caller
+	if len(explicit) > 0 {
+		b := discloseBytes(explicit[0])
+		if len(b) > 0 {
+			return uintptr(unsafe.Pointer(&b[0])), uintptr(len(b))
+		}
+	}
+
+	return 0, 0
+}
+
 // Data returns a typed pointer to the mapped shared memory.
 // Valid for reads and writes until Close is called.
 //
@@ -116,6 +147,7 @@ func RefOpen[TData any, TDisclosure any](peerUUID, name string) *Ref[TData, TDis
 //   - [RelationallyExclusive]: returns nil without the correct credential
 //
 // The owner always gets full access regardless of disclosure mode.
+// If a credential provider is set, it is evaluated fresh each call.
 //
 //	ref.Data()            // no credential
 //	ref.Data(myCred)      // with credential
@@ -123,16 +155,10 @@ func (r *Ref[TData, TDisclosure]) Data(credential ...TDisclosure) *TData {
 	if r == nil || r.ptr == 0 {
 		return nil
 	}
-	var cp uintptr
-	var cl uintptr
-	if len(credential) > 0 {
-		b := discloseBytes(credential[0])
-		if len(b) > 0 {
-			cp = uintptr(unsafe.Pointer(&b[0]))
-			cl = uintptr(len(b))
-		}
-	}
+	r.mu.Lock()
+	cp, cl := r.resolveCredential(credential)
 	p := call3(ft.refData, r.ptr, cp, cl)
+	r.mu.Unlock()
 	if p == 0 {
 		return nil
 	}
@@ -156,17 +182,11 @@ func (r *Ref[TData, TDisclosure]) Bytes(credential ...TDisclosure) []byte {
 	if r == nil || r.ptr == 0 {
 		return nil
 	}
-	var cp uintptr
-	var cl uintptr
-	if len(credential) > 0 {
-		b := discloseBytes(credential[0])
-		if len(b) > 0 {
-			cp = uintptr(unsafe.Pointer(&b[0]))
-			cl = uintptr(len(b))
-		}
-	}
+	r.mu.Lock()
+	cp, cl := r.resolveCredential(credential)
 	p := call3(ft.refData, r.ptr, cp, cl)
 	size := int(call1(ft.refSize, r.ptr))
+	r.mu.Unlock()
 	if p == 0 || size == 0 {
 		return nil
 	}
@@ -179,16 +199,11 @@ func (r *Ref[TData, TDisclosure]) Writable(credential ...TDisclosure) bool {
 	if r == nil || r.ptr == 0 {
 		return false
 	}
-	var cp uintptr
-	var cl uintptr
-	if len(credential) > 0 {
-		b := discloseBytes(credential[0])
-		if len(b) > 0 {
-			cp = uintptr(unsafe.Pointer(&b[0]))
-			cl = uintptr(len(b))
-		}
-	}
-	return call3(ft.refWritable, r.ptr, cp, cl) != 0
+	r.mu.Lock()
+	cp, cl := r.resolveCredential(credential)
+	result := call3(ft.refWritable, r.ptr, cp, cl)
+	r.mu.Unlock()
+	return result != 0
 }
 
 // GetDisclosure returns the current disclosure mode.
@@ -208,27 +223,65 @@ func (r *Ref[TData, TDisclosure]) SetDisclosure(mode Disclosure) {
 	call2(ft.refSetDisclosure, r.ptr, uintptr(mode))
 }
 
-// SetCredential sets the credential for disclosure-controlled access.
+// SetCredentialProvider sets a function that produces the credential
+// on demand.  The provider is evaluated under a mutex each time an
+// access check occurs (Data, Bytes, Writable), guaranteeing the
+// comparison always uses a fresh credential — no stale cache.
+//
+// For the owner: the provider's result is written to the shm header,
+// keeping the stored credential in sync with the source of truth.
+//
+// For an observer: the provider's result is presented as the observer's
+// credential for the access check.
+//
+// Pass nil to clear the provider.
+func (r *Ref[TData, TDisclosure]) SetCredentialProvider(fn func() TDisclosure) {
+	if r == nil || r.ptr == 0 {
+		return
+	}
+	r.mu.Lock()
+	r.credentialFn = fn
+	// Immediately evaluate so credential is fresh right now
+	if fn != nil {
+		cred := fn()
+		b := discloseBytes(cred)
+		if len(b) > 0 {
+			call3(ft.refSetCredential, r.ptr,
+				uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
+		}
+	}
+	r.mu.Unlock()
+}
+
+// SetCredential sets a fixed credential for disclosure-controlled access.
+// This is sugar for a credential provider that always returns the same value.
 // Only the owner can set it; observer calls are no-ops.
 // Max 128 bytes.
 func (r *Ref[TData, TDisclosure]) SetCredential(cred TDisclosure) {
 	if r == nil || r.ptr == 0 {
 		return
 	}
+	r.mu.Lock()
+	// Clear provider — raw credential takes precedence
+	r.credentialFn = nil
 	b := discloseBytes(cred)
 	if len(b) == 0 {
 		call3(ft.refSetCredential, r.ptr, 0, 0)
-		return
+	} else {
+		call3(ft.refSetCredential, r.ptr, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
 	}
-	call3(ft.refSetCredential, r.ptr, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
+	r.mu.Unlock()
 }
 
-// ClearCredential removes the credential.  Owner only.
+// ClearCredential removes the credential and any provider.  Owner only.
 func (r *Ref[TData, TDisclosure]) ClearCredential() {
 	if r == nil || r.ptr == 0 {
 		return
 	}
+	r.mu.Lock()
+	r.credentialFn = nil
 	call3(ft.refSetCredential, r.ptr, 0, 0)
+	r.mu.Unlock()
 }
 
 // Close unmaps and releases the ref handle.
@@ -236,9 +289,12 @@ func (r *Ref[TData, TDisclosure]) ClearCredential() {
 // Observer handles are simply unmapped.  Safe to call multiple times.
 func (r *Ref[TData, TDisclosure]) Close() {
 	if r != nil && r.ptr != 0 {
+		r.mu.Lock()
+		r.credentialFn = nil
 		call1(ft.refClose, r.ptr)
 		r.ptr = 0
 		runtime.SetFinalizer(r, nil)
+		r.mu.Unlock()
 	}
 }
 

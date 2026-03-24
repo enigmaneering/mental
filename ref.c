@@ -214,21 +214,65 @@ static int build_shm_path(char *dst, size_t dst_len,
 
 #ifdef _MSC_VER
 #include <intrin.h>
-#define ATOMIC_LOAD32(p)    (*(volatile uint32_t*)(p))
-#define ATOMIC_STORE32(p,v) (*(volatile uint32_t*)(p) = (v))
+#define ATOMIC_LOAD32(p)      (*(volatile uint32_t*)(p))
+#define ATOMIC_STORE32(p,v)   (*(volatile uint32_t*)(p) = (v))
+#define ATOMIC_EXCHANGE32(p,v) _InterlockedExchange((volatile long*)(p), (long)(v))
 #else
 #include <stdatomic.h>
-#define ATOMIC_LOAD32(p)    atomic_load_explicit((_Atomic uint32_t*)(p), memory_order_acquire)
-#define ATOMIC_STORE32(p,v) atomic_store_explicit((_Atomic uint32_t*)(p), (v), memory_order_release)
+#define ATOMIC_LOAD32(p)      atomic_load_explicit((_Atomic uint32_t*)(p), memory_order_acquire)
+#define ATOMIC_STORE32(p,v)   atomic_store_explicit((_Atomic uint32_t*)(p), (v), memory_order_release)
+#define ATOMIC_EXCHANGE32(p,v) atomic_exchange_explicit((_Atomic uint32_t*)(p), (v), memory_order_acquire)
 #endif
 
 struct disclosure_header {
     uint32_t mode;                                    /* mental_disclosure enum */
     uint32_t credential_len;                          /* bytes of credential set */
     uint8_t  credential[DISCLOSURE_CREDENTIAL_MAX];   /* raw bytes */
+    uint32_t lock;                                    /* spinlock: 0=unlocked, 1=locked */
 };
 
+/* ── Disclosure spinlock ───────────────────────────────────────── */
+
+/*
+ * Process-shared spinlock in the shm header.  Protects credential
+ * reads, writes, and comparisons so they are always atomic — no
+ * window where a half-written credential can be observed.
+ */
+static void disclosure_lock(struct disclosure_header *hdr) {
+    while (ATOMIC_EXCHANGE32(&hdr->lock, 1) != 0) {
+#if defined(_WIN32)
+        SwitchToThread();
+#elif defined(__x86_64__) || defined(__i386__)
+        __asm__ __volatile__("pause");
+#else
+        sched_yield();
+#endif
+    }
+}
+
+static void disclosure_unlock(struct disclosure_header *hdr) {
+    ATOMIC_STORE32(&hdr->lock, 0);
+}
+
 /* ── Ref structure ─────────────────────────────────────────────── */
+
+/*
+ * Credential provider callback.
+ *
+ * Instead of caching credential bytes, the owner can register a
+ * function that produces them on demand.  The function is called
+ * under the disclosure spinlock each time an access check occurs,
+ * guaranteeing the comparison always uses a fresh credential.
+ *
+ *   fn(ctx, buf, buf_size, out_len)
+ *     ctx      — opaque context pointer (passed through)
+ *     buf      — write credential bytes here
+ *     buf_size — capacity (always DISCLOSURE_CREDENTIAL_MAX)
+ *     out_len  — set to number of bytes written
+ */
+typedef void (*mental_credential_fn)(void *ctx,
+                                      void *buf, size_t buf_size,
+                                      size_t *out_len);
 
 struct mental_ref_t {
     void  *addr;       /* mmap'd / MapViewOfFile address (includes header) */
@@ -236,6 +280,11 @@ struct mental_ref_t {
     size_t user_size;  /* user-visible data size */
     int    owner;      /* 1 = we created it, 0 = observer */
     char   path[320];  /* shm path for cleanup */
+
+    /* Credential provider (owner only) — evaluated under spinlock */
+    mental_credential_fn credential_fn;
+    void                *credential_ctx;
+
 #ifdef _WIN32
     HANDLE hMap;
 #else
@@ -300,10 +349,11 @@ mental_ref mental_ref_create(const char *name, size_t size) {
     ref->addr = addr;
 #endif
 
-    /* Initialize disclosure: open by default, no credential */
+    /* Initialize disclosure: open by default, no credential, unlocked */
     struct disclosure_header *hdr = (struct disclosure_header *)ref->addr;
     memset(hdr, 0, DISCLOSURE_HEADER_SIZE);
     ATOMIC_STORE32(&hdr->mode, MENTAL_RELATIONALLY_OPEN);
+    ATOMIC_STORE32(&hdr->lock, 0);
 
     track_ref(path);
     return ref;
@@ -394,22 +444,47 @@ static int credential_matches(struct disclosure_header *hdr,
     return memcmp(hdr->credential, credential, credential_len) == 0;
 }
 
+/*
+ * Refresh the credential from the provider function (if set).
+ * MUST be called under the disclosure spinlock.
+ */
+static void refresh_credential(mental_ref ref, struct disclosure_header *hdr) {
+    if (!ref->credential_fn) return;
+
+    size_t out_len = 0;
+    uint8_t buf[DISCLOSURE_CREDENTIAL_MAX];
+    ref->credential_fn(ref->credential_ctx, buf, sizeof(buf), &out_len);
+
+    if (out_len > DISCLOSURE_CREDENTIAL_MAX)
+        out_len = DISCLOSURE_CREDENTIAL_MAX;
+    memcpy(hdr->credential, buf, out_len);
+    hdr->credential_len = (uint32_t)out_len;
+}
+
 /* ── Disclosure API ────────────────────────────────────────────── */
 
 mental_disclosure mental_ref_get_disclosure(mental_ref ref) {
     if (!ref || !ref->addr) return MENTAL_RELATIONALLY_OPEN;
-    return (mental_disclosure)ATOMIC_LOAD32(&ref_header(ref)->mode);
+    struct disclosure_header *hdr = ref_header(ref);
+    disclosure_lock(hdr);
+    mental_disclosure mode = (mental_disclosure)ATOMIC_LOAD32(&hdr->mode);
+    disclosure_unlock(hdr);
+    return mode;
 }
 
 void mental_ref_set_disclosure(mental_ref ref, mental_disclosure mode) {
     if (!ref || !ref->addr || !ref->owner) return;
-    ATOMIC_STORE32(&ref_header(ref)->mode, (uint32_t)mode);
+    struct disclosure_header *hdr = ref_header(ref);
+    disclosure_lock(hdr);
+    ATOMIC_STORE32(&hdr->mode, (uint32_t)mode);
+    disclosure_unlock(hdr);
 }
 
 void mental_ref_set_credential(mental_ref ref,
                                 const void *credential, size_t len) {
     if (!ref || !ref->addr || !ref->owner) return;
     struct disclosure_header *hdr = ref_header(ref);
+    disclosure_lock(hdr);
     if (credential && len > 0) {
         if (len > DISCLOSURE_CREDENTIAL_MAX)
             len = DISCLOSURE_CREDENTIAL_MAX;
@@ -419,6 +494,22 @@ void mental_ref_set_credential(mental_ref ref,
         memset(hdr->credential, 0, DISCLOSURE_CREDENTIAL_MAX);
         hdr->credential_len = 0;
     }
+    /* Setting raw credential clears any provider */
+    ref->credential_fn  = NULL;
+    ref->credential_ctx = NULL;
+    disclosure_unlock(hdr);
+}
+
+void mental_ref_set_credential_provider(mental_ref ref,
+                                         mental_credential_fn fn, void *ctx) {
+    if (!ref || !ref->addr || !ref->owner) return;
+    struct disclosure_header *hdr = ref_header(ref);
+    disclosure_lock(hdr);
+    ref->credential_fn  = fn;
+    ref->credential_ctx = ctx;
+    /* Immediately evaluate so credential is fresh right now */
+    if (fn) refresh_credential(ref, hdr);
+    disclosure_unlock(hdr);
 }
 
 /* ── Accessors (disclosure-aware) ──────────────────────────────── */
@@ -427,27 +518,43 @@ void* mental_ref_data(mental_ref ref,
                        const void *credential, size_t credential_len) {
     if (!ref || !ref->addr) return NULL;
 
-    /* Owner always has full access */
-    if (ref->owner) return ref_user_data(ref);
+    /* Owner always has full access — but still refresh credential */
+    if (ref->owner) {
+        if (ref->credential_fn) {
+            struct disclosure_header *hdr = ref_header(ref);
+            disclosure_lock(hdr);
+            refresh_credential(ref, hdr);
+            disclosure_unlock(hdr);
+        }
+        return ref_user_data(ref);
+    }
 
     struct disclosure_header *hdr = ref_header(ref);
+    disclosure_lock(hdr);
+
+    /* Refresh owner credential from provider (in-process only) */
+    refresh_credential(ref, hdr);
+
     mental_disclosure mode = (mental_disclosure)ATOMIC_LOAD32(&hdr->mode);
+    int granted = 0;
 
     switch (mode) {
     case MENTAL_RELATIONALLY_OPEN:
-        return ref_user_data(ref);
+        granted = 1;
+        break;
 
     case MENTAL_RELATIONALLY_INCLUSIVE:
         /* Read access without credential; write access is advisory. */
-        return ref_user_data(ref);
+        granted = 1;
+        break;
 
     case MENTAL_RELATIONALLY_EXCLUSIVE:
-        if (credential_matches(hdr, credential, credential_len))
-            return ref_user_data(ref);
-        return NULL; /* graceful denial */
+        granted = credential_matches(hdr, credential, credential_len);
+        break;
     }
 
-    return NULL;
+    disclosure_unlock(hdr);
+    return granted ? ref_user_data(ref) : NULL;
 }
 
 size_t mental_ref_size(mental_ref ref) {
@@ -458,24 +565,42 @@ int mental_ref_writable(mental_ref ref,
                          const void *credential, size_t credential_len) {
     if (!ref || !ref->addr) return 0;
 
-    /* Owner always writable */
-    if (ref->owner) return 1;
+    /* Owner always writable — but still refresh credential */
+    if (ref->owner) {
+        if (ref->credential_fn) {
+            struct disclosure_header *hdr = ref_header(ref);
+            disclosure_lock(hdr);
+            refresh_credential(ref, hdr);
+            disclosure_unlock(hdr);
+        }
+        return 1;
+    }
 
     struct disclosure_header *hdr = ref_header(ref);
+    disclosure_lock(hdr);
+
+    /* Refresh owner credential from provider (in-process only) */
+    refresh_credential(ref, hdr);
+
     mental_disclosure mode = (mental_disclosure)ATOMIC_LOAD32(&hdr->mode);
+    int writable = 0;
 
     switch (mode) {
     case MENTAL_RELATIONALLY_OPEN:
-        return 1;
+        writable = 1;
+        break;
 
     case MENTAL_RELATIONALLY_INCLUSIVE:
-        return credential_matches(hdr, credential, credential_len) ? 1 : 0;
+        writable = credential_matches(hdr, credential, credential_len) ? 1 : 0;
+        break;
 
     case MENTAL_RELATIONALLY_EXCLUSIVE:
-        return credential_matches(hdr, credential, credential_len) ? 1 : 0;
+        writable = credential_matches(hdr, credential, credential_len) ? 1 : 0;
+        break;
     }
 
-    return 0;
+    disclosure_unlock(hdr);
+    return writable;
 }
 
 /* ── Close ─────────────────────────────────────────────────────── */

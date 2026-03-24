@@ -335,8 +335,30 @@ void mental_ref_set_disclosure(mental_ref ref, mental_disclosure mode);
 /* Set the credential bytes (owner only — no-op for observers).
  * The credential is opaque — mental stores and compares raw bytes.
  * Bring your own security: plaintext, hash, signature, whatever.
- * Pass NULL/0 to clear.  Max 128 bytes. */
+ * Pass NULL/0 to clear.  Max 128 bytes.
+ * Setting raw bytes clears any credential provider. */
 void mental_ref_set_credential(mental_ref ref, const void *credential, size_t len);
+
+/* Credential provider callback type.
+ * Called under the disclosure mutex each time an access check occurs.
+ * Write credential bytes into buf (capacity buf_size), set *out_len.
+ *
+ *   ctx      — opaque context pointer (passed through from registration)
+ *   buf      — write credential bytes here
+ *   buf_size — capacity (always 128 bytes)
+ *   out_len  — set to number of bytes written */
+typedef void (*mental_credential_fn)(void *ctx,
+                                      void *buf, size_t buf_size,
+                                      size_t *out_len);
+
+/* Set a credential provider function (owner only).
+ * Instead of caching credential bytes, the provider is evaluated
+ * under the disclosure mutex each time an access check occurs.
+ * This guarantees the comparison always uses a fresh credential —
+ * no stale cache, no race window.
+ * Pass NULL to clear the provider. */
+void mental_ref_set_credential_provider(mental_ref ref,
+                                         mental_credential_fn fn, void *ctx);
 
 /* Close the ref handle.  If this process owns the ref, the shared
  * memory is unlinked (destroyed).  Observer handles are simply unmapped. */
