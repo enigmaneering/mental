@@ -56,10 +56,20 @@ func (c *Counter) Empty() bool {
 	return call1(ft.counterEmpty, c.ptr) != 0
 }
 
-// Reset atomically sets the counter to 0 and returns the previous value.
+// Reset atomically resets the counter and returns the previous value.
 // If the counter was empty, returns 0.
-func (c *Counter) Reset() uint64 {
-	return uint64(call1(ft.counterReset, c.ptr))
+//
+// By default, Reset sets the counter to 0. Pass true to reset to the
+// empty state instead:
+//
+//	c.Reset()      // → 0
+//	c.Reset(true)  // → empty
+func (c *Counter) Reset(toEmpty ...bool) uint64 {
+	var flag uintptr
+	if len(toEmpty) > 0 && toEmpty[0] {
+		flag = 1
+	}
+	return uint64(call2(ft.counterReset, c.ptr, flag))
 }
 
 // Close destroys the underlying C counter. Safe to call multiple times.

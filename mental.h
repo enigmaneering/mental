@@ -235,9 +235,10 @@ uint64_t mental_counter_decrement(mental_counter ctr, uint64_t delta);
 /* Returns 1 if the counter is in the empty state, 0 otherwise. */
 int mental_counter_empty(mental_counter ctr);
 
-/* Atomically reset to 0 and return the previous value.
+/* Atomically reset and return the previous value.
+ * If to_empty is nonzero, resets to the empty state; otherwise resets to 0.
  * If the counter was empty, returns 0. */
-uint64_t mental_counter_reset(mental_counter ctr);
+uint64_t mental_counter_reset(mental_counter ctr, int to_empty);
 
 /* Destroy the counter and free its memory. */
 void mental_counter_finalize(mental_counter ctr);

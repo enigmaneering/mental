@@ -84,8 +84,9 @@ int mental_counter_empty(mental_counter ctr) {
     return ((uint64_t)ctr->value == EMPTY) ? 1 : 0;
 }
 
-uint64_t mental_counter_reset(mental_counter ctr) {
-    long long prev = _InterlockedExchange64(&ctr->value, 0);
+uint64_t mental_counter_reset(mental_counter ctr, int to_empty) {
+    long long target = to_empty ? (long long)EMPTY : 0;
+    long long prev = _InterlockedExchange64(&ctr->value, target);
     return ((uint64_t)prev == EMPTY) ? 0 : (uint64_t)prev;
 }
 
@@ -120,8 +121,9 @@ int mental_counter_empty(mental_counter ctr) {
     return (atomic_load_explicit(&ctr->value, memory_order_relaxed) == EMPTY) ? 1 : 0;
 }
 
-uint64_t mental_counter_reset(mental_counter ctr) {
-    uint64_t prev = atomic_exchange_explicit(&ctr->value, 0, memory_order_relaxed);
+uint64_t mental_counter_reset(mental_counter ctr, int to_empty) {
+    uint64_t target = to_empty ? EMPTY : 0;
+    uint64_t prev = atomic_exchange_explicit(&ctr->value, target, memory_order_relaxed);
     return (prev == EMPTY) ? 0 : prev;
 }
 

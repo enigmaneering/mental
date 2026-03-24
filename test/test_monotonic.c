@@ -142,22 +142,34 @@ int main(void) {
     ASSERT(mental_counter_empty(ctr) == 0, "no longer empty");
     printf("  increment from empty: empty +7=7  OK\n");
 
-    /* Reset goes to 0, not empty */
-    v = mental_counter_reset(ctr);
+    /* Reset(0) goes to 0, not empty */
+    v = mental_counter_reset(ctr, 0);
     ASSERT(v == 7, "reset should return previous value");
-    ASSERT(mental_counter_empty(ctr) == 0, "reset goes to 0, not empty");
+    ASSERT(mental_counter_empty(ctr) == 0, "reset(0) goes to 0, not empty");
 
     v = mental_counter_increment(ctr, 1);
     ASSERT(v == 1, "after reset, increment(1) should return 1");
-    printf("  reset: 7 → reset returns 7, value is 0, +1=1  OK\n");
+    printf("  reset(0): 7 → reset returns 7, value is 0, +1=1  OK\n");
 
-    /* Reset from empty returns 0, sets to 0 */
+    /* Reset(1) goes to empty */
+    v = mental_counter_reset(ctr, 1);
+    ASSERT(v == 1, "reset(1) should return previous value");
+    ASSERT(mental_counter_empty(ctr) == 1, "reset(1) goes to empty");
+    printf("  reset(1): 1 → reset returns 1, now empty  OK\n");
+
+    /* Reset(0) from empty returns 0, sets to 0 */
+    v = mental_counter_reset(ctr, 0);
+    ASSERT(v == 0, "reset(0) from empty returns 0");
+    ASSERT(mental_counter_empty(ctr) == 0, "after reset(0), at 0, not empty");
+    printf("  reset(0) from empty: returns 0, now at 0  OK\n");
+
+    /* Reset(1) from empty returns 0, stays empty */
     mental_counter_decrement(ctr, 9999);
     ASSERT(mental_counter_empty(ctr) == 1, "must be empty");
-    v = mental_counter_reset(ctr);
-    ASSERT(v == 0, "reset from empty returns 0");
-    ASSERT(mental_counter_empty(ctr) == 0, "after reset, at 0, not empty");
-    printf("  reset from empty: returns 0, now at 0  OK\n");
+    v = mental_counter_reset(ctr, 1);
+    ASSERT(v == 0, "reset(1) from empty returns 0");
+    ASSERT(mental_counter_empty(ctr) == 1, "reset(1) from empty stays empty");
+    printf("  reset(1) from empty: returns 0, still empty  OK\n");
 
     /* Exact decrement to 0 is not empty */
     mental_counter_increment(ctr, 5);
