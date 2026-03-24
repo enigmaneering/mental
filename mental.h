@@ -181,20 +181,55 @@ int mental_stdlink_send(const void *data, size_t len);
 int mental_stdlink_recv(void *buf, size_t buf_len, size_t *out_len);
 
 /*
- * Monotonic Counter
+ * Count (Global Monotonic Counter)
  *
  * A process-local, lock-free, strictly increasing 64-bit counter.
- * Each call to mental_monotonic() returns the next value, starting at 1.
+ * Each call to mental_count() returns the next value, starting at 1.
  *
  * Thread-safe via atomic fetch-and-add — no locks, no contention.
  *
  * For globally unique IDs across a spark cluster, combine with process
  * identity (e.g., pid or stdlink fd) to form a composite key:
- *   (process_id, monotonic_seq)
+ *   (process_id, count_seq)
+ *
+ * Each sparked subprocess starts its own counter at 1 — goroutines
+ * within a process share the same global counter.
  */
 
 /* Return the next monotonic value (1, 2, 3, …).  Never returns 0. */
-uint64_t mental_monotonic(void);
+uint64_t mental_count(void);
+
+/*
+ * Counter (Named Counting Primitive)
+ *
+ * A heap-allocated, lock-free, 64-bit atomic counter.
+ * Unlike the global count, counters are independent instances that can
+ * be created, incremented, decremented, reset, and finalized.
+ *
+ * Useful for spark-relevant counting: tracking in-flight messages,
+ * coordinating stages, reference counting shared resources, etc.
+ *
+ * All operations are thread-safe via atomic instructions.
+ */
+
+/* Opaque handle */
+typedef struct mental_counter_t* mental_counter;
+
+/* Create a new counter initialized to 0.  Returns NULL on failure. */
+mental_counter mental_counter_create(void);
+
+/* Atomically add delta and return the new value. */
+uint64_t mental_counter_increment(mental_counter ctr, uint64_t delta);
+
+/* Atomically subtract delta and return the new value.
+ * Saturates at 0 (will not wrap below zero). */
+uint64_t mental_counter_decrement(mental_counter ctr, uint64_t delta);
+
+/* Atomically reset to 0 and return the previous value. */
+uint64_t mental_counter_reset(mental_counter ctr);
+
+/* Destroy the counter and free its memory. */
+void mental_counter_finalize(mental_counter ctr);
 
 /*
  * Lifecycle Management

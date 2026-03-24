@@ -36,7 +36,12 @@ type funcTable struct {
 	stdlinkPeer       uintptr
 	stdlinkSend       uintptr
 	stdlinkRecv       uintptr
-	monotonic         uintptr
+	count             uintptr
+	counterCreate     uintptr
+	counterIncrement  uintptr
+	counterDecrement  uintptr
+	counterReset      uintptr
+	counterFinalize   uintptr
 }
 
 var (
@@ -132,7 +137,12 @@ var symbolNames = [...]struct {
 	{"mental_stdlink_peer", offsetOf_stdlinkPeer},
 	{"mental_stdlink_send", offsetOf_stdlinkSend},
 	{"mental_stdlink_recv", offsetOf_stdlinkRecv},
-	{"mental_monotonic", offsetOf_monotonic},
+	{"mental_count", offsetOf_count},
+	{"mental_counter_create", offsetOf_counterCreate},
+	{"mental_counter_increment", offsetOf_counterIncrement},
+	{"mental_counter_decrement", offsetOf_counterDecrement},
+	{"mental_counter_reset", offsetOf_counterReset},
+	{"mental_counter_finalize", offsetOf_counterFinalize},
 }
 
 // Field offsets computed via unsafe.Offsetof — kept in a single place
@@ -163,8 +173,13 @@ var (
 	offsetOf_stdlink       = ptrOffset(22)
 	offsetOf_stdlinkPeer   = ptrOffset(23)
 	offsetOf_stdlinkSend   = ptrOffset(24)
-	offsetOf_stdlinkRecv   = ptrOffset(25)
-	offsetOf_monotonic     = ptrOffset(26)
+	offsetOf_stdlinkRecv       = ptrOffset(25)
+	offsetOf_count             = ptrOffset(26)
+	offsetOf_counterCreate     = ptrOffset(27)
+	offsetOf_counterIncrement  = ptrOffset(28)
+	offsetOf_counterDecrement  = ptrOffset(29)
+	offsetOf_counterReset      = ptrOffset(30)
+	offsetOf_counterFinalize   = ptrOffset(31)
 )
 
 func ptrOffset(index int) uintptr {
@@ -174,7 +189,7 @@ func ptrOffset(index int) uintptr {
 const ptrSize = 8 // all supported platforms are 64-bit
 
 func resolveSymbols(handle uintptr) error {
-	base := (*[27]uintptr)(unsafePointer(&ft))
+	base := (*[32]uintptr)(unsafePointer(&ft))
 	for i, sym := range symbolNames {
 		addr, err := lookupSymbol(handle, sym.name)
 		if err != nil {
