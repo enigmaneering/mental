@@ -36,6 +36,7 @@ type funcTable struct {
 	stdlinkPeer       uintptr
 	stdlinkSend       uintptr
 	stdlinkRecv       uintptr
+	monotonic         uintptr
 }
 
 var (
@@ -131,6 +132,7 @@ var symbolNames = [...]struct {
 	{"mental_stdlink_peer", offsetOf_stdlinkPeer},
 	{"mental_stdlink_send", offsetOf_stdlinkSend},
 	{"mental_stdlink_recv", offsetOf_stdlinkRecv},
+	{"mental_monotonic", offsetOf_monotonic},
 }
 
 // Field offsets computed via unsafe.Offsetof — kept in a single place
@@ -162,6 +164,7 @@ var (
 	offsetOf_stdlinkPeer   = ptrOffset(23)
 	offsetOf_stdlinkSend   = ptrOffset(24)
 	offsetOf_stdlinkRecv   = ptrOffset(25)
+	offsetOf_monotonic     = ptrOffset(26)
 )
 
 func ptrOffset(index int) uintptr {
@@ -171,7 +174,7 @@ func ptrOffset(index int) uintptr {
 const ptrSize = 8 // all supported platforms are 64-bit
 
 func resolveSymbols(handle uintptr) error {
-	base := (*[26]uintptr)(unsafePointer(&ft))
+	base := (*[27]uintptr)(unsafePointer(&ft))
 	for i, sym := range symbolNames {
 		addr, err := lookupSymbol(handle, sym.name)
 		if err != nil {

@@ -181,6 +181,22 @@ int mental_stdlink_send(const void *data, size_t len);
 int mental_stdlink_recv(void *buf, size_t buf_len, size_t *out_len);
 
 /*
+ * Monotonic Counter
+ *
+ * A process-local, lock-free, strictly increasing 64-bit counter.
+ * Each call to mental_monotonic() returns the next value, starting at 1.
+ *
+ * Thread-safe via atomic fetch-and-add — no locks, no contention.
+ *
+ * For globally unique IDs across a spark cluster, combine with process
+ * identity (e.g., pid or stdlink fd) to form a composite key:
+ *   (process_id, monotonic_seq)
+ */
+
+/* Return the next monotonic value (1, 2, 3, …).  Never returns 0. */
+uint64_t mental_monotonic(void);
+
+/*
  * Lifecycle Management
  *
  * Register callbacks for automatic cleanup at process exit.
