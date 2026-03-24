@@ -38,6 +38,8 @@ func NewCounter() *Counter {
 }
 
 // Increment atomically adds delta and returns the new value.
+// If the counter is empty, it transitions to a non-empty state —
+// even when delta is 0.
 func (c *Counter) Increment(delta uint64) uint64 {
 	return uint64(call2(ft.counterIncrement, c.ptr, uintptr(delta)))
 }

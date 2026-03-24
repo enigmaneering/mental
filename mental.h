@@ -225,7 +225,8 @@ typedef struct mental_counter_t* mental_counter;
 mental_counter mental_counter_create(void);
 
 /* Atomically add delta and return the new value.
- * If the counter is empty, it is treated as 0. */
+ * If the counter is empty, it is treated as 0 and transitions out of
+ * the empty state — even when delta is 0. */
 uint64_t mental_counter_increment(mental_counter ctr, uint64_t delta);
 
 /* Atomically subtract delta and return the new value.

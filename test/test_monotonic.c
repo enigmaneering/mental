@@ -142,6 +142,18 @@ int main(void) {
     ASSERT(mental_counter_empty(ctr) == 0, "no longer empty");
     printf("  increment from empty: empty +7=7  OK\n");
 
+    /* Increment(0) from empty transitions to 0, not empty */
+    mental_counter_decrement(ctr, 9999);
+    ASSERT(mental_counter_empty(ctr) == 1, "must be empty before increment(0) test");
+    v = mental_counter_increment(ctr, 0);
+    ASSERT(v == 0, "increment(0) from empty should return 0");
+    ASSERT(mental_counter_empty(ctr) == 0, "increment(0) from empty must not stay empty");
+    printf("  increment(0) from empty: transitions to 0, not empty  OK\n");
+
+    /* Bring it back up for subsequent tests */
+    v = mental_counter_increment(ctr, 7);
+    ASSERT(v == 7, "increment(7) from 0 should return 7");
+
     /* Reset(0) goes to 0, not empty */
     v = mental_counter_reset(ctr, 0);
     ASSERT(v == 7, "reset should return previous value");
