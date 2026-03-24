@@ -197,15 +197,20 @@ static int build_shm_path(char *dst, size_t dst_len,
  * It controls access: the owning process evaluates it before granting
  * data access to observers.
  *
- * Layout (64 bytes, fixed):
- *   [0..3]   uint32_t mode    (atomic — owner can flip on the fly)
- *   [4..67]  char passphrase[64]  (NUL-terminated, set by owner)
+ * The credential is a generic byte array — mental doesn't interpret it.
+ * It could be a plaintext string, a SHA-256 hash, an ed25519 signature,
+ * or any other scheme.  "We're just the messengers, not the cryptographers."
+ *
+ * Layout:
+ *   [0..3]     uint32_t mode            (atomic — owner can flip on the fly)
+ *   [4..7]     uint32_t credential_len  (how many bytes of credential are set)
+ *   [8..135]   uint8_t  credential[128] (raw bytes, set by owner)
  *
  * User data starts at offset DISCLOSURE_HEADER_SIZE.
  */
 
-#define DISCLOSURE_PASSPHRASE_MAX 64
-#define DISCLOSURE_HEADER_SIZE    128  /* padded for alignment */
+#define DISCLOSURE_CREDENTIAL_MAX 128
+#define DISCLOSURE_HEADER_SIZE    256  /* padded for alignment */
 
 #ifdef _MSC_VER
 #include <intrin.h>
@@ -218,8 +223,9 @@ static int build_shm_path(char *dst, size_t dst_len,
 #endif
 
 struct disclosure_header {
-    uint32_t mode;                              /* mental_disclosure enum */
-    char     passphrase[DISCLOSURE_PASSPHRASE_MAX]; /* NUL-terminated */
+    uint32_t mode;                                    /* mental_disclosure enum */
+    uint32_t credential_len;                          /* bytes of credential set */
+    uint8_t  credential[DISCLOSURE_CREDENTIAL_MAX];   /* raw bytes */
 };
 
 /* ── Ref structure ─────────────────────────────────────────────── */
@@ -294,7 +300,7 @@ mental_ref mental_ref_create(const char *name, size_t size) {
     ref->addr = addr;
 #endif
 
-    /* Initialize disclosure: open by default, no passphrase */
+    /* Initialize disclosure: open by default, no credential */
     struct disclosure_header *hdr = (struct disclosure_header *)ref->addr;
     memset(hdr, 0, DISCLOSURE_HEADER_SIZE);
     ATOMIC_STORE32(&hdr->mode, MENTAL_RELATIONALLY_OPEN);
@@ -381,11 +387,11 @@ static void* ref_user_data(mental_ref ref) {
     return (char *)ref->addr + DISCLOSURE_HEADER_SIZE;
 }
 
-static int passphrase_matches(struct disclosure_header *hdr,
-                               const char *passphrase) {
-    if (!passphrase) return 0;
-    return strncmp(hdr->passphrase, passphrase,
-                   DISCLOSURE_PASSPHRASE_MAX) == 0;
+static int credential_matches(struct disclosure_header *hdr,
+                               const void *credential, size_t credential_len) {
+    if (!credential || credential_len == 0) return 0;
+    if (credential_len != hdr->credential_len) return 0;
+    return memcmp(hdr->credential, credential, credential_len) == 0;
 }
 
 /* ── Disclosure API ────────────────────────────────────────────── */
@@ -400,20 +406,25 @@ void mental_ref_set_disclosure(mental_ref ref, mental_disclosure mode) {
     ATOMIC_STORE32(&ref_header(ref)->mode, (uint32_t)mode);
 }
 
-void mental_ref_set_passphrase(mental_ref ref, const char *passphrase) {
+void mental_ref_set_credential(mental_ref ref,
+                                const void *credential, size_t len) {
     if (!ref || !ref->addr || !ref->owner) return;
     struct disclosure_header *hdr = ref_header(ref);
-    if (passphrase) {
-        strncpy(hdr->passphrase, passphrase, DISCLOSURE_PASSPHRASE_MAX - 1);
-        hdr->passphrase[DISCLOSURE_PASSPHRASE_MAX - 1] = '\0';
+    if (credential && len > 0) {
+        if (len > DISCLOSURE_CREDENTIAL_MAX)
+            len = DISCLOSURE_CREDENTIAL_MAX;
+        memcpy(hdr->credential, credential, len);
+        hdr->credential_len = (uint32_t)len;
     } else {
-        memset(hdr->passphrase, 0, DISCLOSURE_PASSPHRASE_MAX);
+        memset(hdr->credential, 0, DISCLOSURE_CREDENTIAL_MAX);
+        hdr->credential_len = 0;
     }
 }
 
 /* ── Accessors (disclosure-aware) ──────────────────────────────── */
 
-void* mental_ref_data(mental_ref ref, const char *passphrase) {
+void* mental_ref_data(mental_ref ref,
+                       const void *credential, size_t credential_len) {
     if (!ref || !ref->addr) return NULL;
 
     /* Owner always has full access */
@@ -427,14 +438,11 @@ void* mental_ref_data(mental_ref ref, const char *passphrase) {
         return ref_user_data(ref);
 
     case MENTAL_RELATIONALLY_INCLUSIVE:
-        /* Read-only access without passphrase — return the pointer.
-         * The "read-only" semantic is advisory at this level; the
-         * owner trusts the spark chain.  With passphrase: full access. */
+        /* Read access without credential; write access is advisory. */
         return ref_user_data(ref);
 
     case MENTAL_RELATIONALLY_EXCLUSIVE:
-        /* All access requires passphrase */
-        if (passphrase_matches(hdr, passphrase))
+        if (credential_matches(hdr, credential, credential_len))
             return ref_user_data(ref);
         return NULL; /* graceful denial */
     }
@@ -446,7 +454,8 @@ size_t mental_ref_size(mental_ref ref) {
     return ref ? ref->user_size : 0;
 }
 
-int mental_ref_writable(mental_ref ref, const char *passphrase) {
+int mental_ref_writable(mental_ref ref,
+                         const void *credential, size_t credential_len) {
     if (!ref || !ref->addr) return 0;
 
     /* Owner always writable */
@@ -460,12 +469,10 @@ int mental_ref_writable(mental_ref ref, const char *passphrase) {
         return 1;
 
     case MENTAL_RELATIONALLY_INCLUSIVE:
-        /* Writable only with passphrase */
-        return passphrase_matches(hdr, passphrase) ? 1 : 0;
+        return credential_matches(hdr, credential, credential_len) ? 1 : 0;
 
     case MENTAL_RELATIONALLY_EXCLUSIVE:
-        /* All access requires passphrase */
-        return passphrase_matches(hdr, passphrase) ? 1 : 0;
+        return credential_matches(hdr, credential, credential_len) ? 1 : 0;
     }
 
     return 0;

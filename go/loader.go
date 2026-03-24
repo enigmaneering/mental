@@ -51,7 +51,7 @@ type funcTable struct {
 	refWritable       uintptr
 	refGetDisclosure  uintptr
 	refSetDisclosure  uintptr
-	refSetPassphrase  uintptr
+	refSetCredential  uintptr
 	refClose          uintptr
 }
 
@@ -163,7 +163,7 @@ var symbolNames = [...]struct {
 	{"mental_ref_writable", offsetOf_refWritable},
 	{"mental_ref_get_disclosure", offsetOf_refGetDisclosure},
 	{"mental_ref_set_disclosure", offsetOf_refSetDisclosure},
-	{"mental_ref_set_passphrase", offsetOf_refSetPassphrase},
+	{"mental_ref_set_credential", offsetOf_refSetCredential},
 	{"mental_ref_close", offsetOf_refClose},
 }
 
@@ -211,7 +211,7 @@ var (
 	offsetOf_refWritable       = ptrOffset(38)
 	offsetOf_refGetDisclosure  = ptrOffset(39)
 	offsetOf_refSetDisclosure  = ptrOffset(40)
-	offsetOf_refSetPassphrase  = ptrOffset(41)
+	offsetOf_refSetCredential  = ptrOffset(41)
 	offsetOf_refClose          = ptrOffset(42)
 )
 

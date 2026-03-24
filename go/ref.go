@@ -1,6 +1,7 @@
 package mental
 
 import (
+	"fmt"
 	"runtime"
 	"unsafe"
 )
@@ -20,6 +21,17 @@ func UUID() string {
 	return goStringFromPtr(p)
 }
 
+// Disclosable is the interface for custom disclosure credential types.
+// Any type that implements Disclose() can be used as a TDisclosure
+// type parameter.  The returned bytes are stored and compared as-is.
+//
+// For Go primitives (string, integers, floats, bool, fixed-size arrays),
+// Disclosable is NOT required — they are serialized automatically via
+// their in-memory representation.
+type Disclosable interface {
+	Disclose() []byte
+}
+
 // Disclosure controls observer access to a [Ref].
 //
 // The disclosure lives in shared memory so the owner can change it
@@ -28,56 +40,59 @@ type Disclosure int32
 
 const (
 	// RelationallyOpen grants full read/write access to all observers.
-	// No passphrase required.  This is the default.
+	// No credential required.  This is the default.
 	RelationallyOpen Disclosure = 0
 
-	// RelationallyInclusive grants read-only access without a passphrase.
-	// Write access requires the passphrase.
+	// RelationallyInclusive grants read-only access without a credential.
+	// Write access requires the credential.
 	RelationallyInclusive Disclosure = 1
 
-	// RelationallyExclusive denies all access without the passphrase.
+	// RelationallyExclusive denies all access without the credential.
 	// Without it, [Ref.Data] returns nil.
 	RelationallyExclusive Disclosure = 2
 )
 
 // Ref is a handle to a UUID-scoped shared memory region.
 //
+// TData is the type stored in the ref — its size determines the
+// allocation.  TDisclosure is the credential type used for access
+// control (string, [32]byte, a custom struct implementing [Disclosable],
+// etc.).
+//
 // The creating process (owner) allocates the region with [RefCreate].
 // Sparked children or peers observe it with [RefOpen], providing the
 // owner's UUID.  When the owner process exits, all its regions are
 // automatically unlinked.
-//
-// The intended pattern is for refs to flow down the spark chain:
-// parent creates, children observe.  Sharing outside the spark chain
-// works but returns nil gracefully if the owner has already exited.
-type Ref struct {
+type Ref[TData any, TDisclosure any] struct {
 	ptr uintptr
 }
 
-// RefCreate allocates a named shared memory region of the given size.
+// RefCreate allocates a named shared memory region sized to hold TData.
 // The name is scoped to this process's UUID namespace.
-// Disclosure defaults to [RelationallyOpen] with no passphrase.
+// Disclosure defaults to [RelationallyOpen] with no credential.
 //
-// Returns nil if the name is empty, size is 0, or allocation fails.
-// Creating a ref with a name that already exists in this process's
-// namespace returns nil (names must be unique per process).
-func RefCreate(name string, size int) *Ref {
-	if name == "" || size <= 0 {
+// Returns nil if the name is empty or allocation fails.
+func RefCreate[TData any, TDisclosure any](name string) *Ref[TData, TDisclosure] {
+	if name == "" {
 		return nil
+	}
+	size := unsafe.Sizeof(*new(TData))
+	if size == 0 {
+		size = 1 // zero-size types still get a region
 	}
 	cname := append([]byte(name), 0)
 	ptr := call2(ft.refCreate, uintptr(unsafe.Pointer(&cname[0])), uintptr(size))
 	if ptr == 0 {
 		return nil
 	}
-	ref := &Ref{ptr: ptr}
-	runtime.SetFinalizer(ref, (*Ref).Close)
+	ref := &Ref[TData, TDisclosure]{ptr: ptr}
+	runtime.SetFinalizer(ref, (*Ref[TData, TDisclosure]).Close)
 	return ref
 }
 
 // RefOpen maps an existing shared memory region created by another process.
 // Returns nil gracefully if the owner has exited or the ref doesn't exist.
-func RefOpen(peerUUID, name string) *Ref {
+func RefOpen[TData any, TDisclosure any](peerUUID, name string) *Ref[TData, TDisclosure] {
 	if peerUUID == "" || name == "" {
 		return nil
 	}
@@ -87,39 +102,45 @@ func RefOpen(peerUUID, name string) *Ref {
 	if ptr == 0 {
 		return nil
 	}
-	ref := &Ref{ptr: ptr}
-	runtime.SetFinalizer(ref, (*Ref).Close)
+	ref := &Ref[TData, TDisclosure]{ptr: ptr}
+	runtime.SetFinalizer(ref, (*Ref[TData, TDisclosure]).Close)
 	return ref
 }
 
-// Data returns an unsafe.Pointer to the mapped shared memory.
+// Data returns a typed pointer to the mapped shared memory.
 // Valid for reads and writes until Close is called.
 //
 // Access is subject to the ref's [Disclosure]:
-//   - [RelationallyOpen]: always returns the pointer (passphrase ignored)
-//   - [RelationallyInclusive]: returns the pointer (read-only without passphrase)
-//   - [RelationallyExclusive]: returns nil without the correct passphrase
+//   - [RelationallyOpen]: always returns the pointer
+//   - [RelationallyInclusive]: returns the pointer (read-only without credential)
+//   - [RelationallyExclusive]: returns nil without the correct credential
 //
 // The owner always gets full access regardless of disclosure mode.
 //
-// Pass a passphrase string to authenticate. Omit for unauthenticated access:
-//
-//	ref.Data()              // no passphrase
-//	ref.Data("secret123")   // with passphrase
-func (r *Ref) Data(passphrase ...string) unsafe.Pointer {
+//	ref.Data()            // no credential
+//	ref.Data(myCred)      // with credential
+func (r *Ref[TData, TDisclosure]) Data(credential ...TDisclosure) *TData {
 	if r == nil || r.ptr == 0 {
 		return nil
 	}
-	var pp uintptr
-	if len(passphrase) > 0 && passphrase[0] != "" {
-		cpw := append([]byte(passphrase[0]), 0)
-		pp = uintptr(unsafe.Pointer(&cpw[0]))
+	var cp uintptr
+	var cl uintptr
+	if len(credential) > 0 {
+		b := discloseBytes(credential[0])
+		if len(b) > 0 {
+			cp = uintptr(unsafe.Pointer(&b[0]))
+			cl = uintptr(len(b))
+		}
 	}
-	return unsafe.Pointer(call2(ft.refData, r.ptr, pp))
+	p := call3(ft.refData, r.ptr, cp, cl)
+	if p == 0 {
+		return nil
+	}
+	return (*TData)(unsafe.Pointer(p))
 }
 
-// Size returns the size of the mapped region in bytes (user data only).
-func (r *Ref) Size() int {
+// Size returns the size of the mapped region in bytes.
+func (r *Ref[TData, TDisclosure]) Size() int {
 	if r == nil || r.ptr == 0 {
 		return 0
 	}
@@ -130,39 +151,48 @@ func (r *Ref) Size() int {
 // The returned slice shares memory with the ref — writes are visible
 // to all processes that have the region open.
 //
-// Returns nil if disclosure denies access.  Pass a passphrase for
-// authenticated access:
-//
-//	ref.Bytes()              // no passphrase
-//	ref.Bytes("secret123")   // with passphrase
-func (r *Ref) Bytes(passphrase ...string) []byte {
-	data := r.Data(passphrase...)
-	size := r.Size()
-	if data == nil || size == 0 {
+// Returns nil if disclosure denies access.
+func (r *Ref[TData, TDisclosure]) Bytes(credential ...TDisclosure) []byte {
+	if r == nil || r.ptr == 0 {
 		return nil
 	}
-	return unsafe.Slice((*byte)(data), size)
+	var cp uintptr
+	var cl uintptr
+	if len(credential) > 0 {
+		b := discloseBytes(credential[0])
+		if len(b) > 0 {
+			cp = uintptr(unsafe.Pointer(&b[0]))
+			cl = uintptr(len(b))
+		}
+	}
+	p := call3(ft.refData, r.ptr, cp, cl)
+	size := int(call1(ft.refSize, r.ptr))
+	if p == 0 || size == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(p)), size)
 }
 
 // Writable reports whether write access is permitted under the current
 // disclosure mode.  The owner always returns true.
-//
-//	ref.Writable()              // check without passphrase
-//	ref.Writable("secret123")   // check with passphrase
-func (r *Ref) Writable(passphrase ...string) bool {
+func (r *Ref[TData, TDisclosure]) Writable(credential ...TDisclosure) bool {
 	if r == nil || r.ptr == 0 {
 		return false
 	}
-	var pp uintptr
-	if len(passphrase) > 0 && passphrase[0] != "" {
-		cpw := append([]byte(passphrase[0]), 0)
-		pp = uintptr(unsafe.Pointer(&cpw[0]))
+	var cp uintptr
+	var cl uintptr
+	if len(credential) > 0 {
+		b := discloseBytes(credential[0])
+		if len(b) > 0 {
+			cp = uintptr(unsafe.Pointer(&b[0]))
+			cl = uintptr(len(b))
+		}
 	}
-	return call2(ft.refWritable, r.ptr, pp) != 0
+	return call3(ft.refWritable, r.ptr, cp, cl) != 0
 }
 
 // GetDisclosure returns the current disclosure mode.
-func (r *Ref) GetDisclosure() Disclosure {
+func (r *Ref[TData, TDisclosure]) GetDisclosure() Disclosure {
 	if r == nil || r.ptr == 0 {
 		return RelationallyOpen
 	}
@@ -171,35 +201,119 @@ func (r *Ref) GetDisclosure() Disclosure {
 
 // SetDisclosure sets the disclosure mode.  Only the owner can change it;
 // observer calls are no-ops.
-func (r *Ref) SetDisclosure(mode Disclosure) {
+func (r *Ref[TData, TDisclosure]) SetDisclosure(mode Disclosure) {
 	if r == nil || r.ptr == 0 {
 		return
 	}
 	call2(ft.refSetDisclosure, r.ptr, uintptr(mode))
 }
 
-// SetPassphrase sets the passphrase for disclosure-controlled access.
+// SetCredential sets the credential for disclosure-controlled access.
 // Only the owner can set it; observer calls are no-ops.
-// Pass "" to clear the passphrase.  Max 63 characters.
-func (r *Ref) SetPassphrase(passphrase string) {
+// Max 128 bytes.
+func (r *Ref[TData, TDisclosure]) SetCredential(cred TDisclosure) {
 	if r == nil || r.ptr == 0 {
 		return
 	}
-	if passphrase == "" {
-		call1(ft.refSetPassphrase, 0)
+	b := discloseBytes(cred)
+	if len(b) == 0 {
+		call3(ft.refSetCredential, r.ptr, 0, 0)
 		return
 	}
-	cpw := append([]byte(passphrase), 0)
-	call2(ft.refSetPassphrase, r.ptr, uintptr(unsafe.Pointer(&cpw[0])))
+	call3(ft.refSetCredential, r.ptr, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
+}
+
+// ClearCredential removes the credential.  Owner only.
+func (r *Ref[TData, TDisclosure]) ClearCredential() {
+	if r == nil || r.ptr == 0 {
+		return
+	}
+	call3(ft.refSetCredential, r.ptr, 0, 0)
 }
 
 // Close unmaps and releases the ref handle.
 // If this process owns the ref, the shared memory is unlinked (destroyed).
 // Observer handles are simply unmapped.  Safe to call multiple times.
-func (r *Ref) Close() {
+func (r *Ref[TData, TDisclosure]) Close() {
 	if r != nil && r.ptr != 0 {
 		call1(ft.refClose, r.ptr)
 		r.ptr = 0
 		runtime.SetFinalizer(r, nil)
 	}
+}
+
+// discloseBytes converts a TDisclosure value to raw bytes.
+//
+// Priority:
+//  1. If it implements Disclosable, call Disclose()
+//  2. If it's a string, use its bytes
+//  3. If it's a fixed-size primitive, use its in-memory representation
+//  4. Panic — the type is not serializable
+func discloseBytes(v any) []byte {
+	// 1. Disclosable interface
+	if d, ok := v.(Disclosable); ok {
+		return d.Disclose()
+	}
+
+	// 2. String — most common case
+	if s, ok := v.(string); ok {
+		return []byte(s)
+	}
+
+	// 3. []byte — pass through
+	if b, ok := v.([]byte); ok {
+		return b
+	}
+
+	// 4. Fixed-size primitives — use in-memory bytes
+	switch val := v.(type) {
+	case int8:
+		return []byte{byte(val)}
+	case uint8:
+		return []byte{val}
+	case int16:
+		return (*[2]byte)(unsafe.Pointer(&val))[:]
+	case uint16:
+		return (*[2]byte)(unsafe.Pointer(&val))[:]
+	case int32:
+		return (*[4]byte)(unsafe.Pointer(&val))[:]
+	case uint32:
+		return (*[4]byte)(unsafe.Pointer(&val))[:]
+	case int64:
+		return (*[8]byte)(unsafe.Pointer(&val))[:]
+	case uint64:
+		return (*[8]byte)(unsafe.Pointer(&val))[:]
+	case int:
+		return (*[8]byte)(unsafe.Pointer(&val))[:]
+	case uint:
+		return (*[8]byte)(unsafe.Pointer(&val))[:]
+	case float32:
+		return (*[4]byte)(unsafe.Pointer(&val))[:]
+	case float64:
+		return (*[8]byte)(unsafe.Pointer(&val))[:]
+	case complex64:
+		return (*[8]byte)(unsafe.Pointer(&val))[:]
+	case complex128:
+		return (*[16]byte)(unsafe.Pointer(&val))[:]
+	case bool:
+		if val {
+			return []byte{1}
+		}
+		return []byte{0}
+	}
+
+	// 5. Fixed-size arrays — try via unsafe.Sizeof
+	// This catches [N]byte, [32]byte, etc.
+	size := unsafe.Sizeof(v)
+	if size > 0 && size <= 128 {
+		return unsafe.Slice((*byte)((*ifaceHeader)(unsafe.Pointer(&v)).data), size)
+	}
+
+	panic(fmt.Sprintf("mental: TDisclosure type %T is not Disclosable and not a supported primitive", v))
+}
+
+// ifaceHeader is the runtime layout of an interface value.
+type ifaceHeader struct {
+	typ  uintptr
+	data unsafe.Pointer
 }

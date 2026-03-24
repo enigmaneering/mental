@@ -39,7 +39,7 @@ int main(void) {
     mental_ref ref = mental_ref_create("TestVelocity", sz);
     ASSERT(ref != NULL, "mental_ref_create returned NULL");
 
-    void *data = mental_ref_data(ref, NULL);
+    void *data = mental_ref_data(ref, NULL, 0);
     ASSERT(data != NULL, "mental_ref_data returned NULL");
     ASSERT(mental_ref_size(ref) == sz, "mental_ref_size mismatch");
 
@@ -60,7 +60,7 @@ int main(void) {
     mental_ref obs = mental_ref_open(uuid, "TestVelocity");
     ASSERT(obs != NULL, "mental_ref_open returned NULL for own ref");
 
-    void *obs_data = mental_ref_data(obs, NULL);
+    void *obs_data = mental_ref_data(obs, NULL, 0);
     ASSERT(obs_data != NULL, "observer mental_ref_data returned NULL");
     ASSERT(mental_ref_size(obs) == sz, "observer size mismatch");
 
@@ -79,10 +79,14 @@ int main(void) {
 
     printf("  open (self-observer, open mode): OK\n");
 
-    /* ── Disclosure: INCLUSIVE ─────────────────────────────────── */
+    /* ── Disclosure: INCLUSIVE with byte credential ────────────── */
+
+    /* Use a raw byte credential (not a string — could be a hash) */
+    const uint8_t cred[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0x42, 0x00, 0xFF };
+    const uint8_t wrong[] = { 0xBA, 0xAD, 0xF0, 0x0D };
 
     mental_ref_set_disclosure(ref, MENTAL_RELATIONALLY_INCLUSIVE);
-    mental_ref_set_passphrase(ref, "secret123");
+    mental_ref_set_credential(ref, cred, sizeof(cred));
 
     ASSERT(mental_ref_get_disclosure(ref) == MENTAL_RELATIONALLY_INCLUSIVE,
            "disclosure should be INCLUSIVE");
@@ -91,69 +95,86 @@ int main(void) {
     ASSERT(mental_ref_get_disclosure(obs) == MENTAL_RELATIONALLY_INCLUSIVE,
            "observer should see INCLUSIVE via shared header");
 
-    /* Observer can still read without passphrase */
-    void *inc_data = mental_ref_data(obs, NULL);
-    ASSERT(inc_data != NULL, "inclusive: observer should get read access without passphrase");
+    /* Observer can still read without credential */
+    void *inc_data = mental_ref_data(obs, NULL, 0);
+    ASSERT(inc_data != NULL, "inclusive: observer should get read access without credential");
 
-    /* Observer is NOT writable without passphrase */
-    ASSERT(mental_ref_writable(obs, NULL) == 0,
-           "inclusive: observer should NOT be writable without passphrase");
+    /* Observer is NOT writable without credential */
+    ASSERT(mental_ref_writable(obs, NULL, 0) == 0,
+           "inclusive: observer should NOT be writable without credential");
 
-    /* Observer IS writable with correct passphrase */
-    ASSERT(mental_ref_writable(obs, "secret123") == 1,
-           "inclusive: observer should be writable with correct passphrase");
+    /* Observer IS writable with correct credential */
+    ASSERT(mental_ref_writable(obs, cred, sizeof(cred)) == 1,
+           "inclusive: observer should be writable with correct credential");
 
-    /* Wrong passphrase: not writable */
-    ASSERT(mental_ref_writable(obs, "wrongpass") == 0,
-           "inclusive: wrong passphrase should not grant write access");
+    /* Wrong credential: not writable */
+    ASSERT(mental_ref_writable(obs, wrong, sizeof(wrong)) == 0,
+           "inclusive: wrong credential should not grant write access");
+
+    /* Partial credential (right prefix, wrong length): not writable */
+    ASSERT(mental_ref_writable(obs, cred, sizeof(cred) - 1) == 0,
+           "inclusive: partial credential should not match");
 
     /* Owner always writable */
-    ASSERT(mental_ref_writable(ref, NULL) == 1,
+    ASSERT(mental_ref_writable(ref, NULL, 0) == 1,
            "owner should always be writable");
 
-    printf("  disclosure (inclusive): OK\n");
+    printf("  disclosure (inclusive, byte credential): OK\n");
 
     /* ── Disclosure: EXCLUSIVE ────────────────────────────────── */
 
     mental_ref_set_disclosure(ref, MENTAL_RELATIONALLY_EXCLUSIVE);
 
-    /* Observer gets NULL without passphrase */
-    void *exc_data = mental_ref_data(obs, NULL);
-    ASSERT(exc_data == NULL, "exclusive: observer should get NULL without passphrase");
+    /* Observer gets NULL without credential */
+    void *exc_data = mental_ref_data(obs, NULL, 0);
+    ASSERT(exc_data == NULL, "exclusive: observer should get NULL without credential");
 
-    /* Observer gets data with correct passphrase */
-    exc_data = mental_ref_data(obs, "secret123");
-    ASSERT(exc_data != NULL, "exclusive: observer should get data with correct passphrase");
+    /* Observer gets data with correct credential */
+    exc_data = mental_ref_data(obs, cred, sizeof(cred));
+    ASSERT(exc_data != NULL, "exclusive: observer should get data with correct credential");
 
-    /* Wrong passphrase: denied */
-    ASSERT(mental_ref_data(obs, "wrongpass") == NULL,
-           "exclusive: wrong passphrase should return NULL");
+    /* Wrong credential: denied */
+    ASSERT(mental_ref_data(obs, wrong, sizeof(wrong)) == NULL,
+           "exclusive: wrong credential should return NULL");
 
     /* Owner always has access */
-    ASSERT(mental_ref_data(ref, NULL) != NULL,
+    ASSERT(mental_ref_data(ref, NULL, 0) != NULL,
            "exclusive: owner should always have access");
 
     printf("  disclosure (exclusive): OK\n");
 
-    /* ── Owner can change passphrase on-the-fly ───────────────── */
+    /* ── Owner can change credential on-the-fly ───────────────── */
 
-    mental_ref_set_passphrase(ref, "newpass");
+    const uint8_t new_cred[] = { 0x01, 0x02, 0x03 };
+    mental_ref_set_credential(ref, new_cred, sizeof(new_cred));
 
-    /* Old passphrase no longer works */
-    ASSERT(mental_ref_data(obs, "secret123") == NULL,
-           "old passphrase should be rejected after change");
+    /* Old credential no longer works */
+    ASSERT(mental_ref_data(obs, cred, sizeof(cred)) == NULL,
+           "old credential should be rejected after change");
 
-    /* New passphrase works */
-    ASSERT(mental_ref_data(obs, "newpass") != NULL,
-           "new passphrase should grant access");
+    /* New credential works */
+    ASSERT(mental_ref_data(obs, new_cred, sizeof(new_cred)) != NULL,
+           "new credential should grant access");
 
-    printf("  passphrase change on-the-fly: OK\n");
+    printf("  credential change on-the-fly: OK\n");
+
+    /* ── Owner can clear credential ───────────────────────────── */
+
+    mental_ref_set_credential(ref, NULL, 0);
+
+    /* With no credential set, nothing matches — stays locked */
+    ASSERT(mental_ref_data(obs, new_cred, sizeof(new_cred)) == NULL,
+           "cleared credential: old cred should not work");
+    ASSERT(mental_ref_data(obs, "", 0) == NULL,
+           "cleared credential: empty cred should not work");
+
+    printf("  credential clear: OK\n");
 
     /* ── Owner can revert to OPEN ─────────────────────────────── */
 
     mental_ref_set_disclosure(ref, MENTAL_RELATIONALLY_OPEN);
-    ASSERT(mental_ref_data(obs, NULL) != NULL,
-           "reverting to OPEN should restore access without passphrase");
+    ASSERT(mental_ref_data(obs, NULL, 0) != NULL,
+           "reverting to OPEN should restore access without credential");
 
     printf("  revert to open: OK\n");
 
@@ -163,13 +184,17 @@ int main(void) {
     ASSERT(mental_ref_get_disclosure(obs) == MENTAL_RELATIONALLY_OPEN,
            "observer should not be able to change disclosure");
 
-    mental_ref_set_passphrase(obs, "hacked");
-    /* Passphrase should still be "newpass" from owner, not "hacked" */
+    const uint8_t hacked[] = { 0x66 };
+    mental_ref_set_credential(obs, hacked, sizeof(hacked));
     mental_ref_set_disclosure(ref, MENTAL_RELATIONALLY_EXCLUSIVE);
-    ASSERT(mental_ref_data(obs, "newpass") != NULL,
-           "observer should not be able to change passphrase");
-    ASSERT(mental_ref_data(obs, "hacked") == NULL,
-           "observer's passphrase attempt should be ignored");
+
+    /* Credential should still be cleared (from owner's clear above),
+     * not the observer's attempted "hacked" credential */
+    mental_ref_set_credential(ref, cred, sizeof(cred));
+    ASSERT(mental_ref_data(obs, cred, sizeof(cred)) != NULL,
+           "observer should not be able to change credential");
+    ASSERT(mental_ref_data(obs, hacked, sizeof(hacked)) == NULL,
+           "observer's credential attempt should be ignored");
 
     /* Revert for cleanup */
     mental_ref_set_disclosure(ref, MENTAL_RELATIONALLY_OPEN);
@@ -201,7 +226,7 @@ int main(void) {
     ASSERT(mental_ref_open("abc", NULL) == NULL, "open(NULL name) should fail");
 
     /* mental_ref_data/size on NULL should not crash */
-    ASSERT(mental_ref_data(NULL, NULL) == NULL, "ref_data(NULL) should return NULL");
+    ASSERT(mental_ref_data(NULL, NULL, 0) == NULL, "ref_data(NULL) should return NULL");
     ASSERT(mental_ref_size(NULL) == 0, "ref_size(NULL) should return 0");
 
     /* mental_ref_close(NULL) should not crash */
