@@ -83,9 +83,6 @@ func (e Error) Error() string {
 // Device is an opaque handle to a GPU device.
 type Device uintptr
 
-// Reference is an opaque handle to a GPU memory buffer.
-type Reference uintptr
-
 // Kernel is an opaque handle to a compiled compute shader.
 type Kernel uintptr
 
@@ -125,47 +122,6 @@ func (d Device) APIName() string {
 	return goStringFromPtr(p)
 }
 
-// Alloc allocates a GPU memory buffer of the given size in bytes.
-func Alloc(dev Device, bytes int) Reference {
-	return Reference(call2(ft.alloc, uintptr(dev), uintptr(bytes)))
-}
-
-// Write copies data from a Go byte slice into the GPU buffer.
-// The buffer auto-resizes if the data is larger than the current capacity.
-func Write(ref Reference, data []byte) {
-	if len(data) == 0 {
-		return
-	}
-	runtime.LockOSThread()
-	call3(ft.write, uintptr(ref), uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)))
-	runtime.UnlockOSThread()
-}
-
-// Read copies data from the GPU buffer into a Go byte slice.
-func Read(ref Reference, buf []byte) {
-	if len(buf) == 0 {
-		return
-	}
-	runtime.LockOSThread()
-	call3(ft.read, uintptr(ref), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-	runtime.UnlockOSThread()
-}
-
-// Size returns the current size of the GPU buffer in bytes.
-func (r Reference) Size() int {
-	return int(call1(ft.size, uintptr(r)))
-}
-
-// Clone creates a new GPU buffer with a copy of this buffer's data.
-func (r Reference) Clone() Reference {
-	return Reference(call1(ft.clone, uintptr(r)))
-}
-
-// Finalize frees the GPU memory. Must be called explicitly.
-func (r Reference) Finalize() {
-	call1(ft.finalize, uintptr(r))
-}
-
 // Compile compiles shader source for the given device.
 // The shader language is auto-detected and transpiled as needed.
 // Returns the compiled kernel and any error from the C library.
@@ -181,8 +137,15 @@ func Compile(dev Device, source string) (Kernel, error) {
 	return k, nil
 }
 
-// Dispatch executes a kernel with the given input buffers, output buffer, and work size.
-func Dispatch(kernel Kernel, inputs []Reference, output Reference, workSize int) {
+// Dispatch executes a kernel with the given input and output references.
+// All references must be pinned to a GPU device.
+//
+// Pass reference handles via [Reference.Handle]:
+//
+//	mental.Dispatch(kernel,
+//	    []uintptr{input1.Handle(), input2.Handle()},
+//	    output.Handle(), 1024)
+func Dispatch(kernel Kernel, inputs []uintptr, output uintptr, workSize int) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -190,7 +153,7 @@ func Dispatch(kernel Kernel, inputs []Reference, output Reference, workSize int)
 	if len(inputs) > 0 {
 		inputsPtr = uintptr(unsafe.Pointer(&inputs[0]))
 	}
-	call5(ft.dispatch, uintptr(kernel), inputsPtr, uintptr(len(inputs)), uintptr(output), uintptr(workSize))
+	call5(ft.dispatch, uintptr(kernel), inputsPtr, uintptr(len(inputs)), output, uintptr(workSize))
 }
 
 // Finalize frees the compiled kernel. Must be called explicitly.
@@ -198,13 +161,18 @@ func (k Kernel) Finalize() {
 	call1(ft.kernelFinalize, uintptr(k))
 }
 
-// ViewportAttach attaches a GPU buffer to an OS surface for zero-copy presentation.
+// ViewportAttach attaches a reference to an OS surface for zero-copy presentation.
+// The reference must be pinned to a GPU device.
 // The surface parameter is platform-specific (NSView*, HWND, etc.).
-func ViewportAttach(ref Reference, surface uintptr) (Viewport, error) {
+//
+// Pass the reference handle via [Reference.Handle]:
+//
+//	vp, err := mental.ViewportAttach(ref.Handle(), surface)
+func ViewportAttach(ref uintptr, surface uintptr) (Viewport, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	v := Viewport(call2(ft.viewportAttach, uintptr(ref), surface))
+	v := Viewport(call2(ft.viewportAttach, ref, surface))
 	if v == 0 {
 		return 0, getLibError()
 	}

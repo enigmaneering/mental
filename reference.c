@@ -1,20 +1,29 @@
 /*
- * Mental - Ref (UUID-scoped shared memory references)
+ * Mental - Reference (Unified Shareable Data)
  *
- * Each mental process gets a UUID on first use, scoping all named
- * shared memory regions under /mental-{uuid}/{name}.
+ * A reference is a named, UUID-scoped shared memory region that can
+ * optionally be pinned to a GPU device for compute operations.
  *
- * The creating process owns the shm.  When the process exits, all
- * its regions are automatically unlinked via atexit.
+ * Every reference has shared-memory backing:
+ *   /mental-{uuid}/{name}
  *
- * Observers (sparked children or peers) can open a ref by providing
- * the owner's UUID and the ref name.  If the owner has already exited
- * and the shm is gone, the open returns NULL gracefully.
+ * The creating process owns the shm.  When it exits, all its regions
+ * are automatically unlinked via atexit.
+ *
+ * Observers (sparked children or peers) open a reference by providing
+ * the owner's UUID and the name.  If the owner has exited, the open
+ * returns NULL gracefully.
+ *
+ * GPU pinning (optional):
+ *   mental_reference_pin(ref, device) attaches a backend buffer.
+ *   mental_reference_write/read transfer between host and GPU.
+ *   Pinned references participate in dispatch and viewport operations.
  */
 
 #define _POSIX_C_SOURCE 200809L
 
 #include "mental.h"
+#include "mental_internal.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -33,12 +42,7 @@
 
 /* ── UUID ──────────────────────────────────────────────────────── */
 
-/*
- * 128-bit UUID v4 (random), rendered as 32 lowercase hex chars (no dashes)
- * to keep shm path lengths short.
- */
-
-static char g_uuid[33]; /* 32 hex + NUL */
+static char g_uuid[33];
 static int  g_uuid_init = 0;
 
 #ifdef _WIN32
@@ -63,7 +67,6 @@ static void generate_uuid(void) {
     unsigned char buf[16];
 
 #ifdef _WIN32
-    /* Use CryptGenRandom or RtlGenRandom */
     typedef BOOLEAN (APIENTRY *RtlGenRandomFn)(PVOID, ULONG);
     HMODULE advapi = LoadLibraryA("advapi32.dll");
     if (advapi) {
@@ -72,7 +75,6 @@ static void generate_uuid(void) {
         FreeLibrary(advapi);
     }
 #else
-    /* /dev/urandom — always available on Linux/macOS */
     int fd = open("/dev/urandom", O_RDONLY);
     if (fd >= 0) {
         ssize_t r = read(fd, buf, sizeof(buf));
@@ -81,7 +83,6 @@ static void generate_uuid(void) {
     }
 #endif
 
-    /* Set version (4) and variant (10xx) bits */
     buf[6] = (buf[6] & 0x0F) | 0x40;
     buf[8] = (buf[8] & 0x3F) | 0x80;
 
@@ -108,11 +109,11 @@ const char* mental_uuid(void) {
     return g_uuid;
 }
 
-/* ── Ref tracking (for atexit cleanup) ─────────────────────────── */
+/* ── Reference tracking (for atexit cleanup) ───────────────────── */
 
 #define MAX_REFS 256
 
-static char* g_ref_paths[MAX_REFS]; /* shm paths we own (heap-allocated) */
+static char* g_ref_paths[MAX_REFS];
 static int   g_ref_count = 0;
 
 #ifdef _WIN32
@@ -139,8 +140,6 @@ static void ref_cleanup(void) {
     for (int i = 0; i < g_ref_count; i++) {
         if (g_ref_paths[i]) {
 #ifdef _WIN32
-            /* Windows named shared memory is reference-counted by the
-             * kernel; closing all handles unmaps it. No explicit unlink. */
 #else
             shm_unlink(g_ref_paths[i]);
 #endif
@@ -180,10 +179,6 @@ static void untrack_ref(const char* path) {
 
 /* ── Helpers ───────────────────────────────────────────────────── */
 
-/*
- * Build shm path: "/mental-{uuid}/{name}"
- * The leading '/' is required by shm_open on POSIX.
- */
 static int build_shm_path(char *dst, size_t dst_len,
                            const char *uuid, const char *name) {
     int n = snprintf(dst, dst_len, "/mental-%s-%s", uuid, name);
@@ -192,52 +187,30 @@ static int build_shm_path(char *dst, size_t dst_len,
 
 /* ── Disclosure header (lives at offset 0 in the shm region) ───── */
 
-/*
- * The disclosure header is the first thing in every shared memory region.
- * It controls access: the owning process evaluates it before granting
- * data access to observers.
- *
- * The credential is a generic byte array — mental doesn't interpret it.
- * It could be a plaintext string, a SHA-256 hash, an ed25519 signature,
- * or any other scheme.  "We're just the messengers, not the cryptographers."
- *
- * Layout:
- *   [0..3]     uint32_t mode            (atomic — owner can flip on the fly)
- *   [4..7]     uint32_t credential_len  (how many bytes of credential are set)
- *   [8..135]   uint8_t  credential[128] (raw bytes, set by owner)
- *
- * User data starts at offset DISCLOSURE_HEADER_SIZE.
- */
-
 #define DISCLOSURE_CREDENTIAL_MAX 128
 #define DISCLOSURE_HEADER_SIZE    256  /* padded for alignment */
 
 #ifdef _MSC_VER
 #include <intrin.h>
-#define ATOMIC_LOAD32(p)      (*(volatile uint32_t*)(p))
-#define ATOMIC_STORE32(p,v)   (*(volatile uint32_t*)(p) = (v))
+#define ATOMIC_LOAD32(p)       (*(volatile uint32_t*)(p))
+#define ATOMIC_STORE32(p,v)    (*(volatile uint32_t*)(p) = (v))
 #define ATOMIC_EXCHANGE32(p,v) _InterlockedExchange((volatile long*)(p), (long)(v))
 #else
 #include <stdatomic.h>
-#define ATOMIC_LOAD32(p)      atomic_load_explicit((_Atomic uint32_t*)(p), memory_order_acquire)
-#define ATOMIC_STORE32(p,v)   atomic_store_explicit((_Atomic uint32_t*)(p), (v), memory_order_release)
+#define ATOMIC_LOAD32(p)       atomic_load_explicit((_Atomic uint32_t*)(p), memory_order_acquire)
+#define ATOMIC_STORE32(p,v)    atomic_store_explicit((_Atomic uint32_t*)(p), (v), memory_order_release)
 #define ATOMIC_EXCHANGE32(p,v) atomic_exchange_explicit((_Atomic uint32_t*)(p), (v), memory_order_acquire)
 #endif
 
 struct disclosure_header {
-    uint32_t mode;                                    /* mental_disclosure enum */
-    uint32_t credential_len;                          /* bytes of credential set */
-    uint8_t  credential[DISCLOSURE_CREDENTIAL_MAX];   /* raw bytes */
-    uint32_t lock;                                    /* spinlock: 0=unlocked, 1=locked */
+    uint32_t mode;
+    uint32_t credential_len;
+    uint8_t  credential[DISCLOSURE_CREDENTIAL_MAX];
+    uint32_t lock;
 };
 
 /* ── Disclosure spinlock ───────────────────────────────────────── */
 
-/*
- * Process-shared spinlock in the shm header.  Protects credential
- * reads, writes, and comparisons so they are always atomic — no
- * window where a half-written credential can be observed.
- */
 static void disclosure_lock(struct disclosure_header *hdr) {
     while (ATOMIC_EXCHANGE32(&hdr->lock, 1) != 0) {
 #if defined(_WIN32)
@@ -254,47 +227,40 @@ static void disclosure_unlock(struct disclosure_header *hdr) {
     ATOMIC_STORE32(&hdr->lock, 0);
 }
 
-/* ── Ref structure ─────────────────────────────────────────────── */
+/* ── Internal helpers ──────────────────────────────────────────── */
 
-/*
- * Credential provider callback.
- *
- * Instead of caching credential bytes, the owner can register a
- * function that produces them on demand.  The function is called
- * under the disclosure spinlock each time an access check occurs,
- * guaranteeing the comparison always uses a fresh credential.
- *
- *   fn(ctx, buf, buf_size, out_len)
- *     ctx      — opaque context pointer (passed through)
- *     buf      — write credential bytes here
- *     buf_size — capacity (always DISCLOSURE_CREDENTIAL_MAX)
- *     out_len  — set to number of bytes written
- */
-typedef void (*mental_credential_fn)(void *ctx,
-                                      void *buf, size_t buf_size,
-                                      size_t *out_len);
+static struct disclosure_header* ref_header(mental_reference ref) {
+    return (struct disclosure_header *)ref->addr;
+}
 
-struct mental_ref_t {
-    void  *addr;       /* mmap'd / MapViewOfFile address (includes header) */
-    size_t total_size; /* total mapped size (header + user data) */
-    size_t user_size;  /* user-visible data size */
-    int    owner;      /* 1 = we created it, 0 = observer */
-    char   path[320];  /* shm path for cleanup */
+static void* ref_user_data(mental_reference ref) {
+    return (char *)ref->addr + DISCLOSURE_HEADER_SIZE;
+}
 
-    /* Credential provider (owner only) — evaluated under spinlock */
-    mental_credential_fn credential_fn;
-    void                *credential_ctx;
+static int credential_matches(struct disclosure_header *hdr,
+                               const void *credential, size_t credential_len) {
+    if (!credential || credential_len == 0) return 0;
+    if (credential_len != hdr->credential_len) return 0;
+    return memcmp(hdr->credential, credential, credential_len) == 0;
+}
 
-#ifdef _WIN32
-    HANDLE hMap;
-#else
-    int    fd;
-#endif
-};
+static void refresh_credential(mental_reference ref,
+                                struct disclosure_header *hdr) {
+    if (!ref->credential_fn) return;
+
+    size_t out_len = 0;
+    uint8_t buf[DISCLOSURE_CREDENTIAL_MAX];
+    ref->credential_fn(ref->credential_ctx, buf, sizeof(buf), &out_len);
+
+    if (out_len > DISCLOSURE_CREDENTIAL_MAX)
+        out_len = DISCLOSURE_CREDENTIAL_MAX;
+    memcpy(hdr->credential, buf, out_len);
+    hdr->credential_len = (uint32_t)out_len;
+}
 
 /* ── Create (owner) ────────────────────────────────────────────── */
 
-mental_ref mental_ref_create(const char *name, size_t size) {
+mental_reference mental_reference_create(const char *name, size_t size) {
     if (!name || !name[0] || size == 0) return NULL;
 
     ensure_uuid();
@@ -305,34 +271,47 @@ mental_ref mental_ref_create(const char *name, size_t size) {
 
     size_t total = DISCLOSURE_HEADER_SIZE + size;
 
-    mental_ref ref = calloc(1, sizeof(struct mental_ref_t));
+    mental_reference ref = calloc(1, sizeof(struct mental_reference_t));
     if (!ref) return NULL;
 
     strncpy(ref->path, path, sizeof(ref->path) - 1);
     ref->total_size = total;
     ref->user_size  = size;
     ref->owner = 1;
+    ref->valid = 1;
+    ref->device = NULL;
+    ref->backend_buffer = NULL;
+    pthread_mutex_init(&ref->lock, NULL);
 
 #ifdef _WIN32
     ref->hMap = CreateFileMappingA(
         INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
-        (DWORD)(total >> 32), (DWORD)total, path + 1); /* skip '/' */
-    if (!ref->hMap) { free(ref); return NULL; }
+        (DWORD)(total >> 32), (DWORD)total, path + 1);
+    if (!ref->hMap) {
+        pthread_mutex_destroy(&ref->lock);
+        free(ref);
+        return NULL;
+    }
 
     ref->addr = MapViewOfFile(ref->hMap, FILE_MAP_ALL_ACCESS, 0, 0, total);
     if (!ref->addr) {
         CloseHandle(ref->hMap);
+        pthread_mutex_destroy(&ref->lock);
         free(ref);
         return NULL;
     }
 #else
-    /* O_CREAT | O_EXCL: fail if it already exists (name collision) */
     int fd = shm_open(path, O_CREAT | O_EXCL | O_RDWR, 0600);
-    if (fd < 0) { free(ref); return NULL; }
+    if (fd < 0) {
+        pthread_mutex_destroy(&ref->lock);
+        free(ref);
+        return NULL;
+    }
 
     if (ftruncate(fd, (off_t)total) < 0) {
         close(fd);
         shm_unlink(path);
+        pthread_mutex_destroy(&ref->lock);
         free(ref);
         return NULL;
     }
@@ -341,6 +320,7 @@ mental_ref mental_ref_create(const char *name, size_t size) {
     if (addr == MAP_FAILED) {
         close(fd);
         shm_unlink(path);
+        pthread_mutex_destroy(&ref->lock);
         free(ref);
         return NULL;
     }
@@ -349,7 +329,6 @@ mental_ref mental_ref_create(const char *name, size_t size) {
     ref->addr = addr;
 #endif
 
-    /* Initialize disclosure: open by default, no credential, unlocked */
     struct disclosure_header *hdr = (struct disclosure_header *)ref->addr;
     memset(hdr, 0, DISCLOSURE_HEADER_SIZE);
     ATOMIC_STORE32(&hdr->mode, MENTAL_RELATIONALLY_OPEN);
@@ -361,7 +340,7 @@ mental_ref mental_ref_create(const char *name, size_t size) {
 
 /* ── Open (observer) ───────────────────────────────────────────── */
 
-mental_ref mental_ref_open(const char *peer_uuid, const char *name) {
+mental_reference mental_reference_open(const char *peer_uuid, const char *name) {
     if (!peer_uuid || !peer_uuid[0] || !name || !name[0])
         return NULL;
 
@@ -369,16 +348,20 @@ mental_ref mental_ref_open(const char *peer_uuid, const char *name) {
     if (build_shm_path(path, sizeof(path), peer_uuid, name) < 0)
         return NULL;
 
-    mental_ref ref = calloc(1, sizeof(struct mental_ref_t));
+    mental_reference ref = calloc(1, sizeof(struct mental_reference_t));
     if (!ref) return NULL;
 
     strncpy(ref->path, path, sizeof(ref->path) - 1);
     ref->owner = 0;
+    ref->valid = 1;
+    ref->device = NULL;
+    ref->backend_buffer = NULL;
+    pthread_mutex_init(&ref->lock, NULL);
 
 #ifdef _WIN32
     ref->hMap = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, path + 1);
     if (!ref->hMap) {
-        /* Owner gone or never existed — graceful failure */
+        pthread_mutex_destroy(&ref->lock);
         free(ref);
         return NULL;
     }
@@ -387,6 +370,7 @@ mental_ref mental_ref_open(const char *peer_uuid, const char *name) {
     ref->addr = MapViewOfFile(ref->hMap, FILE_MAP_ALL_ACCESS, 0, 0, 0);
     if (!ref->addr) {
         CloseHandle(ref->hMap);
+        pthread_mutex_destroy(&ref->lock);
         free(ref);
         return NULL;
     }
@@ -397,7 +381,7 @@ mental_ref mental_ref_open(const char *peer_uuid, const char *name) {
 #else
     int fd = shm_open(path, O_RDWR, 0);
     if (fd < 0) {
-        /* Owner gone or never existed — graceful failure */
+        pthread_mutex_destroy(&ref->lock);
         free(ref);
         return NULL;
     }
@@ -405,6 +389,7 @@ mental_ref mental_ref_open(const char *peer_uuid, const char *name) {
     struct stat st;
     if (fstat(fd, &st) < 0) {
         close(fd);
+        pthread_mutex_destroy(&ref->lock);
         free(ref);
         return NULL;
     }
@@ -413,6 +398,7 @@ mental_ref mental_ref_open(const char *peer_uuid, const char *name) {
                        PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (addr == MAP_FAILED) {
         close(fd);
+        pthread_mutex_destroy(&ref->lock);
         free(ref);
         return NULL;
     }
@@ -427,43 +413,9 @@ mental_ref mental_ref_open(const char *peer_uuid, const char *name) {
     return ref;
 }
 
-/* ── Disclosure helpers ─────────────────────────────────────────── */
-
-static struct disclosure_header* ref_header(mental_ref ref) {
-    return (struct disclosure_header *)ref->addr;
-}
-
-static void* ref_user_data(mental_ref ref) {
-    return (char *)ref->addr + DISCLOSURE_HEADER_SIZE;
-}
-
-static int credential_matches(struct disclosure_header *hdr,
-                               const void *credential, size_t credential_len) {
-    if (!credential || credential_len == 0) return 0;
-    if (credential_len != hdr->credential_len) return 0;
-    return memcmp(hdr->credential, credential, credential_len) == 0;
-}
-
-/*
- * Refresh the credential from the provider function (if set).
- * MUST be called under the disclosure spinlock.
- */
-static void refresh_credential(mental_ref ref, struct disclosure_header *hdr) {
-    if (!ref->credential_fn) return;
-
-    size_t out_len = 0;
-    uint8_t buf[DISCLOSURE_CREDENTIAL_MAX];
-    ref->credential_fn(ref->credential_ctx, buf, sizeof(buf), &out_len);
-
-    if (out_len > DISCLOSURE_CREDENTIAL_MAX)
-        out_len = DISCLOSURE_CREDENTIAL_MAX;
-    memcpy(hdr->credential, buf, out_len);
-    hdr->credential_len = (uint32_t)out_len;
-}
-
 /* ── Disclosure API ────────────────────────────────────────────── */
 
-mental_disclosure mental_ref_get_disclosure(mental_ref ref) {
+mental_disclosure mental_reference_get_disclosure(mental_reference ref) {
     if (!ref || !ref->addr) return MENTAL_RELATIONALLY_OPEN;
     struct disclosure_header *hdr = ref_header(ref);
     disclosure_lock(hdr);
@@ -472,7 +424,7 @@ mental_disclosure mental_ref_get_disclosure(mental_ref ref) {
     return mode;
 }
 
-void mental_ref_set_disclosure(mental_ref ref, mental_disclosure mode) {
+void mental_reference_set_disclosure(mental_reference ref, mental_disclosure mode) {
     if (!ref || !ref->addr || !ref->owner) return;
     struct disclosure_header *hdr = ref_header(ref);
     disclosure_lock(hdr);
@@ -480,8 +432,8 @@ void mental_ref_set_disclosure(mental_ref ref, mental_disclosure mode) {
     disclosure_unlock(hdr);
 }
 
-void mental_ref_set_credential(mental_ref ref,
-                                const void *credential, size_t len) {
+void mental_reference_set_credential(mental_reference ref,
+                                      const void *credential, size_t len) {
     if (!ref || !ref->addr || !ref->owner) return;
     struct disclosure_header *hdr = ref_header(ref);
     disclosure_lock(hdr);
@@ -494,31 +446,29 @@ void mental_ref_set_credential(mental_ref ref,
         memset(hdr->credential, 0, DISCLOSURE_CREDENTIAL_MAX);
         hdr->credential_len = 0;
     }
-    /* Setting raw credential clears any provider */
     ref->credential_fn  = NULL;
     ref->credential_ctx = NULL;
     disclosure_unlock(hdr);
 }
 
-void mental_ref_set_credential_provider(mental_ref ref,
-                                         mental_credential_fn fn, void *ctx) {
+void mental_reference_set_credential_provider(mental_reference ref,
+                                               mental_credential_fn fn,
+                                               void *ctx) {
     if (!ref || !ref->addr || !ref->owner) return;
     struct disclosure_header *hdr = ref_header(ref);
     disclosure_lock(hdr);
     ref->credential_fn  = fn;
     ref->credential_ctx = ctx;
-    /* Immediately evaluate so credential is fresh right now */
     if (fn) refresh_credential(ref, hdr);
     disclosure_unlock(hdr);
 }
 
 /* ── Accessors (disclosure-aware) ──────────────────────────────── */
 
-void* mental_ref_data(mental_ref ref,
-                       const void *credential, size_t credential_len) {
-    if (!ref || !ref->addr) return NULL;
+void* mental_reference_data(mental_reference ref,
+                             const void *credential, size_t credential_len) {
+    if (!ref || !ref->addr || !ref->valid) return NULL;
 
-    /* Owner always has full access — but still refresh credential */
     if (ref->owner) {
         if (ref->credential_fn) {
             struct disclosure_header *hdr = ref_header(ref);
@@ -531,8 +481,6 @@ void* mental_ref_data(mental_ref ref,
 
     struct disclosure_header *hdr = ref_header(ref);
     disclosure_lock(hdr);
-
-    /* Refresh owner credential from provider (in-process only) */
     refresh_credential(ref, hdr);
 
     mental_disclosure mode = (mental_disclosure)ATOMIC_LOAD32(&hdr->mode);
@@ -542,12 +490,9 @@ void* mental_ref_data(mental_ref ref,
     case MENTAL_RELATIONALLY_OPEN:
         granted = 1;
         break;
-
     case MENTAL_RELATIONALLY_INCLUSIVE:
-        /* Read access without credential; write access is advisory. */
         granted = 1;
         break;
-
     case MENTAL_RELATIONALLY_EXCLUSIVE:
         granted = credential_matches(hdr, credential, credential_len);
         break;
@@ -557,15 +502,15 @@ void* mental_ref_data(mental_ref ref,
     return granted ? ref_user_data(ref) : NULL;
 }
 
-size_t mental_ref_size(mental_ref ref) {
-    return ref ? ref->user_size : 0;
+size_t mental_reference_size(mental_reference ref) {
+    return (ref && ref->valid) ? ref->user_size : 0;
 }
 
-int mental_ref_writable(mental_ref ref,
-                         const void *credential, size_t credential_len) {
-    if (!ref || !ref->addr) return 0;
+int mental_reference_writable(mental_reference ref,
+                               const void *credential,
+                               size_t credential_len) {
+    if (!ref || !ref->addr || !ref->valid) return 0;
 
-    /* Owner always writable — but still refresh credential */
     if (ref->owner) {
         if (ref->credential_fn) {
             struct disclosure_header *hdr = ref_header(ref);
@@ -578,8 +523,6 @@ int mental_ref_writable(mental_ref ref,
 
     struct disclosure_header *hdr = ref_header(ref);
     disclosure_lock(hdr);
-
-    /* Refresh owner credential from provider (in-process only) */
     refresh_credential(ref, hdr);
 
     mental_disclosure mode = (mental_disclosure)ATOMIC_LOAD32(&hdr->mode);
@@ -589,11 +532,9 @@ int mental_ref_writable(mental_ref ref,
     case MENTAL_RELATIONALLY_OPEN:
         writable = 1;
         break;
-
     case MENTAL_RELATIONALLY_INCLUSIVE:
         writable = credential_matches(hdr, credential, credential_len) ? 1 : 0;
         break;
-
     case MENTAL_RELATIONALLY_EXCLUSIVE:
         writable = credential_matches(hdr, credential, credential_len) ? 1 : 0;
         break;
@@ -605,51 +546,151 @@ int mental_ref_writable(mental_ref ref,
 
 /* ── Ownership query ───────────────────────────────────────────── */
 
-int mental_ref_is_owner(mental_ref ref) {
+int mental_reference_is_owner(mental_reference ref) {
     if (!ref) return 0;
     return ref->owner;
 }
 
-/* ── Clone (snapshot into local ref) ───────────────────────────── */
+/* ── GPU pinning ───────────────────────────────────────────────── */
 
-/*
- * Clone creates a new locally-owned ref seeded with the current value
- * of the source.  If the source is a cross-process observer handle,
- * this breaks the linkage — the result is an independent local copy
- * under this process's UUID namespace.
- *
- * The caller provides a new_name for the clone.  The credential is
- * used to obtain read access on the source (required for exclusive
- * disclosure; ignored for open/inclusive).
- *
- * Returns NULL if the source is inaccessible or allocation fails.
- */
-mental_ref mental_ref_clone(mental_ref ref, const char *new_name,
-                             const void *credential, size_t credential_len) {
-    if (!ref || !ref->addr || !new_name || !new_name[0])
+int mental_reference_pin(mental_reference ref, mental_device device) {
+    if (!ref || !ref->valid || !device) return -1;
+
+    pthread_mutex_lock(&ref->lock);
+
+    /* Already pinned to this device — no-op */
+    if (ref->device == device && ref->backend_buffer) {
+        pthread_mutex_unlock(&ref->lock);
+        return 0;
+    }
+
+    /* If pinned to a different device, free old buffer first */
+    if (ref->backend_buffer && ref->device) {
+        ref->device->backend->buffer_destroy(ref->backend_buffer);
+        ref->backend_buffer = NULL;
+    }
+
+    ref->device = device;
+    ref->backend_buffer = device->backend->buffer_alloc(
+        device->backend_device, ref->user_size);
+
+    if (!ref->backend_buffer) {
+        ref->device = NULL;
+        pthread_mutex_unlock(&ref->lock);
+        mental_set_error(MENTAL_ERROR_ALLOCATION_FAILED,
+                         "Backend buffer allocation failed during pin");
+        return -1;
+    }
+
+    /* Upload current shm contents to GPU */
+    void *src = ref_user_data(ref);
+    device->backend->buffer_write(ref->backend_buffer, src, ref->user_size);
+
+    pthread_mutex_unlock(&ref->lock);
+    return 0;
+}
+
+int mental_reference_is_pinned(mental_reference ref) {
+    if (!ref || !ref->valid) return 0;
+    return ref->backend_buffer != NULL;
+}
+
+mental_device mental_reference_device(mental_reference ref) {
+    if (!ref || !ref->valid) return NULL;
+    return ref->device;
+}
+
+/* ── Write / Read (GPU + shm) ──────────────────────────────────── */
+
+void mental_reference_write(mental_reference ref,
+                             const void *data, size_t bytes) {
+    if (!ref || !ref->valid || !data || bytes == 0) return;
+
+    pthread_mutex_lock(&ref->lock);
+
+    size_t write_size = bytes < ref->user_size ? bytes : ref->user_size;
+
+    /* Always write to shm (for cross-process visibility) */
+    memcpy(ref_user_data(ref), data, write_size);
+
+    /* If pinned, also write to GPU */
+    if (ref->backend_buffer && ref->device) {
+        ref->device->backend->buffer_write(
+            ref->backend_buffer, data, write_size);
+    }
+
+    pthread_mutex_unlock(&ref->lock);
+}
+
+void mental_reference_read(mental_reference ref,
+                            void *data, size_t bytes) {
+    if (!ref || !ref->valid || !data || bytes == 0) return;
+
+    pthread_mutex_lock(&ref->lock);
+
+    size_t read_size = bytes < ref->user_size ? bytes : ref->user_size;
+
+    if (ref->backend_buffer && ref->device) {
+        /* Pinned: read from GPU */
+        ref->device->backend->buffer_read(
+            ref->backend_buffer, data, read_size);
+    } else {
+        /* Not pinned: read from shm */
+        memcpy(data, ref_user_data(ref), read_size);
+    }
+
+    pthread_mutex_unlock(&ref->lock);
+}
+
+/* ── Clone (snapshot into local reference) ─────────────────────── */
+
+mental_reference mental_reference_clone(mental_reference ref,
+                                         const char *new_name,
+                                         mental_device device,
+                                         const void *credential,
+                                         size_t credential_len) {
+    if (!ref || !ref->addr || !ref->valid || !new_name || !new_name[0])
         return NULL;
 
     /* Read the source data (disclosure-checked) */
-    void *src = mental_ref_data(ref, credential, credential_len);
+    void *src = mental_reference_data(ref, credential, credential_len);
     if (!src) return NULL;
 
     size_t sz = ref->user_size;
 
-    /* Create a new owned ref with the same data size */
-    mental_ref clone = mental_ref_create(new_name, sz);
+    /* Create a new owned reference with the same data size */
+    mental_reference clone = mental_reference_create(new_name, sz);
     if (!clone) return NULL;
 
     /* Copy the current observed value */
-    void *dst = ref_user_data(clone);
-    memcpy(dst, src, sz);
+    memcpy(ref_user_data(clone), src, sz);
+
+    /* Pin to GPU if device provided (cross-boundary clone-and-pin) */
+    if (device) {
+        if (mental_reference_pin(clone, device) != 0) {
+            mental_reference_close(clone);
+            return NULL;
+        }
+    }
 
     return clone;
 }
 
 /* ── Close ─────────────────────────────────────────────────────── */
 
-void mental_ref_close(mental_ref ref) {
+void mental_reference_close(mental_reference ref) {
     if (!ref) return;
+
+    pthread_mutex_lock(&ref->lock);
+
+    /* Free GPU buffer if pinned */
+    if (ref->backend_buffer && ref->device) {
+        ref->device->backend->buffer_destroy(ref->backend_buffer);
+        ref->backend_buffer = NULL;
+        ref->device = NULL;
+    }
+
+    ref->valid = 0;
 
 #ifdef _WIN32
     if (ref->addr) UnmapViewOfFile(ref->addr);
@@ -668,5 +709,7 @@ void mental_ref_close(mental_ref ref) {
     }
 #endif
 
+    pthread_mutex_unlock(&ref->lock);
+    pthread_mutex_destroy(&ref->lock);
     free(ref);
 }

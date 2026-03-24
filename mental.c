@@ -137,152 +137,6 @@ const char* mental_device_api_name(mental_device dev) {
 }
 
 /*
- * Reference (GPU Memory Buffer)
- */
-
-mental_reference mental_alloc(mental_device dev, size_t bytes) {
-    if (!dev) {
-        mental_set_error(MENTAL_ERROR_INVALID_DEVICE, "Invalid device");
-        return NULL;
-    }
-
-    mental_reference ref = malloc(sizeof(struct mental_reference_t));
-    if (!ref) {
-        mental_set_error(MENTAL_ERROR_ALLOCATION_FAILED, "Failed to allocate reference");
-        return NULL;
-    }
-
-    ref->device = dev;
-    ref->size = bytes;
-    ref->valid = 1;
-    pthread_mutex_init(&ref->lock, NULL);
-
-    ref->backend_buffer = dev->backend->buffer_alloc(dev->backend_device, bytes);
-    if (!ref->backend_buffer) {
-        pthread_mutex_destroy(&ref->lock);
-        free(ref);
-        mental_set_error(MENTAL_ERROR_ALLOCATION_FAILED, "Backend buffer allocation failed");
-        return NULL;
-    }
-
-    return ref;
-}
-
-void mental_write(mental_reference ref, const void* data, size_t bytes) {
-    if (!ref || !ref->valid) {
-        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Invalid reference");
-        return;
-    }
-
-    pthread_mutex_lock(&ref->lock);
-
-    /* Auto-resize if needed */
-    if (bytes > ref->size) {
-        void* new_buffer = ref->device->backend->buffer_resize(
-            ref->device->backend_device,
-            ref->backend_buffer,
-            ref->size,
-            bytes
-        );
-
-        if (!new_buffer) {
-            pthread_mutex_unlock(&ref->lock);
-            mental_set_error(MENTAL_ERROR_ALLOCATION_FAILED, "Failed to resize buffer");
-            return;
-        }
-
-        ref->backend_buffer = new_buffer;
-        ref->size = bytes;
-    }
-
-    /* Write data */
-    ref->device->backend->buffer_write(ref->backend_buffer, data, bytes);
-
-    pthread_mutex_unlock(&ref->lock);
-}
-
-void mental_read(mental_reference ref, void* data, size_t bytes) {
-    if (!ref || !ref->valid) {
-        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Invalid reference");
-        return;
-    }
-
-    pthread_mutex_lock(&ref->lock);
-
-    size_t read_size = bytes < ref->size ? bytes : ref->size;
-    ref->device->backend->buffer_read(ref->backend_buffer, data, read_size);
-
-    pthread_mutex_unlock(&ref->lock);
-}
-
-size_t mental_size(mental_reference ref) {
-    if (!ref || !ref->valid) return 0;
-
-    pthread_mutex_lock(&ref->lock);
-    size_t size = ref->size;
-    pthread_mutex_unlock(&ref->lock);
-
-    return size;
-}
-
-mental_reference mental_clone(mental_reference ref) {
-    if (!ref || !ref->valid) {
-        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Invalid reference");
-        return NULL;
-    }
-
-    /* Lock source buffer */
-    pthread_mutex_lock(&ref->lock);
-
-    /* Create new reference structure */
-    mental_reference clone = (mental_reference)malloc(sizeof(struct mental_reference_t));
-    if (!clone) {
-        pthread_mutex_unlock(&ref->lock);
-        mental_set_error(MENTAL_ERROR_ALLOCATION_FAILED, "Failed to allocate clone reference");
-        return NULL;
-    }
-
-    clone->device = ref->device;
-    clone->size = ref->size;
-    clone->valid = 1;
-    pthread_mutex_init(&clone->lock, NULL);
-
-    /* Use backend's buffer_clone to copy data */
-    clone->backend_buffer = ref->device->backend->buffer_clone(
-        ref->device->backend_device,
-        ref->backend_buffer,
-        ref->size
-    );
-
-    if (!clone->backend_buffer) {
-        pthread_mutex_unlock(&ref->lock);
-        pthread_mutex_destroy(&clone->lock);
-        free(clone);
-        mental_set_error(MENTAL_ERROR_ALLOCATION_FAILED, "Failed to clone buffer");
-        return NULL;
-    }
-
-    /* Unlock source buffer */
-    pthread_mutex_unlock(&ref->lock);
-
-    return clone;
-}
-
-void mental_finalize(mental_reference ref) {
-    if (!ref) return;
-
-    if (ref->valid) {
-        pthread_mutex_lock(&ref->lock);
-        ref->device->backend->buffer_destroy(ref->backend_buffer);
-        ref->valid = 0;
-        pthread_mutex_unlock(&ref->lock);
-        pthread_mutex_destroy(&ref->lock);
-    }
-
-    free(ref);
-}
-
-/*
  * Kernel (Compute Shader)
  */
 
@@ -343,6 +197,19 @@ void mental_dispatch(mental_kernel kernel, mental_reference* inputs, int input_c
     if (!output || !output->valid) {
         mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Invalid output reference");
         return;
+    }
+
+    /* All references must be pinned to a GPU device */
+    if (!output->backend_buffer) {
+        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Output reference is not pinned to a GPU device");
+        return;
+    }
+
+    for (int i = 0; i < input_count; i++) {
+        if (inputs[i] && !inputs[i]->backend_buffer) {
+            mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Input reference is not pinned to a GPU device");
+            return;
+        }
     }
 
     /* Lock kernel */
@@ -409,6 +276,11 @@ void mental_kernel_finalize(mental_kernel kernel) {
 mental_viewport mental_viewport_attach(mental_reference ref, void* surface) {
     if (!ref || !ref->valid) {
         mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Invalid reference");
+        return NULL;
+    }
+
+    if (!ref->backend_buffer || !ref->device) {
+        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Reference is not pinned to a GPU device");
         return NULL;
     }
 

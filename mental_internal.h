@@ -23,13 +23,42 @@ struct mental_device_t {
     void* backend_device;  /* Backend-specific device handle */
 };
 
-/* Reference structure (GPU memory buffer) */
+/*
+ * Unified Reference structure.
+ *
+ * Every reference has shared-memory backing (named, UUID-scoped,
+ * cross-process visible).  Optionally, it can be pinned to a GPU
+ * device, adding a backend buffer for compute operations.
+ *
+ * Shared memory provides the cross-process data plane.
+ * GPU pinning provides the compute plane.
+ * Disclosure controls the access plane.
+ */
 struct mental_reference_t {
+    /* Shared memory (always present) */
+    void  *addr;       /* mmap'd / MapViewOfFile address (includes header) */
+    size_t total_size; /* total mapped size (header + user data) */
+    size_t user_size;  /* user-visible data size */
+    int    owner;      /* 1 = we created it, 0 = observer */
+    char   path[320];  /* shm path for cleanup */
+
+    /* GPU backing (optional — NULL if CPU-only) */
     mental_device device;
-    void* backend_buffer;  /* Backend-specific buffer handle */
-    size_t size;
+    void *backend_buffer;
+
+    /* Credential provider (owner only) — evaluated under spinlock */
+    mental_credential_fn credential_fn;
+    void                *credential_ctx;
+
+    /* Thread safety */
     pthread_mutex_t lock;
     int valid;
+
+#ifdef _WIN32
+    HANDLE hMap;
+#else
+    int    fd;
+#endif
 };
 
 /* Kernel structure (compiled shader) */
