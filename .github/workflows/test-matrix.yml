@@ -2,6 +2,8 @@ name: Test Matrix
 
 on:
   workflow_dispatch:
+  push:
+    branches: ["claude/review-assembly-conversion-4nDa2"]
 
 # Cancel in-flight runs for the same ref
 concurrency:
