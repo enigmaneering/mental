@@ -76,6 +76,7 @@ mental_language mental_api_to_language(mental_api_type api) {
         case MENTAL_API_VULKAN: return MENTAL_LANG_GLSL;
         case MENTAL_API_OPENCL: return MENTAL_LANG_GLSL; /* OpenCL uses GLSL compute */
         case MENTAL_API_OPENGL: return MENTAL_LANG_GLSL; /* OpenGL 4.3+ uses GLSL compute */
+        case MENTAL_API_POCL:   return MENTAL_LANG_GLSL; /* PoCL uses OpenCL C (GLSL-like) */
         default: return MENTAL_LANG_GLSL;
     }
 }

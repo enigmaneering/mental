@@ -127,6 +127,9 @@ extern mental_backend* opencl_backend;
 #ifdef MENTAL_HAS_OPENGL
 extern mental_backend* opengl_backend;
 #endif
+#ifdef MENTAL_HAS_POCL
+extern mental_backend* pocl_backend;
+#endif
 
 /* Error handling (thread-local) */
 void mental_set_error(mental_error code, const char* message);

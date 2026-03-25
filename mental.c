@@ -23,7 +23,7 @@ static _Thread_local char g_last_error_message[512] = {0};
  * The runtime init loop (mental_initialize) tries them in order and picks
  * the first one that successfully initialises and reports devices. */
 static mental_backend** get_backend_priority(int* count) {
-    static mental_backend* backends[5];
+    static mental_backend* backends[8];
     *count = 0;
 
 #if defined(__APPLE__)
@@ -32,9 +32,12 @@ static mental_backend** get_backend_priority(int* count) {
     if (metal_backend) backends[(*count)++] = metal_backend;
 #endif
 #elif defined(_WIN32)
-    /* Windows: D3D12 -> OpenCL */
+    /* Windows: D3D12 -> Vulkan -> OpenCL -> OpenGL -> PoCL */
 #ifdef MENTAL_HAS_D3D12
     if (d3d12_backend) backends[(*count)++] = d3d12_backend;
+#endif
+#ifdef MENTAL_HAS_VULKAN
+    if (vulkan_backend) backends[(*count)++] = vulkan_backend;
 #endif
 #else
     /* Linux: Vulkan -> OpenCL */
@@ -43,12 +46,15 @@ static mental_backend** get_backend_priority(int* count) {
 #endif
 #endif
 
-    /* Universal fallbacks — OpenCL first, then OpenGL (requires 4.3+) */
+    /* Universal fallbacks: OpenCL -> OpenGL 4.3+ -> PoCL (CPU-only last resort) */
 #ifdef MENTAL_HAS_OPENCL
     if (opencl_backend) backends[(*count)++] = opencl_backend;
 #endif
 #ifdef MENTAL_HAS_OPENGL
     if (opengl_backend) backends[(*count)++] = opengl_backend;
+#endif
+#ifdef MENTAL_HAS_POCL
+    if (pocl_backend) backends[(*count)++] = pocl_backend;
 #endif
 
     return backends;
@@ -141,6 +147,7 @@ const char* mental_device_api_name(mental_device dev) {
         case MENTAL_API_VULKAN: return "Vulkan";
         case MENTAL_API_OPENCL: return "OpenCL";
         case MENTAL_API_OPENGL: return "OpenGL";
+        case MENTAL_API_POCL: return "PoCL";
         default: return "Unknown";
     }
 }

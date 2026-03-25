@@ -47,10 +47,12 @@ static int opencl_init(void) {
         return -1;
     }
 
-    /* Get GPU devices */
+    /* Get GPU devices first; fall back to ALL (including CPU) if no GPU.
+     * This covers systems where system OpenCL provides CPU compute.
+     * PoCL (further down the chain) is only for targets with no system
+     * OpenCL installed at all. */
     err = clGetDeviceIDs(g_platform, CL_DEVICE_TYPE_GPU, 0, NULL, &g_device_count);
     if (err != CL_SUCCESS || g_device_count == 0) {
-        /* Try ALL devices as fallback */
         err = clGetDeviceIDs(g_platform, CL_DEVICE_TYPE_ALL, 0, NULL, &g_device_count);
         if (err != CL_SUCCESS || g_device_count == 0) {
             return -1;

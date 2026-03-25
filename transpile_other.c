@@ -21,6 +21,7 @@
 /* Configured tool paths — set via mental_set_tool_path(). */
 static char g_dxc_path[4096];
 static char g_naga_path[4096];
+static char g_pocl_path[4096];
 
 void mental_set_tool_path(mental_tool tool, const char* path) {
     char* dest = NULL;
@@ -29,6 +30,7 @@ void mental_set_tool_path(mental_tool tool, const char* path) {
     switch (tool) {
     case MENTAL_TOOL_DXC:  dest = g_dxc_path;  cap = sizeof(g_dxc_path);  break;
     case MENTAL_TOOL_NAGA: dest = g_naga_path; cap = sizeof(g_naga_path); break;
+    case MENTAL_TOOL_POCL: dest = g_pocl_path; cap = sizeof(g_pocl_path); break;
     default: return;
     }
 
@@ -44,6 +46,7 @@ const char* mental_get_tool_path(mental_tool tool) {
     switch (tool) {
     case MENTAL_TOOL_DXC:  return g_dxc_path[0]  ? g_dxc_path  : NULL;
     case MENTAL_TOOL_NAGA: return g_naga_path[0] ? g_naga_path : NULL;
+    case MENTAL_TOOL_POCL: return g_pocl_path[0] ? g_pocl_path : NULL;
     default: return NULL;
     }
 }
