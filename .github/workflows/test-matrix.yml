@@ -1,10 +1,7 @@
 name: Test Matrix
 
 on:
-  push:
-    branches: [main, "claude/**"]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 # Cancel in-flight runs for the same ref
 concurrency:
