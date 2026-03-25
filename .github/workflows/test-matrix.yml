@@ -37,12 +37,6 @@ jobs:
             install_vulkan: false
             install_pocl_brew: false
 
-          - name: "macOS arm64 + PoCL"
-            runner: macos-14
-            packages: ""
-            install_vulkan: false
-            install_pocl_brew: true
-
           # ============================================================
           #  Windows — D3D12 ships with the Windows SDK, always present.
           #  Variations: whether Vulkan SDK is also installed.
