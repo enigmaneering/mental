@@ -1,0 +1,243 @@
+name: Test Matrix
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs for the same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: "${{ matrix.name }}"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ============================================================
+          #  Full-stack: all available backends enabled
+          # ============================================================
+          - name: "macOS arm64 (full)"
+            runner: macos-14
+            packages: ""
+            cmake_flags: ""
+
+          - name: "macOS amd64 (full)"
+            runner: macos-13
+            packages: ""
+            cmake_flags: ""
+
+          - name: "Linux amd64 (full)"
+            runner: ubuntu-latest
+            packages: >-
+              libvulkan-dev vulkan-tools mesa-vulkan-drivers
+              libopengl-dev libglx-dev libx11-dev
+              ocl-icd-opencl-dev mesa-opencl-icd
+              pocl-opencl-icd
+            cmake_flags: ""
+
+          - name: "Linux arm64 (full)"
+            runner: ubuntu-24.04-arm
+            packages: >-
+              libvulkan-dev vulkan-tools mesa-vulkan-drivers
+              libopengl-dev libglx-dev libx11-dev
+              ocl-icd-opencl-dev mesa-opencl-icd
+              pocl-opencl-icd
+            cmake_flags: ""
+
+          - name: "Windows amd64 (full)"
+            runner: windows-latest
+            packages: ""
+            cmake_flags: ""
+
+          - name: "Windows arm64 (full)"
+            runner: windows-11-arm
+            packages: ""
+            cmake_flags: ""
+
+          # ============================================================
+          #  Fallback: disable primary, test next backend in chain
+          # ============================================================
+
+          # macOS: Metal -> [OpenCL]
+          - name: "macOS arm64 (no Metal)"
+            runner: macos-14
+            packages: ""
+            cmake_flags: "-DMENTAL_DISABLE_METAL=ON"
+
+          - name: "macOS amd64 (no Metal)"
+            runner: macos-13
+            packages: ""
+            cmake_flags: "-DMENTAL_DISABLE_METAL=ON"
+
+          # Windows: D3D12 -> [Vulkan]
+          - name: "Windows amd64 (no D3D12)"
+            runner: windows-latest
+            packages: ""
+            cmake_flags: "-DMENTAL_DISABLE_D3D12=ON"
+
+          # Windows: D3D12, Vulkan -> [OpenCL]
+          - name: "Windows amd64 (no D3D12/Vulkan)"
+            runner: windows-latest
+            packages: ""
+            cmake_flags: "-DMENTAL_DISABLE_D3D12=ON -DMENTAL_DISABLE_VULKAN=ON"
+
+          # Windows: D3D12, Vulkan, OpenCL -> [OpenGL]
+          - name: "Windows amd64 (no D3D12/Vulkan/OpenCL)"
+            runner: windows-latest
+            packages: ""
+            cmake_flags: >-
+              -DMENTAL_DISABLE_D3D12=ON
+              -DMENTAL_DISABLE_VULKAN=ON
+              -DMENTAL_DISABLE_OPENCL=ON
+
+          # Linux: Vulkan -> [OpenCL]
+          - name: "Linux amd64 (no Vulkan)"
+            runner: ubuntu-latest
+            packages: >-
+              libopengl-dev libglx-dev libx11-dev
+              ocl-icd-opencl-dev mesa-opencl-icd
+              pocl-opencl-icd
+            cmake_flags: "-DMENTAL_DISABLE_VULKAN=ON"
+
+          # Linux: Vulkan, OpenCL -> [OpenGL via Mesa llvmpipe]
+          - name: "Linux amd64 (no Vulkan/OpenCL)"
+            runner: ubuntu-latest
+            packages: >-
+              libopengl-dev libglx-dev libx11-dev
+            cmake_flags: "-DMENTAL_DISABLE_VULKAN=ON -DMENTAL_DISABLE_OPENCL=ON"
+
+          - name: "Linux arm64 (no Vulkan)"
+            runner: ubuntu-24.04-arm
+            packages: >-
+              libopengl-dev libglx-dev libx11-dev
+              ocl-icd-opencl-dev mesa-opencl-icd
+              pocl-opencl-icd
+            cmake_flags: "-DMENTAL_DISABLE_VULKAN=ON"
+
+          - name: "Linux arm64 (no Vulkan/OpenCL)"
+            runner: ubuntu-24.04-arm
+            packages: >-
+              libopengl-dev libglx-dev libx11-dev
+            cmake_flags: "-DMENTAL_DISABLE_VULKAN=ON -DMENTAL_DISABLE_OPENCL=ON"
+
+          # ============================================================
+          #  PoCL-only: everything else disabled, CPU-only compute
+          # ============================================================
+          - name: "Linux amd64 (PoCL only)"
+            runner: ubuntu-latest
+            packages: "pocl-opencl-icd ocl-icd-opencl-dev"
+            cmake_flags: >-
+              -DMENTAL_DISABLE_VULKAN=ON
+              -DMENTAL_DISABLE_OPENCL=ON
+              -DMENTAL_DISABLE_OPENGL=ON
+
+          - name: "Linux arm64 (PoCL only)"
+            runner: ubuntu-24.04-arm
+            packages: "pocl-opencl-icd ocl-icd-opencl-dev"
+            cmake_flags: >-
+              -DMENTAL_DISABLE_VULKAN=ON
+              -DMENTAL_DISABLE_OPENCL=ON
+              -DMENTAL_DISABLE_OPENGL=ON
+
+          - name: "Windows amd64 (PoCL only)"
+            runner: windows-latest
+            packages: ""
+            cmake_flags: >-
+              -DMENTAL_DISABLE_D3D12=ON
+              -DMENTAL_DISABLE_VULKAN=ON
+              -DMENTAL_DISABLE_OPENCL=ON
+              -DMENTAL_DISABLE_OPENGL=ON
+
+          - name: "macOS arm64 (PoCL only)"
+            runner: macos-14
+            packages: ""
+            cmake_flags: >-
+              -DMENTAL_DISABLE_METAL=ON
+              -DMENTAL_DISABLE_OPENCL=ON
+
+          # ============================================================
+          #  Zero-backend: everything disabled, expect graceful error
+          # ============================================================
+          - name: "Linux amd64 (no backends)"
+            runner: ubuntu-latest
+            packages: ""
+            cmake_flags: >-
+              -DMENTAL_DISABLE_VULKAN=ON
+              -DMENTAL_DISABLE_OPENCL=ON
+              -DMENTAL_DISABLE_OPENGL=ON
+              -DMENTAL_DISABLE_POCL=ON
+
+          - name: "Windows amd64 (no backends)"
+            runner: windows-latest
+            packages: ""
+            cmake_flags: >-
+              -DMENTAL_DISABLE_D3D12=ON
+              -DMENTAL_DISABLE_VULKAN=ON
+              -DMENTAL_DISABLE_OPENCL=ON
+              -DMENTAL_DISABLE_OPENGL=ON
+              -DMENTAL_DISABLE_POCL=ON
+
+          - name: "macOS arm64 (no backends)"
+            runner: macos-14
+            packages: ""
+            cmake_flags: >-
+              -DMENTAL_DISABLE_METAL=ON
+              -DMENTAL_DISABLE_OPENCL=ON
+              -DMENTAL_DISABLE_POCL=ON
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---- Linux packages ----
+      - name: Install packages (Linux)
+        if: runner.os == 'Linux' && matrix.packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+
+      # ---- macOS: PoCL via Homebrew when needed ----
+      - name: Install PoCL (macOS)
+        if: runner.os == 'macOS' && contains(matrix.name, 'PoCL')
+        run: brew install pocl
+
+      # ---- Windows: Vulkan SDK when Vulkan is not disabled ----
+      - name: Install Vulkan SDK (Windows)
+        if: runner.os == 'Windows' && !contains(matrix.cmake_flags, 'DISABLE_VULKAN')
+        uses: humbletim/setup-vulkan-sdk@v1.2.0
+        with:
+          vulkan-query-version: latest
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      # ---- Configure ----
+      - name: Configure
+        run: >
+          cmake -B build
+          -DBUILD_TESTING=ON
+          ${{ matrix.cmake_flags }}
+
+      # ---- Build ----
+      - name: Build
+        run: cmake --build build --parallel
+
+      # ---- Test ----
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure --timeout 120
+
+      # ---- Report backend selection ----
+      - name: Report enabled backends
+        if: always()
+        run: |
+          echo "::group::CMake configure log"
+          cat build/CMakeCache.txt | grep -E "MENTAL_HAS_|MENTAL_DISABLE_" || true
+          echo "::endgroup::"
