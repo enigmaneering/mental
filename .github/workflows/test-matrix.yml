@@ -22,18 +22,55 @@ jobs:
       matrix:
         include:
           # ============================================================
-          #  Full-stack: all available backends enabled
+          #  macOS — Metal + OpenCL ship with Xcode, always present.
+          #  Only variation: whether PoCL is also installed (Homebrew).
           # ============================================================
-          - name: "macOS arm64 (full)"
+          - name: "macOS arm64"
             runner: macos-14
             packages: ""
-            cmake_flags: ""
+            install_vulkan: false
+            install_pocl_brew: false
 
-          - name: "macOS amd64 (full)"
+          - name: "macOS amd64"
             runner: macos-13
             packages: ""
-            cmake_flags: ""
+            install_vulkan: false
+            install_pocl_brew: false
 
+          - name: "macOS arm64 + PoCL"
+            runner: macos-14
+            packages: ""
+            install_vulkan: false
+            install_pocl_brew: true
+
+          # ============================================================
+          #  Windows — D3D12 ships with the Windows SDK, always present.
+          #  Variations: whether Vulkan SDK is also installed.
+          # ============================================================
+          - name: "Windows amd64"
+            runner: windows-latest
+            packages: ""
+            install_vulkan: false
+            install_pocl_brew: false
+
+          - name: "Windows arm64"
+            runner: windows-11-arm
+            packages: ""
+            install_vulkan: false
+            install_pocl_brew: false
+
+          - name: "Windows amd64 + Vulkan"
+            runner: windows-latest
+            packages: ""
+            install_vulkan: true
+            install_pocl_brew: false
+
+          # ============================================================
+          #  Linux — everything is package-controlled.
+          #  This is where the real fallback variety lives.
+          # ============================================================
+
+          # Full: Vulkan + OpenCL + OpenGL + PoCL all present
           - name: "Linux amd64 (full)"
             runner: ubuntu-latest
             packages: >-
@@ -41,7 +78,8 @@ jobs:
               libopengl-dev libglx-dev libx11-dev
               ocl-icd-opencl-dev mesa-opencl-icd
               pocl-opencl-icd
-            cmake_flags: ""
+            install_vulkan: false
+            install_pocl_brew: false
 
           - name: "Linux arm64 (full)"
             runner: ubuntu-24.04-arm
@@ -50,69 +88,20 @@ jobs:
               libopengl-dev libglx-dev libx11-dev
               ocl-icd-opencl-dev mesa-opencl-icd
               pocl-opencl-icd
-            cmake_flags: ""
+            install_vulkan: false
+            install_pocl_brew: false
 
-          - name: "Windows amd64 (full)"
-            runner: windows-latest
-            packages: ""
-            cmake_flags: ""
-
-          - name: "Windows arm64 (full)"
-            runner: windows-11-arm
-            packages: ""
-            cmake_flags: ""
-
-          # ============================================================
-          #  Fallback: disable primary, test next backend in chain
-          # ============================================================
-
-          # macOS: Metal -> [OpenCL]
-          - name: "macOS arm64 (no Metal)"
-            runner: macos-14
-            packages: ""
-            cmake_flags: "-DMENTAL_DISABLE_METAL=ON"
-
-          - name: "macOS amd64 (no Metal)"
-            runner: macos-13
-            packages: ""
-            cmake_flags: "-DMENTAL_DISABLE_METAL=ON"
-
-          # Windows: D3D12 -> [Vulkan]
-          - name: "Windows amd64 (no D3D12)"
-            runner: windows-latest
-            packages: ""
-            cmake_flags: "-DMENTAL_DISABLE_D3D12=ON"
-
-          # Windows: D3D12, Vulkan -> [OpenCL]
-          - name: "Windows amd64 (no D3D12/Vulkan)"
-            runner: windows-latest
-            packages: ""
-            cmake_flags: "-DMENTAL_DISABLE_D3D12=ON -DMENTAL_DISABLE_VULKAN=ON"
-
-          # Windows: D3D12, Vulkan, OpenCL -> [OpenGL]
-          - name: "Windows amd64 (no D3D12/Vulkan/OpenCL)"
-            runner: windows-latest
-            packages: ""
-            cmake_flags: >-
-              -DMENTAL_DISABLE_D3D12=ON
-              -DMENTAL_DISABLE_VULKAN=ON
-              -DMENTAL_DISABLE_OPENCL=ON
-
-          # Linux: Vulkan -> [OpenCL]
+          # No Vulkan: simulates a machine with no Vulkan drivers
+          # (older hardware, minimal server install, embedded Linux).
+          # OpenCL should take over.
           - name: "Linux amd64 (no Vulkan)"
             runner: ubuntu-latest
             packages: >-
               libopengl-dev libglx-dev libx11-dev
               ocl-icd-opencl-dev mesa-opencl-icd
               pocl-opencl-icd
-            cmake_flags: "-DMENTAL_DISABLE_VULKAN=ON"
-
-          # Linux: Vulkan, OpenCL -> [OpenGL via Mesa llvmpipe]
-          - name: "Linux amd64 (no Vulkan/OpenCL)"
-            runner: ubuntu-latest
-            packages: >-
-              libopengl-dev libglx-dev libx11-dev
-            cmake_flags: "-DMENTAL_DISABLE_VULKAN=ON -DMENTAL_DISABLE_OPENCL=ON"
+            install_vulkan: false
+            install_pocl_brew: false
 
           - name: "Linux arm64 (no Vulkan)"
             runner: ubuntu-24.04-arm
@@ -120,78 +109,73 @@ jobs:
               libopengl-dev libglx-dev libx11-dev
               ocl-icd-opencl-dev mesa-opencl-icd
               pocl-opencl-icd
-            cmake_flags: "-DMENTAL_DISABLE_VULKAN=ON"
+            install_vulkan: false
+            install_pocl_brew: false
 
-          - name: "Linux arm64 (no Vulkan/OpenCL)"
+          # No Vulkan, no OpenCL: only OpenGL available.
+          # Tests the OpenGL 4.3+ compute path via Mesa llvmpipe.
+          - name: "Linux amd64 (OpenGL only)"
+            runner: ubuntu-latest
+            packages: >-
+              libopengl-dev libglx-dev libx11-dev
+            install_vulkan: false
+            install_pocl_brew: false
+
+          - name: "Linux arm64 (OpenGL only)"
             runner: ubuntu-24.04-arm
             packages: >-
               libopengl-dev libglx-dev libx11-dev
-            cmake_flags: "-DMENTAL_DISABLE_VULKAN=ON -DMENTAL_DISABLE_OPENCL=ON"
+            install_vulkan: false
+            install_pocl_brew: false
 
-          # ============================================================
-          #  PoCL-only: everything else disabled, CPU-only compute
-          # ============================================================
-          - name: "Linux amd64 (PoCL only)"
+          # OpenCL only: no Vulkan drivers, no OpenGL dev headers.
+          # Simulates a system with a proprietary OpenCL runtime
+          # but nothing else (some HPC / cloud GPU nodes).
+          - name: "Linux amd64 (OpenCL only)"
             runner: ubuntu-latest
-            packages: "pocl-opencl-icd ocl-icd-opencl-dev"
-            cmake_flags: >-
-              -DMENTAL_DISABLE_VULKAN=ON
-              -DMENTAL_DISABLE_OPENCL=ON
-              -DMENTAL_DISABLE_OPENGL=ON
+            packages: >-
+              ocl-icd-opencl-dev mesa-opencl-icd
+            install_vulkan: false
+            install_pocl_brew: false
 
-          - name: "Linux arm64 (PoCL only)"
+          - name: "Linux arm64 (OpenCL only)"
             runner: ubuntu-24.04-arm
-            packages: "pocl-opencl-icd ocl-icd-opencl-dev"
-            cmake_flags: >-
-              -DMENTAL_DISABLE_VULKAN=ON
-              -DMENTAL_DISABLE_OPENCL=ON
-              -DMENTAL_DISABLE_OPENGL=ON
+            packages: >-
+              ocl-icd-opencl-dev mesa-opencl-icd
+            install_vulkan: false
+            install_pocl_brew: false
 
-          - name: "Windows amd64 (PoCL only)"
-            runner: windows-latest
-            packages: ""
-            cmake_flags: >-
-              -DMENTAL_DISABLE_D3D12=ON
-              -DMENTAL_DISABLE_VULKAN=ON
-              -DMENTAL_DISABLE_OPENCL=ON
-              -DMENTAL_DISABLE_OPENGL=ON
+          # PoCL via system package: no Vulkan, no OpenGL dev headers.
+          # The system OpenCL ICD loader picks up PoCL's CPU devices.
+          # Tests that OpenCL backend handles CPU-only devices correctly.
+          - name: "Linux amd64 (PoCL via system OpenCL)"
+            runner: ubuntu-latest
+            packages: >-
+              ocl-icd-opencl-dev pocl-opencl-icd
+            install_vulkan: false
+            install_pocl_brew: false
 
-          - name: "macOS arm64 (PoCL only)"
-            runner: macos-14
-            packages: ""
-            cmake_flags: >-
-              -DMENTAL_DISABLE_METAL=ON
-              -DMENTAL_DISABLE_OPENCL=ON
+          - name: "Linux arm64 (PoCL via system OpenCL)"
+            runner: ubuntu-24.04-arm
+            packages: >-
+              ocl-icd-opencl-dev pocl-opencl-icd
+            install_vulkan: false
+            install_pocl_brew: false
 
-          # ============================================================
-          #  Zero-backend: everything disabled, expect graceful error
-          # ============================================================
-          - name: "Linux amd64 (no backends)"
+          # Bare: no GPU packages installed at all.
+          # Library should build, report MENTAL_ERROR_NO_DEVICES,
+          # and not crash. Transpilation-only tests still pass.
+          - name: "Linux amd64 (bare)"
             runner: ubuntu-latest
             packages: ""
-            cmake_flags: >-
-              -DMENTAL_DISABLE_VULKAN=ON
-              -DMENTAL_DISABLE_OPENCL=ON
-              -DMENTAL_DISABLE_OPENGL=ON
-              -DMENTAL_DISABLE_POCL=ON
+            install_vulkan: false
+            install_pocl_brew: false
 
-          - name: "Windows amd64 (no backends)"
-            runner: windows-latest
+          - name: "Linux arm64 (bare)"
+            runner: ubuntu-24.04-arm
             packages: ""
-            cmake_flags: >-
-              -DMENTAL_DISABLE_D3D12=ON
-              -DMENTAL_DISABLE_VULKAN=ON
-              -DMENTAL_DISABLE_OPENCL=ON
-              -DMENTAL_DISABLE_OPENGL=ON
-              -DMENTAL_DISABLE_POCL=ON
-
-          - name: "macOS arm64 (no backends)"
-            runner: macos-14
-            packages: ""
-            cmake_flags: >-
-              -DMENTAL_DISABLE_METAL=ON
-              -DMENTAL_DISABLE_OPENCL=ON
-              -DMENTAL_DISABLE_POCL=ON
+            install_vulkan: false
+            install_pocl_brew: false
 
     steps:
       - name: Checkout
@@ -204,14 +188,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.packages }}
 
-      # ---- macOS: PoCL via Homebrew when needed ----
+      # ---- macOS: PoCL via Homebrew ----
       - name: Install PoCL (macOS)
-        if: runner.os == 'macOS' && contains(matrix.name, 'PoCL')
+        if: matrix.install_pocl_brew
         run: brew install pocl
 
-      # ---- Windows: Vulkan SDK when Vulkan is not disabled ----
+      # ---- Windows: Vulkan SDK ----
       - name: Install Vulkan SDK (Windows)
-        if: runner.os == 'Windows' && !contains(matrix.cmake_flags, 'DISABLE_VULKAN')
+        if: matrix.install_vulkan
         uses: humbletim/setup-vulkan-sdk@v1.2.0
         with:
           vulkan-query-version: latest
@@ -220,10 +204,7 @@ jobs:
 
       # ---- Configure ----
       - name: Configure
-        run: >
-          cmake -B build
-          -DBUILD_TESTING=ON
-          ${{ matrix.cmake_flags }}
+        run: cmake -B build -DBUILD_TESTING=ON
 
       # ---- Build ----
       - name: Build
@@ -234,10 +215,13 @@ jobs:
         working-directory: build
         run: ctest --output-on-failure --timeout 120
 
-      # ---- Report backend selection ----
-      - name: Report enabled backends
+      # ---- Report what was discovered ----
+      - name: Report discovered backends
         if: always()
+        shell: bash
         run: |
-          echo "::group::CMake configure log"
-          cat build/CMakeCache.txt | grep -E "MENTAL_HAS_|MENTAL_DISABLE_" || true
-          echo "::endgroup::"
+          echo "### Backend Discovery" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "MENTAL_HAS_" build/CMakeCache.txt || echo "No backends discovered"
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "MENTAL_HAS_" build/CMakeCache.txt >> $GITHUB_STEP_SUMMARY || true
