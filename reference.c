@@ -36,7 +36,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <pthread.h>
+#include "mental_pthread.h"
 #include <time.h>
 #endif
 

@@ -15,7 +15,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
-#include <pthread.h>
+#include "mental_pthread.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #endif

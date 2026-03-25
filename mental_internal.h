@@ -9,7 +9,7 @@
 #define MENTAL_INTERNAL_H
 
 #include "mental.h"
-#include <pthread.h>
+#include "mental_pthread.h"
 
 /* Forward declarations */
 typedef struct mental_backend_t mental_backend;
