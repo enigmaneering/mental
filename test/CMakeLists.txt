@@ -45,6 +45,10 @@ add_executable(test_opencl_direct test_opencl_direct.c)
 target_link_libraries(test_opencl_direct mental-static)
 add_test(NAME OpenCLDirect COMMAND test_opencl_direct)
 
+add_executable(test_transpile test_transpile.c)
+target_link_libraries(test_transpile mental-static)
+add_test(NAME Transpilation COMMAND test_transpile)
+
 add_executable(test_transpile_debug test_transpile_debug.c)
 target_link_libraries(test_transpile_debug mental-static)
 
