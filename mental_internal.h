@@ -111,10 +111,16 @@ struct mental_backend_t {
     void (*viewport_detach)(void* viewport);
 };
 
-/* Backend registry */
+/* Backend registry — each is only available when its SDK was found at build time */
+#ifdef MENTAL_HAS_METAL
 extern mental_backend* metal_backend;
+#endif
+#ifdef MENTAL_HAS_D3D12
 extern mental_backend* d3d12_backend;
+#endif
+#ifdef MENTAL_HAS_VULKAN
 extern mental_backend* vulkan_backend;
+#endif
 #ifdef MENTAL_HAS_OPENCL
 extern mental_backend* opencl_backend;
 #endif

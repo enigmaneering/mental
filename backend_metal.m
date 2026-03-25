@@ -2,6 +2,8 @@
  * Mental - Metal Backend (macOS)
  */
 
+#ifdef MENTAL_HAS_METAL
+
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -446,3 +448,8 @@ static mental_backend g_metal_backend = {
 };
 
 mental_backend* metal_backend = &g_metal_backend;
+
+#else
+/* Metal SDK not available */
+mental_backend* metal_backend = NULL;
+#endif /* MENTAL_HAS_METAL */

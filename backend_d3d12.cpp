@@ -2,7 +2,7 @@
  * Mental - D3D12 Backend (Windows)
  */
 
-#ifdef _WIN32
+#ifdef MENTAL_HAS_D3D12
 
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -829,4 +829,4 @@ mental_backend* d3d12_backend = &g_d3d12_backend;
 
 #else
 mental_backend* d3d12_backend = NULL;
-#endif
+#endif /* MENTAL_HAS_D3D12 */

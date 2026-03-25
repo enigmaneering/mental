@@ -18,29 +18,34 @@ static int g_initialized = 0;
 static _Thread_local mental_error g_last_error = MENTAL_SUCCESS;
 static _Thread_local char g_last_error_message[512] = {0};
 
-/* Backend priority order by platform */
+/* Backend priority order by platform.
+ * Each backend is only in the list when its SDK was found at build time.
+ * The runtime init loop (mental_initialize) tries them in order and picks
+ * the first one that successfully initialises and reports devices. */
 static mental_backend** get_backend_priority(int* count) {
     static mental_backend* backends[4];
     *count = 0;
 
 #if defined(__APPLE__)
     /* macOS: Metal -> OpenCL */
+#ifdef MENTAL_HAS_METAL
     if (metal_backend) backends[(*count)++] = metal_backend;
-#ifdef MENTAL_HAS_OPENCL
-    if (opencl_backend) backends[(*count)++] = opencl_backend;
 #endif
 #elif defined(_WIN32)
     /* Windows: D3D12 -> OpenCL */
+#ifdef MENTAL_HAS_D3D12
     if (d3d12_backend) backends[(*count)++] = d3d12_backend;
-#ifdef MENTAL_HAS_OPENCL
-    if (opencl_backend) backends[(*count)++] = opencl_backend;
 #endif
 #else
     /* Linux: Vulkan -> OpenCL */
+#ifdef MENTAL_HAS_VULKAN
     if (vulkan_backend) backends[(*count)++] = vulkan_backend;
+#endif
+#endif
+
+    /* OpenCL is the universal fallback on every platform */
 #ifdef MENTAL_HAS_OPENCL
     if (opencl_backend) backends[(*count)++] = opencl_backend;
-#endif
 #endif
 
     return backends;

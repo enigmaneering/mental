@@ -34,14 +34,36 @@ set(MENTAL_CXX_SOURCES
     transpile_spirv_cross.cpp
 )
 
-# Platform-specific backends (OpenCL is added conditionally later)
+# Platform-specific backends (all optional — library degrades gracefully)
 if(PLATFORM_DARWIN)
-    list(APPEND MENTAL_SOURCES backend_metal.m)
-    set_source_files_properties(backend_metal.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    find_library(METAL_LIBRARY Metal)
+    if(METAL_LIBRARY)
+        list(APPEND MENTAL_SOURCES backend_metal.m)
+        set_source_files_properties(backend_metal.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+        set(MENTAL_HAS_METAL ON)
+        message(STATUS "Metal found - enabling Metal backend")
+    else()
+        message(STATUS "Metal not found - Metal backend disabled")
+    endif()
 elseif(PLATFORM_WINDOWS)
-    list(APPEND MENTAL_CXX_SOURCES backend_d3d12.cpp)
+    find_library(D3D12_LIBRARY d3d12)
+    find_library(DXGI_LIBRARY dxgi)
+    if(D3D12_LIBRARY AND DXGI_LIBRARY)
+        list(APPEND MENTAL_CXX_SOURCES backend_d3d12.cpp)
+        set(MENTAL_HAS_D3D12 ON)
+        message(STATUS "D3D12 found - enabling D3D12 backend")
+    else()
+        message(STATUS "D3D12 not found - D3D12 backend disabled")
+    endif()
 elseif(PLATFORM_LINUX)
-    list(APPEND MENTAL_CXX_SOURCES backend_vulkan.cpp)
+    find_package(Vulkan)
+    if(Vulkan_FOUND)
+        list(APPEND MENTAL_CXX_SOURCES backend_vulkan.cpp)
+        set(MENTAL_HAS_VULKAN ON)
+        message(STATUS "Vulkan found - enabling Vulkan backend")
+    else()
+        message(STATUS "Vulkan not found - Vulkan backend disabled")
+    endif()
 endif()
 
 # Create both static and dynamic libraries
@@ -74,11 +96,14 @@ target_include_directories(mental PUBLIC
 
 # Platform-specific configurations
 if(PLATFORM_DARWIN)
-    # Metal framework
-    find_library(METAL_LIBRARY Metal)
-    find_library(FOUNDATION_LIBRARY Foundation)
-    find_library(QUARTZCORE_LIBRARY QuartzCore)
-    find_library(APPKIT_LIBRARY AppKit)
+    # Metal framework (already discovered above)
+    if(MENTAL_HAS_METAL)
+        find_library(FOUNDATION_LIBRARY Foundation)
+        find_library(QUARTZCORE_LIBRARY QuartzCore)
+        find_library(APPKIT_LIBRARY AppKit)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_METAL=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_METAL=1)
+    endif()
 
     # OpenCL framework (optional - may be deprecated in future macOS versions)
     find_library(OPENCL_LIBRARY OpenCL)
@@ -89,20 +114,23 @@ if(PLATFORM_DARWIN)
         target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENCL=1)
         message(STATUS "OpenCL found - enabling OpenCL backend")
     else()
-        message(STATUS "OpenCL not found - only Metal backend available")
+        message(STATUS "OpenCL not found")
     endif()
 
-    # Common dependencies for both shared and static
-    set(DARWIN_LIBS
-        ${METAL_LIBRARY} ${FOUNDATION_LIBRARY} ${QUARTZCORE_LIBRARY} ${APPKIT_LIBRARY}
-        c++
-    )
+    if(NOT MENTAL_HAS_METAL AND NOT OPENCL_LIBRARY)
+        message(WARNING "No GPU backend available on macOS - library will report MENTAL_ERROR_NO_DEVICES at runtime")
+    endif()
 
+    # Common dependencies
+    set(DARWIN_LIBS c++)
+    if(MENTAL_HAS_METAL)
+        list(APPEND DARWIN_LIBS ${METAL_LIBRARY} ${FOUNDATION_LIBRARY} ${QUARTZCORE_LIBRARY} ${APPKIT_LIBRARY})
+    endif()
     if(OPENCL_LIBRARY)
         list(APPEND DARWIN_LIBS ${OPENCL_LIBRARY})
     endif()
 
-    # glslang and SPIRV-Cross static libraries (only for mental-static)
+    # glslang and SPIRV-Cross static libraries
     # Link order matters: dependencies must come after libraries that use them
     set(DARWIN_STATIC_LIBS
         ${EXTERNAL_DIR}/glslang/libglslang.a
@@ -123,17 +151,18 @@ if(PLATFORM_DARWIN)
         ${EXTERNAL_DIR}/glslang/libSPIRV-Tools.a
     )
 
-    # Link shared library (needs glslang/SPIRV-Cross too for symbols)
     target_link_libraries(mental PUBLIC ${DARWIN_LIBS} ${DARWIN_STATIC_LIBS})
-
-    # Link static library (with all static dependencies embedded)
     target_link_libraries(mental-static PUBLIC ${DARWIN_LIBS} ${DARWIN_STATIC_LIBS})
 
 elseif(PLATFORM_WINDOWS)
-    # OpenCL (optional on Windows - D3D12 is the primary backend)
-    find_package(OpenCL)
+    # D3D12 (already discovered above)
+    if(MENTAL_HAS_D3D12)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_D3D12=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_D3D12=1)
+    endif()
 
-    # Add OpenCL backend source if OpenCL is available
+    # OpenCL (optional)
+    find_package(OpenCL)
     if(OpenCL_FOUND)
         target_sources(mental-static PRIVATE backend_opencl.c)
         target_sources(mental PRIVATE backend_opencl.c)
@@ -141,21 +170,24 @@ elseif(PLATFORM_WINDOWS)
         target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENCL=1)
         message(STATUS "OpenCL found - enabling OpenCL backend")
     else()
-        message(STATUS "OpenCL not found - only D3D12 backend available")
+        message(STATUS "OpenCL not found")
     endif()
 
-    # Common dependencies for both shared and static
-    set(WINDOWS_LIBS
-        d3d12.lib dxgi.lib
-    )
+    if(NOT MENTAL_HAS_D3D12 AND NOT OpenCL_FOUND)
+        message(WARNING "No GPU backend available on Windows - library will report MENTAL_ERROR_NO_DEVICES at runtime")
+    endif()
 
+    # Common dependencies
+    set(WINDOWS_LIBS)
+    if(MENTAL_HAS_D3D12)
+        list(APPEND WINDOWS_LIBS d3d12.lib dxgi.lib)
+    endif()
     if(OpenCL_FOUND)
         list(APPEND WINDOWS_LIBS OpenCL::OpenCL)
     endif()
 
-    # glslang and SPIRV-Cross static libraries (only for mental-static)
+    # glslang and SPIRV-Cross static libraries
     # Link order matters: dependencies must come after libraries that use them
-    # MinGW uses .a extension for static libraries
     set(WINDOWS_STATIC_LIBS
         ${EXTERNAL_DIR}/glslang/libglslang.a
         ${EXTERNAL_DIR}/glslang/libglslang-default-resource-limits.a
@@ -175,17 +207,17 @@ elseif(PLATFORM_WINDOWS)
         ${EXTERNAL_DIR}/glslang/libSPIRV-Tools.a
     )
 
-    # Link shared library (needs glslang/SPIRV-Cross too for symbols)
     target_link_libraries(mental PUBLIC ${WINDOWS_LIBS} ${WINDOWS_STATIC_LIBS})
-
-    # Link static library (with all static dependencies embedded)
     target_link_libraries(mental-static PUBLIC ${WINDOWS_LIBS} ${WINDOWS_STATIC_LIBS})
 
 elseif(PLATFORM_LINUX)
-    # Vulkan
-    find_package(Vulkan REQUIRED)
+    # Vulkan (already discovered above)
+    if(MENTAL_HAS_VULKAN)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_VULKAN=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_VULKAN=1)
+    endif()
 
-    # OpenCL (optional - not all Linux systems have it)
+    # OpenCL (optional)
     find_package(OpenCL)
     if(OpenCL_FOUND)
         target_sources(mental-static PRIVATE backend_opencl.c)
@@ -194,20 +226,23 @@ elseif(PLATFORM_LINUX)
         target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENCL=1)
         message(STATUS "OpenCL found - enabling OpenCL backend")
     else()
-        message(STATUS "OpenCL not found - only Vulkan backend available")
+        message(STATUS "OpenCL not found")
     endif()
 
-    # Common dependencies for both shared and static
-    set(LINUX_LIBS
-        Vulkan::Vulkan
-        stdc++ pthread rt
-    )
+    if(NOT MENTAL_HAS_VULKAN AND NOT OpenCL_FOUND)
+        message(WARNING "No GPU backend available on Linux - library will report MENTAL_ERROR_NO_DEVICES at runtime")
+    endif()
 
+    # Common dependencies
+    set(LINUX_LIBS stdc++ pthread rt)
+    if(MENTAL_HAS_VULKAN)
+        list(APPEND LINUX_LIBS Vulkan::Vulkan)
+    endif()
     if(OpenCL_FOUND)
         list(APPEND LINUX_LIBS OpenCL::OpenCL)
     endif()
 
-    # glslang and SPIRV-Cross static libraries (only for mental-static)
+    # glslang and SPIRV-Cross static libraries
     # Link order matters: dependencies must come after libraries that use them
     set(LINUX_STATIC_LIBS
         ${EXTERNAL_DIR}/glslang/libglslang.a
@@ -228,10 +263,7 @@ elseif(PLATFORM_LINUX)
         ${EXTERNAL_DIR}/glslang/libSPIRV-Tools.a
     )
 
-    # Link shared library (needs glslang/SPIRV-Cross too for symbols)
     target_link_libraries(mental PUBLIC ${LINUX_LIBS} ${LINUX_STATIC_LIBS})
-
-    # Link static library (with all static dependencies embedded)
     target_link_libraries(mental-static PUBLIC ${LINUX_LIBS} ${LINUX_STATIC_LIBS})
 endif()
 

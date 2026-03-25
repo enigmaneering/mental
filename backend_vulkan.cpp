@@ -2,6 +2,8 @@
  * Mental - Vulkan Backend (Linux, Windows)
  */
 
+#ifdef MENTAL_HAS_VULKAN
+
 #include <vulkan/vulkan.h>
 #include "mental_internal.h"
 #include <vector>
@@ -697,3 +699,8 @@ static mental_backend g_vulkan_backend = {
 };
 
 mental_backend* vulkan_backend = &g_vulkan_backend;
+
+#else
+/* Vulkan SDK not available */
+mental_backend* vulkan_backend = NULL;
+#endif /* MENTAL_HAS_VULKAN */
