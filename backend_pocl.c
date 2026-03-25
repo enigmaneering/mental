@@ -111,7 +111,7 @@ static void* g_pocl_lib = NULL;
 
 static int load_pocl_symbols(void) {
 #define LOAD(ptr, name) do { \
-    ptr = (typeof(ptr))POCL_DLSYM(g_pocl_lib, #name); \
+    *(void**)(&ptr) = (void*)POCL_DLSYM(g_pocl_lib, #name); \
     if (!ptr) return -1; \
 } while (0)
 

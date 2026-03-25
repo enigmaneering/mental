@@ -3,7 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <pthread.h>
+#endif
 
 #define ASSERT(cond, msg) do { \
     if (!(cond)) { \
@@ -30,6 +32,7 @@ const char* multiply_shader =
     "    output_buf.data[idx] = input_buf.data[idx] * 2.0;\n"
     "}\n";
 
+#ifndef _WIN32
 /* Thread-safety test data */
 typedef struct {
     mental_reference ref;
@@ -52,6 +55,7 @@ void* thread_worker(void* arg) {
 
     return NULL;
 }
+#endif
 
 int main(void) {
     printf("Testing integration scenarios...\n");
@@ -137,6 +141,7 @@ int main(void) {
 
     mental_reference_close(clone);
 
+#ifndef _WIN32
     /* Test 4: Thread safety */
     printf("  Test 4: Thread safety\n");
 
@@ -162,6 +167,9 @@ int main(void) {
     }
 
     mental_reference_close(shared_ref);
+#else
+    printf("  Test 4: Thread safety (SKIPPED on Windows)\n");
+#endif
 
     /* Test 5: Error recovery */
     printf("  Test 5: Error recovery\n");

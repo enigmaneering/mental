@@ -256,7 +256,7 @@ static void destroy_hidden_context(void) {
 
 static int load_gl_functions(void) {
 #define LOAD(ptr, name) do { \
-    ptr = (typeof(ptr))MENTAL_GL_GETPROC(#name); \
+    *(void**)(&ptr) = (void*)MENTAL_GL_GETPROC(#name); \
     if (!ptr) return -1; \
 } while (0)
 

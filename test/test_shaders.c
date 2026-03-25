@@ -3,7 +3,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <unistd.h>
+#else
+#include <direct.h>
+#define getcwd _getcwd
+#endif
 
 #define ASSERT(cond, msg) do { \
     if (!(cond)) { \
