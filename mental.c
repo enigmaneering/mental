@@ -23,7 +23,7 @@ static _Thread_local char g_last_error_message[512] = {0};
  * The runtime init loop (mental_initialize) tries them in order and picks
  * the first one that successfully initialises and reports devices. */
 static mental_backend** get_backend_priority(int* count) {
-    static mental_backend* backends[4];
+    static mental_backend* backends[5];
     *count = 0;
 
 #if defined(__APPLE__)
@@ -43,9 +43,12 @@ static mental_backend** get_backend_priority(int* count) {
 #endif
 #endif
 
-    /* OpenCL is the universal fallback on every platform */
+    /* Universal fallbacks — OpenCL first, then OpenGL (requires 4.3+) */
 #ifdef MENTAL_HAS_OPENCL
     if (opencl_backend) backends[(*count)++] = opencl_backend;
+#endif
+#ifdef MENTAL_HAS_OPENGL
+    if (opengl_backend) backends[(*count)++] = opengl_backend;
 #endif
 
     return backends;
@@ -137,6 +140,7 @@ const char* mental_device_api_name(mental_device dev) {
         case MENTAL_API_D3D12: return "D3D12";
         case MENTAL_API_VULKAN: return "Vulkan";
         case MENTAL_API_OPENCL: return "OpenCL";
+        case MENTAL_API_OPENGL: return "OpenGL";
         default: return "Unknown";
     }
 }

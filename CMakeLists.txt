@@ -66,6 +66,18 @@ elseif(PLATFORM_LINUX)
     endif()
 endif()
 
+# OpenGL compute backend (Linux + Windows only — macOS capped at 4.1, below the 4.3 floor)
+if(NOT PLATFORM_DARWIN)
+    find_package(OpenGL)
+    if(OpenGL_FOUND OR OPENGL_FOUND)
+        list(APPEND MENTAL_SOURCES backend_opengl.c)
+        set(MENTAL_HAS_OPENGL ON)
+        message(STATUS "OpenGL found - enabling OpenGL compute backend (requires 4.3+ at runtime)")
+    else()
+        message(STATUS "OpenGL not found - OpenGL backend disabled")
+    endif()
+endif()
+
 # Create both static and dynamic libraries
 add_library(mental-static STATIC
     ${MENTAL_SOURCES}
@@ -173,7 +185,13 @@ elseif(PLATFORM_WINDOWS)
         message(STATUS "OpenCL not found")
     endif()
 
-    if(NOT MENTAL_HAS_D3D12 AND NOT OpenCL_FOUND)
+    # OpenGL (already discovered above — shared across Linux/Windows)
+    if(MENTAL_HAS_OPENGL)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_OPENGL=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENGL=1)
+    endif()
+
+    if(NOT MENTAL_HAS_D3D12 AND NOT OpenCL_FOUND AND NOT MENTAL_HAS_OPENGL)
         message(WARNING "No GPU backend available on Windows - library will report MENTAL_ERROR_NO_DEVICES at runtime")
     endif()
 
@@ -184,6 +202,9 @@ elseif(PLATFORM_WINDOWS)
     endif()
     if(OpenCL_FOUND)
         list(APPEND WINDOWS_LIBS OpenCL::OpenCL)
+    endif()
+    if(MENTAL_HAS_OPENGL)
+        list(APPEND WINDOWS_LIBS OpenGL::GL)
     endif()
 
     # glslang and SPIRV-Cross static libraries
@@ -229,7 +250,13 @@ elseif(PLATFORM_LINUX)
         message(STATUS "OpenCL not found")
     endif()
 
-    if(NOT MENTAL_HAS_VULKAN AND NOT OpenCL_FOUND)
+    # OpenGL (already discovered above — shared across Linux/Windows)
+    if(MENTAL_HAS_OPENGL)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_OPENGL=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENGL=1)
+    endif()
+
+    if(NOT MENTAL_HAS_VULKAN AND NOT OpenCL_FOUND AND NOT MENTAL_HAS_OPENGL)
         message(WARNING "No GPU backend available on Linux - library will report MENTAL_ERROR_NO_DEVICES at runtime")
     endif()
 
@@ -240,6 +267,9 @@ elseif(PLATFORM_LINUX)
     endif()
     if(OpenCL_FOUND)
         list(APPEND LINUX_LIBS OpenCL::OpenCL)
+    endif()
+    if(MENTAL_HAS_OPENGL)
+        list(APPEND LINUX_LIBS OpenGL::GL X11)
     endif()
 
     # glslang and SPIRV-Cross static libraries

@@ -202,6 +202,7 @@ static int test_api_mapping(void) {
     ASSERT(mental_api_to_language(MENTAL_API_D3D12)  == MENTAL_LANG_HLSL, "D3D12 -> HLSL");
     ASSERT(mental_api_to_language(MENTAL_API_VULKAN) == MENTAL_LANG_GLSL, "Vulkan -> GLSL");
     ASSERT(mental_api_to_language(MENTAL_API_OPENCL) == MENTAL_LANG_GLSL, "OpenCL -> GLSL");
+    ASSERT(mental_api_to_language(MENTAL_API_OPENGL) == MENTAL_LANG_GLSL, "OpenGL -> GLSL");
     PASS("api_to_language_mapping");
 }
 
