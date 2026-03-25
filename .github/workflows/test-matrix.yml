@@ -20,41 +20,34 @@ jobs:
         include:
           # ============================================================
           #  macOS — Metal + OpenCL ship with Xcode, always present.
-          #  Only variation: whether PoCL is also installed (Homebrew).
           # ============================================================
           - name: "macOS arm64"
             runner: macos-14
             packages: ""
             install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: false
 
           - name: "macOS amd64"
             runner: macos-13
             packages: ""
             install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: false
 
           # ============================================================
           #  Windows — D3D12 ships with the Windows SDK, always present.
-          #  Variations: whether Vulkan SDK is also installed.
+          #  Variation: whether Vulkan SDK is also installed.
           # ============================================================
           - name: "Windows amd64"
             runner: windows-latest
             packages: ""
             install_vulkan: false
-            install_pocl_brew: false
-
-          - name: "Windows arm64"
-            runner: windows-11-arm
-            packages: ""
-            install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: false
 
           - name: "Windows amd64 + Vulkan"
             runner: windows-latest
             packages: ""
             install_vulkan: true
-            install_pocl_brew: false
+            needs_xvfb: false
 
           # ============================================================
           #  Linux — everything is package-controlled.
@@ -65,22 +58,24 @@ jobs:
           - name: "Linux amd64 (full)"
             runner: ubuntu-latest
             packages: >-
-              libvulkan-dev vulkan-tools mesa-vulkan-drivers
+              libvulkan-dev mesa-vulkan-drivers
               libopengl-dev libglx-dev libx11-dev
               ocl-icd-opencl-dev mesa-opencl-icd
               pocl-opencl-icd
+              xvfb
             install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: true
 
           - name: "Linux arm64 (full)"
             runner: ubuntu-24.04-arm
             packages: >-
-              libvulkan-dev vulkan-tools mesa-vulkan-drivers
+              libvulkan-dev mesa-vulkan-drivers
               libopengl-dev libglx-dev libx11-dev
               ocl-icd-opencl-dev mesa-opencl-icd
               pocl-opencl-icd
+              xvfb
             install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: true
 
           # No Vulkan: simulates a machine with no Vulkan drivers
           # (older hardware, minimal server install, embedded Linux).
@@ -91,8 +86,9 @@ jobs:
               libopengl-dev libglx-dev libx11-dev
               ocl-icd-opencl-dev mesa-opencl-icd
               pocl-opencl-icd
+              xvfb
             install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: true
 
           - name: "Linux arm64 (no Vulkan)"
             runner: ubuntu-24.04-arm
@@ -100,8 +96,9 @@ jobs:
               libopengl-dev libglx-dev libx11-dev
               ocl-icd-opencl-dev mesa-opencl-icd
               pocl-opencl-icd
+              xvfb
             install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: true
 
           # No Vulkan, no OpenCL: only OpenGL available.
           # Tests the OpenGL 4.3+ compute path via Mesa llvmpipe.
@@ -109,15 +106,17 @@ jobs:
             runner: ubuntu-latest
             packages: >-
               libopengl-dev libglx-dev libx11-dev
+              xvfb
             install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: true
 
           - name: "Linux arm64 (OpenGL only)"
             runner: ubuntu-24.04-arm
             packages: >-
               libopengl-dev libglx-dev libx11-dev
+              xvfb
             install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: true
 
           # OpenCL only: no Vulkan drivers, no OpenGL dev headers.
           # Simulates a system with a proprietary OpenCL runtime
@@ -127,14 +126,14 @@ jobs:
             packages: >-
               ocl-icd-opencl-dev mesa-opencl-icd
             install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: false
 
           - name: "Linux arm64 (OpenCL only)"
             runner: ubuntu-24.04-arm
             packages: >-
               ocl-icd-opencl-dev mesa-opencl-icd
             install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: false
 
           # PoCL via system package: no Vulkan, no OpenGL dev headers.
           # The system OpenCL ICD loader picks up PoCL's CPU devices.
@@ -144,14 +143,14 @@ jobs:
             packages: >-
               ocl-icd-opencl-dev pocl-opencl-icd
             install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: false
 
           - name: "Linux arm64 (PoCL via system OpenCL)"
             runner: ubuntu-24.04-arm
             packages: >-
               ocl-icd-opencl-dev pocl-opencl-icd
             install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: false
 
           # Bare: no GPU packages installed at all.
           # Library should build, report MENTAL_ERROR_NO_DEVICES,
@@ -160,13 +159,13 @@ jobs:
             runner: ubuntu-latest
             packages: ""
             install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: false
 
           - name: "Linux arm64 (bare)"
             runner: ubuntu-24.04-arm
             packages: ""
             install_vulkan: false
-            install_pocl_brew: false
+            needs_xvfb: false
 
     steps:
       - name: Checkout
@@ -178,11 +177,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.packages }}
-
-      # ---- macOS: PoCL via Homebrew ----
-      - name: Install PoCL (macOS)
-        if: matrix.install_pocl_brew
-        run: brew install pocl
 
       # ---- Windows: Vulkan SDK ----
       - name: Install Vulkan SDK (Windows)
@@ -201,10 +195,16 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
-      # ---- Test ----
+      # ---- Test (with virtual X server when OpenGL needs it) ----
       - name: Test
+        if: ${{ !matrix.needs_xvfb }}
         working-directory: build
         run: ctest --output-on-failure --timeout 120
+
+      - name: Test (with Xvfb)
+        if: ${{ matrix.needs_xvfb }}
+        working-directory: build
+        run: xvfb-run --auto-servernum ctest --output-on-failure --timeout 120
 
       # ---- Report what was discovered ----
       - name: Report discovered backends
@@ -213,6 +213,5 @@ jobs:
         run: |
           echo "### Backend Discovery" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          grep -E "MENTAL_HAS_" build/CMakeCache.txt || echo "No backends discovered"
+          grep -E "MENTAL_HAS_" build/CMakeCache.txt >> $GITHUB_STEP_SUMMARY || echo "No backends discovered" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          grep -E "MENTAL_HAS_" build/CMakeCache.txt >> $GITHUB_STEP_SUMMARY || true
