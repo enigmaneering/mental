@@ -32,8 +32,19 @@
 #  define MENTAL_GL_GETPROC(name) glXGetProcAddressARB((const GLubyte*)(name))
 #endif
 
-/* glext.h may or may not be present — define the tokens we need ourselves
- * if they are missing, which keeps us free of header-version headaches. */
+/* glext.h may or may not be present — define the tokens and types we
+ * need ourselves if they are missing.  Windows/MinGW gl.h only covers
+ * OpenGL 1.1 and lacks all modern types and constants. */
+
+/* Modern GL types missing from Windows/MinGW gl.h */
+#ifndef GL_VERSION_1_5
+typedef ptrdiff_t GLsizeiptr;
+typedef ptrdiff_t GLintptr;
+#endif
+#ifndef GL_VERSION_2_0
+typedef char GLchar;
+#endif
+
 #ifndef GL_COMPUTE_SHADER
 #define GL_COMPUTE_SHADER                 0x91B9
 #endif
@@ -69,6 +80,15 @@
 #endif
 #ifndef GL_RENDERER
 #define GL_RENDERER                       0x1F01
+#endif
+#ifndef GL_COPY_READ_BUFFER
+#define GL_COPY_READ_BUFFER               0x8F36
+#endif
+#ifndef GL_SHADER_STORAGE_BARRIER_BIT
+#define GL_SHADER_STORAGE_BARRIER_BIT     0x00002000
+#endif
+#ifndef GL_DYNAMIC_COPY
+#define GL_DYNAMIC_COPY                   0x88EA
 #endif
 
 #include "mental_internal.h"
@@ -595,19 +615,6 @@ static void opengl_kernel_destroy(void* kernel) {
     free(gl_kernel);
 }
 
-/* ------------------------------------------------------------------ */
-/*  GL tokens used in buffer_resize that may not be in base gl.h      */
-/* ------------------------------------------------------------------ */
-
-#ifndef GL_COPY_READ_BUFFER
-#define GL_COPY_READ_BUFFER               0x8F36
-#endif
-#ifndef GL_SHADER_STORAGE_BARRIER_BIT
-#define GL_SHADER_STORAGE_BARRIER_BIT     0x00002000
-#endif
-#ifndef GL_DYNAMIC_COPY
-#define GL_DYNAMIC_COPY                   0x88EA
-#endif
 
 /* ------------------------------------------------------------------ */
 /*  Backend descriptor                                                */

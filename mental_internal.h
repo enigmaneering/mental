@@ -11,6 +11,10 @@
 #include "mental.h"
 #include "mental_pthread.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Forward declarations */
 typedef struct mental_backend_t mental_backend;
 
@@ -137,5 +141,9 @@ void mental_set_error(mental_error code, const char* message);
 /* Transpilation */
 char* mental_transpile(const char* source, size_t source_len, mental_api_type target_api, size_t* out_len);
 void mental_transpile_free(char* transpiled);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* MENTAL_INTERNAL_H */
