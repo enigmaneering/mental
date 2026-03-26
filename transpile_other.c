@@ -16,10 +16,34 @@
 #include <direct.h>
 #define popen _popen
 #define pclose _pclose
-#define mkdtemp(template) _mktemp(template)
+#define rmdir _rmdir
+
+/* Windows mkdtemp: _mktemp generates name, _mkdir creates it. */
+static char* win_mkdtemp(char* tmpl) {
+    if (!_mktemp(tmpl)) return NULL;
+    if (_mkdir(tmpl) != 0) return NULL;
+    return tmpl;
+}
+#define mkdtemp(t) win_mkdtemp(t)
 #else
 #include <unistd.h>
 #endif
+
+/*
+ * Portable temp directory prefix.
+ * Windows: uses TEMP/TMP env var (e.g. C:\Users\...\AppData\Local\Temp)
+ * Unix: /tmp
+ */
+static const char* get_tmp_prefix(void) {
+#ifdef _WIN32
+    const char *tmp = getenv("TEMP");
+    if (!tmp) tmp = getenv("TMP");
+    if (!tmp) tmp = ".";
+    return tmp;
+#else
+    return "/tmp";
+#endif
+}
 
 /* Configured tool paths — set via mental_set_tool_path(). */
 static char g_dxc_path[4096];
@@ -95,7 +119,8 @@ unsigned char* mental_hlsl_to_spirv(const char* source, size_t source_len,
     }
 
     /* Create temporary directory */
-    char tmpdir[] = "/tmp/mental_hlsl_XXXXXX";
+    char tmpdir[1024];
+    snprintf(tmpdir, sizeof(tmpdir), "%s/mental_hlsl_XXXXXX", get_tmp_prefix());
     if (!mkdtemp(tmpdir)) {
         if (error) strncpy(error, "Failed to create temporary directory", error_len - 1);
         return NULL;
@@ -164,7 +189,8 @@ unsigned char* mental_wgsl_to_spirv(const char* source, size_t source_len,
     }
 
     /* Create temporary directory */
-    char tmpdir[] = "/tmp/mental_wgsl_XXXXXX";
+    char tmpdir[1024];
+    snprintf(tmpdir, sizeof(tmpdir), "%s/mental_wgsl_XXXXXX", get_tmp_prefix());
     if (!mkdtemp(tmpdir)) {
         if (error) strncpy(error, "Failed to create temporary directory", error_len - 1);
         return NULL;
@@ -239,7 +265,8 @@ char* mental_spirv_to_wgsl(const unsigned char* spirv, size_t spirv_len,
         return NULL;
     }
 
-    char tmpdir[] = "/tmp/mental_spv2wgsl_XXXXXX";
+    char tmpdir[1024];
+    snprintf(tmpdir, sizeof(tmpdir), "%s/mental_spv2wgsl_XXXXXX", get_tmp_prefix());
     if (!mkdtemp(tmpdir)) {
         if (error) strncpy(error, "Failed to create temporary directory", error_len - 1);
         return NULL;

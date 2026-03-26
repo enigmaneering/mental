@@ -197,7 +197,12 @@ static void setup_tools(void) {
         const char *env = getenv("MENTAL_DXC_PATH");
         if (env) { mental_set_tool_path(MENTAL_TOOL_DXC, env); }
         else {
-            const char *paths[] = {"../external/dxc/bin/dxc", "../../external/dxc/bin/dxc", NULL};
+            const char *paths[] = {
+                "../external/dxc/bin/dxc", "../../external/dxc/bin/dxc",
+                "../external/dxc/bin/dxc.exe", "../../external/dxc/bin/dxc.exe",
+                "../external/dxc/dxc", "../../external/dxc/dxc",
+                "../external/dxc/dxc.exe", "../../external/dxc/dxc.exe",
+                NULL};
             for (int i = 0; paths[i]; i++)
                 if (access(paths[i], F_OK) == 0) { mental_set_tool_path(MENTAL_TOOL_DXC, paths[i]); break; }
         }

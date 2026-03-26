@@ -48,6 +48,11 @@ static void auto_detect_tools(void) {
                 "../../external/dxc/bin/dxc",
                 "../external/dxc/bin/dxc.exe",
                 "../../external/dxc/bin/dxc.exe",
+                /* DXC may also be at the dxc/ root or named dxcompiler */
+                "../external/dxc/dxc",
+                "../../external/dxc/dxc",
+                "../external/dxc/dxc.exe",
+                "../../external/dxc/dxc.exe",
                 NULL
             };
             for (int i = 0; dxc_candidates[i]; i++) {
