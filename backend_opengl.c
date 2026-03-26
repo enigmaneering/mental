@@ -25,7 +25,7 @@
  * Pull them through the platform's extension mechanism.
  */
 #ifdef _WIN32
-#  include <GL/wglext.h>
+   /* wglGetProcAddress is declared in wingdi.h (via windows.h) */
 #  define MENTAL_GL_GETPROC(name) wglGetProcAddress(name)
 #else
 #  include <GL/glx.h>

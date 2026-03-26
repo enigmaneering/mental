@@ -177,7 +177,7 @@ jobs:
       - name: Fetch external dependencies
         uses: actions/checkout@v4
         with:
-          repository: enigmaneering/redistributables
+          repository: enigmaneering/external
           path: external
 
       # ---- Linux packages ----

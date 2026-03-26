@@ -10,12 +10,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-
 #ifdef _WIN32
+#include <io.h>
+#include <process.h>
+#include <direct.h>
 #define popen _popen
 #define pclose _pclose
 #define mkdtemp(template) _mktemp(template)
+#else
+#include <unistd.h>
 #endif
 
 /* Configured tool paths — set via mental_set_tool_path(). */
