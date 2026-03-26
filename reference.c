@@ -180,17 +180,20 @@ static void untrack_ref(const char* path) {
 /* ── Helpers ───────────────────────────────────────────────────── */
 
 /*
- * Build a shm name that fits within POSIX limits on all platforms.
+ * Build a shm name from the uuid+name pair.
  *
- * macOS enforces PSHMNAMLEN (31 chars including the leading '/').
- * Linux allows up to PATH_MAX (~4096).
+ * Always hashes to a compact fixed-width form: "/m-{24 hex}" (27 chars).
+ * This is portable across all platforms (macOS PSHMNAMLEN = 31, Linux
+ * PATH_MAX = 4096) and avoids ever hitting name-length limits regardless
+ * of how long the user's reference names are.
  *
- * Strategy: try the full readable name first ("/mental-{uuid}-{name}").
- * If it exceeds the platform limit, hash it down to a fixed-width
- * hex digest that always fits: "/m-{24 hex chars}" = 27 chars.
+ * Uniqueness comes from two salted FNV-1a 64-bit hashes (96 bits total).
+ * The uuid scopes per-process; the name scopes per-reference within a
+ * process — so collisions require both to match, which can't happen
+ * across different (uuid, name) pairs with overwhelming probability.
  */
 
-/* Simple FNV-1a 64-bit hash — no crypto needed, just uniqueness */
+/* FNV-1a 64-bit — fast, no crypto needed, just uniqueness */
 static uint64_t fnv1a(const char *s) {
     uint64_t h = 0xcbf29ce484222325ULL;
     while (*s) {
@@ -200,25 +203,12 @@ static uint64_t fnv1a(const char *s) {
     return h;
 }
 
-/* macOS: PSHMNAMLEN is 31.  Leave room for the leading '/'. */
-#ifdef __APPLE__
-#define SHM_NAME_MAX 31
-#else
-#define SHM_NAME_MAX 255
-#endif
-
 static int build_shm_path(char *dst, size_t dst_len,
                            const char *uuid, const char *name) {
-    /* Try readable name first */
-    int n = snprintf(dst, dst_len, "/mental-%s-%s", uuid, name);
-    if (n > 0 && (size_t)n < dst_len && n <= SHM_NAME_MAX)
-        return 0;
-
-    /* Too long — hash to "/m-{24 hex}" (27 chars, fits in 31) */
     char full[640];
     snprintf(full, sizeof(full), "%s-%s", uuid, name);
     uint64_t h1 = fnv1a(full);
-    /* Hash again with a salt for 128 bits of uniqueness */
+
     char salted[640];
     snprintf(salted, sizeof(salted), "%s-%s-salt", uuid, name);
     uint64_t h2 = fnv1a(salted);
@@ -235,7 +225,7 @@ static int build_shm_path(char *dst, size_t dst_len,
     }
     tag[24] = '\0';
 
-    n = snprintf(dst, dst_len, "/m-%s", tag);
+    int n = snprintf(dst, dst_len, "/m-%s", tag);
     return (n > 0 && (size_t)n < dst_len) ? 0 : -1;
 }
 
