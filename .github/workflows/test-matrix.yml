@@ -25,12 +25,14 @@ jobs:
           # ============================================================
           - name: "macOS arm64"
             runner: macos-14
+            platform: darwin-arm64
             packages: ""
             install_vulkan: false
             needs_xvfb: false
 
           - name: "macOS amd64"
             runner: macos-13
+            platform: darwin-amd64
             packages: ""
             install_vulkan: false
             needs_xvfb: false
@@ -41,12 +43,14 @@ jobs:
           # ============================================================
           - name: "Windows amd64"
             runner: windows-latest
+            platform: windows-amd64
             packages: ""
             install_vulkan: false
             needs_xvfb: false
 
           - name: "Windows amd64 + Vulkan"
             runner: windows-latest
+            platform: windows-amd64
             packages: ""
             install_vulkan: true
             needs_xvfb: false
@@ -59,6 +63,7 @@ jobs:
           # Full: Vulkan + OpenCL + OpenGL + PoCL all present
           - name: "Linux amd64 (full)"
             runner: ubuntu-latest
+            platform: linux-amd64
             packages: >-
               libvulkan-dev mesa-vulkan-drivers
               libopengl-dev libglx-dev libx11-dev
@@ -70,6 +75,7 @@ jobs:
 
           - name: "Linux arm64 (full)"
             runner: ubuntu-24.04-arm
+            platform: linux-arm64
             packages: >-
               libvulkan-dev mesa-vulkan-drivers
               libopengl-dev libglx-dev libx11-dev
@@ -84,6 +90,7 @@ jobs:
           # OpenCL should take over.
           - name: "Linux amd64 (no Vulkan)"
             runner: ubuntu-latest
+            platform: linux-amd64
             packages: >-
               libopengl-dev libglx-dev libx11-dev
               ocl-icd-opencl-dev mesa-opencl-icd
@@ -94,6 +101,7 @@ jobs:
 
           - name: "Linux arm64 (no Vulkan)"
             runner: ubuntu-24.04-arm
+            platform: linux-arm64
             packages: >-
               libopengl-dev libglx-dev libx11-dev
               ocl-icd-opencl-dev mesa-opencl-icd
@@ -106,6 +114,7 @@ jobs:
           # Tests the OpenGL 4.3+ compute path via Mesa llvmpipe.
           - name: "Linux amd64 (OpenGL only)"
             runner: ubuntu-latest
+            platform: linux-amd64
             packages: >-
               libopengl-dev libglx-dev libx11-dev
               xvfb
@@ -114,6 +123,7 @@ jobs:
 
           - name: "Linux arm64 (OpenGL only)"
             runner: ubuntu-24.04-arm
+            platform: linux-arm64
             packages: >-
               libopengl-dev libglx-dev libx11-dev
               xvfb
@@ -125,6 +135,7 @@ jobs:
           # but nothing else (some HPC / cloud GPU nodes).
           - name: "Linux amd64 (OpenCL only)"
             runner: ubuntu-latest
+            platform: linux-amd64
             packages: >-
               ocl-icd-opencl-dev mesa-opencl-icd
             install_vulkan: false
@@ -132,6 +143,7 @@ jobs:
 
           - name: "Linux arm64 (OpenCL only)"
             runner: ubuntu-24.04-arm
+            platform: linux-arm64
             packages: >-
               ocl-icd-opencl-dev mesa-opencl-icd
             install_vulkan: false
@@ -142,6 +154,7 @@ jobs:
           # Tests that OpenCL backend handles CPU-only devices correctly.
           - name: "Linux amd64 (PoCL via system OpenCL)"
             runner: ubuntu-latest
+            platform: linux-amd64
             packages: >-
               ocl-icd-opencl-dev pocl-opencl-icd
             install_vulkan: false
@@ -149,6 +162,7 @@ jobs:
 
           - name: "Linux arm64 (PoCL via system OpenCL)"
             runner: ubuntu-24.04-arm
+            platform: linux-arm64
             packages: >-
               ocl-icd-opencl-dev pocl-opencl-icd
             install_vulkan: false
@@ -159,12 +173,14 @@ jobs:
           # and not crash. Transpilation-only tests still pass.
           - name: "Linux amd64 (bare)"
             runner: ubuntu-latest
+            platform: linux-amd64
             packages: ""
             install_vulkan: false
             needs_xvfb: false
 
           - name: "Linux arm64 (bare)"
             runner: ubuntu-24.04-arm
+            platform: linux-arm64
             packages: ""
             install_vulkan: false
             needs_xvfb: false
@@ -173,12 +189,120 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ---- Fetch external dependencies (glslang, spirv-cross, etc) ----
-      - name: Fetch external dependencies
-        uses: actions/checkout@v4
-        with:
-          repository: enigmaneering/redistributables
-          path: external
+      # ---- Fetch external dependencies from GitHub Releases ----
+      - name: Fetch external dependencies (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
+          echo "Downloading external deps $VERSION for ${{ matrix.platform }}"
+          mkdir -p external/glslang external/spirv-cross external/dxc external/naga/bin
+
+          # glslang (required)
+          gh release download "$VERSION" --repo enigmaneering/redistributables \
+            --pattern "glslang-${{ matrix.platform }}.tar.gz" --dir .
+          tar -xzf "glslang-${{ matrix.platform }}.tar.gz"
+          cp -r "glslang-${{ matrix.platform }}"/* external/glslang/
+
+          # spirv-cross (required)
+          gh release download "$VERSION" --repo enigmaneering/redistributables \
+            --pattern "spirv-cross-${{ matrix.platform }}.tar.gz" --dir .
+          tar -xzf "spirv-cross-${{ matrix.platform }}.tar.gz"
+          cp -r "spirv-cross-${{ matrix.platform }}"/* external/spirv-cross/
+
+          # dxc (optional)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "dxc-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "dxc-${{ matrix.platform }}.tar.gz"
+            cp -r "dxc-${{ matrix.platform }}"/* external/dxc/
+          else
+            echo "DXC not available for ${{ matrix.platform }} (optional)"
+          fi
+
+          # naga (optional)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "naga-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "naga-${{ matrix.platform }}.tar.gz"
+            if [ -d "naga-${{ matrix.platform }}/bin" ]; then
+              cp -r "naga-${{ matrix.platform }}/bin"/* external/naga/bin/
+            else
+              cp -r "naga-${{ matrix.platform }}"/* external/naga/bin/
+            fi
+          else
+            echo "Naga not available for ${{ matrix.platform }} (optional)"
+          fi
+
+          # Make binaries executable and remove macOS quarantine
+          chmod +x external/dxc/bin/* external/naga/bin/* 2>/dev/null || true
+          if [ "$(uname)" = "Darwin" ]; then
+            xattr -d com.apple.quarantine external/dxc/bin/* external/dxc/lib/* external/naga/bin/* 2>/dev/null || true
+          fi
+
+          echo "External deps layout:"
+          ls -la external/
+
+      - name: Fetch external dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
+          echo "Downloading external deps $VERSION for ${{ matrix.platform }}"
+          mkdir -p external/glslang external/spirv-cross external/dxc external/naga/bin
+
+          # glslang (required — try tar.gz first, then zip)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "glslang-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "glslang-${{ matrix.platform }}.tar.gz"
+          else
+            gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "glslang-${{ matrix.platform }}.zip" --dir .
+            unzip -q "glslang-${{ matrix.platform }}.zip"
+          fi
+          cp -r "glslang-${{ matrix.platform }}"/* external/glslang/
+
+          # spirv-cross (required — try tar.gz first, then zip)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "spirv-cross-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "spirv-cross-${{ matrix.platform }}.tar.gz"
+          else
+            gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "spirv-cross-${{ matrix.platform }}.zip" --dir .
+            unzip -q "spirv-cross-${{ matrix.platform }}.zip"
+          fi
+          cp -r "spirv-cross-${{ matrix.platform }}"/* external/spirv-cross/
+
+          # dxc (optional — try zip first for Windows)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "dxc-${{ matrix.platform }}.zip" --dir . 2>/dev/null; then
+            unzip -q "dxc-${{ matrix.platform }}.zip"
+            cp -r "dxc-${{ matrix.platform }}"/* external/dxc/
+          elif gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "dxc-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "dxc-${{ matrix.platform }}.tar.gz"
+            cp -r "dxc-${{ matrix.platform }}"/* external/dxc/
+          else
+            echo "DXC not available for ${{ matrix.platform }} (optional)"
+          fi
+
+          # naga (optional)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "naga-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "naga-${{ matrix.platform }}.tar.gz"
+            if [ -d "naga-${{ matrix.platform }}/bin" ]; then
+              cp -r "naga-${{ matrix.platform }}/bin"/* external/naga/bin/
+            else
+              cp -r "naga-${{ matrix.platform }}"/* external/naga/bin/
+            fi
+          else
+            echo "Naga not available for ${{ matrix.platform }} (optional)"
+          fi
+
+          echo "External deps layout:"
+          ls -la external/
 
       # ---- Linux packages ----
       - name: Install packages (Linux)
@@ -192,7 +316,8 @@ jobs:
         if: matrix.install_vulkan
         shell: pwsh
         run: |
-          $ver = (Invoke-WebRequest -Uri 'https://vulkan.lunarg.com/sdk/latest/windows.json').Content.trim('" ')
+          $json = (Invoke-WebRequest -Uri 'https://vulkan.lunarg.com/sdk/latest/windows.json').Content | ConvertFrom-Json
+          $ver = $json.windows
           $url = "https://sdk.lunarg.com/sdk/download/$ver/windows/VulkanSDK-$ver-Installer.exe"
           Write-Host "Installing Vulkan SDK $ver"
           Invoke-WebRequest -Uri $url -OutFile VulkanSDK.exe
@@ -202,17 +327,41 @@ jobs:
           echo "$sdk\Bin" >> $env:GITHUB_PATH
           Remove-Item VulkanSDK.exe
 
+      # ---- Install MinGW (Windows — needed for .a static libs) ----
+      - name: Set up MinGW (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            make
+
       # ---- Configure ----
-      - name: Configure
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
         run: cmake -B build -DBUILD_TESTING=ON
 
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: cmake -B build -G "MSYS Makefiles" -DBUILD_TESTING=ON
+
       # ---- Build ----
-      - name: Build
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
+        run: cmake --build build --parallel
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
         run: cmake --build build --parallel
 
       # ---- Test (with virtual X server when OpenGL needs it) ----
       - name: Test
-        if: ${{ !matrix.needs_xvfb }}
+        if: ${{ !matrix.needs_xvfb && runner.os != 'Windows' }}
         working-directory: build
         run: ctest --output-on-failure --timeout 120
 
@@ -220,6 +369,13 @@ jobs:
         if: ${{ matrix.needs_xvfb }}
         working-directory: build
         run: xvfb-run --auto-servernum ctest --output-on-failure --timeout 120
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          cd build
+          ctest --output-on-failure --timeout 120
 
       # ---- Report what was discovered ----
       - name: Report discovered backends
