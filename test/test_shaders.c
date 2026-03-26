@@ -6,6 +6,7 @@
 #include <string.h>
 #ifndef _WIN32
 #include <unistd.h>
+#include <limits.h>
 #else
 #include <direct.h>
 #include <io.h>
@@ -15,6 +16,15 @@
 #define F_OK 0
 #endif
 #endif
+
+static const char* resolve_path(const char *rel, char *buf, size_t buf_len) {
+#ifdef _WIN32
+    if (_fullpath(buf, rel, buf_len)) return buf;
+#else
+    if (realpath(rel, buf)) return buf;
+#endif
+    return rel;
+}
 
 #define ASSERT(cond, msg) do { \
     if (!(cond)) { \
@@ -193,9 +203,11 @@ static int test_shader(const char* name, const char* shader_source, mental_devic
 
 /* Auto-detect DXC and Naga from common paths */
 static void setup_tools(void) {
+    char resolved[4096];
+
     if (!mental_get_tool_path(MENTAL_TOOL_DXC)) {
         const char *env = getenv("MENTAL_DXC_PATH");
-        if (env) { mental_set_tool_path(MENTAL_TOOL_DXC, env); }
+        if (env) { mental_set_tool_path(MENTAL_TOOL_DXC, resolve_path(env, resolved, sizeof(resolved))); }
         else {
             const char *paths[] = {
                 "../external/dxc/bin/dxc", "../../external/dxc/bin/dxc",
@@ -204,16 +216,19 @@ static void setup_tools(void) {
                 "../external/dxc/dxc.exe", "../../external/dxc/dxc.exe",
                 NULL};
             for (int i = 0; paths[i]; i++)
-                if (access(paths[i], F_OK) == 0) { mental_set_tool_path(MENTAL_TOOL_DXC, paths[i]); break; }
+                if (access(paths[i], F_OK) == 0) { mental_set_tool_path(MENTAL_TOOL_DXC, resolve_path(paths[i], resolved, sizeof(resolved))); break; }
         }
     }
     if (!mental_get_tool_path(MENTAL_TOOL_NAGA)) {
         const char *env = getenv("MENTAL_NAGA_PATH");
-        if (env) { mental_set_tool_path(MENTAL_TOOL_NAGA, env); }
+        if (env) { mental_set_tool_path(MENTAL_TOOL_NAGA, resolve_path(env, resolved, sizeof(resolved))); }
         else {
-            const char *paths[] = {"../external/naga/bin/naga", "../../external/naga/bin/naga", NULL};
+            const char *paths[] = {
+                "../external/naga/bin/naga", "../../external/naga/bin/naga",
+                "../external/naga/bin/naga.exe", "../../external/naga/bin/naga.exe",
+                NULL};
             for (int i = 0; paths[i]; i++)
-                if (access(paths[i], F_OK) == 0) { mental_set_tool_path(MENTAL_TOOL_NAGA, paths[i]); break; }
+                if (access(paths[i], F_OK) == 0) { mental_set_tool_path(MENTAL_TOOL_NAGA, resolve_path(paths[i], resolved, sizeof(resolved))); break; }
         }
     }
 }

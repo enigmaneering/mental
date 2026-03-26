@@ -22,11 +22,23 @@
 
 #ifndef _WIN32
 #include <unistd.h>
+#include <limits.h>
 #else
 #include <io.h>
+#include <stdlib.h>
 #define access _access
 #define F_OK 0
 #endif
+
+/* Resolve a relative path to absolute (needed for popen on Windows) */
+static const char* resolve_path(const char *rel, char *buf, size_t buf_len) {
+#ifdef _WIN32
+    if (_fullpath(buf, rel, buf_len)) return buf;
+#else
+    if (realpath(rel, buf)) return buf;
+#endif
+    return rel; /* fallback to original */
+}
 
 /*
  * Auto-detect DXC and Naga tool paths.
@@ -37,18 +49,19 @@
  *   3. Leaves unconfigured if not found (tests that need them will skip/fail)
  */
 static void auto_detect_tools(void) {
+    char resolved[4096];
+
     /* DXC */
     if (!mental_get_tool_path(MENTAL_TOOL_DXC)) {
         const char *env = getenv("MENTAL_DXC_PATH");
         if (env && access(env, F_OK) == 0) {
-            mental_set_tool_path(MENTAL_TOOL_DXC, env);
+            mental_set_tool_path(MENTAL_TOOL_DXC, resolve_path(env, resolved, sizeof(resolved)));
         } else {
             static const char *dxc_candidates[] = {
                 "../external/dxc/bin/dxc",
                 "../../external/dxc/bin/dxc",
                 "../external/dxc/bin/dxc.exe",
                 "../../external/dxc/bin/dxc.exe",
-                /* DXC may also be at the dxc/ root or named dxcompiler */
                 "../external/dxc/dxc",
                 "../../external/dxc/dxc",
                 "../external/dxc/dxc.exe",
@@ -57,7 +70,7 @@ static void auto_detect_tools(void) {
             };
             for (int i = 0; dxc_candidates[i]; i++) {
                 if (access(dxc_candidates[i], F_OK) == 0) {
-                    mental_set_tool_path(MENTAL_TOOL_DXC, dxc_candidates[i]);
+                    mental_set_tool_path(MENTAL_TOOL_DXC, resolve_path(dxc_candidates[i], resolved, sizeof(resolved)));
                     break;
                 }
             }
@@ -68,7 +81,7 @@ static void auto_detect_tools(void) {
     if (!mental_get_tool_path(MENTAL_TOOL_NAGA)) {
         const char *env = getenv("MENTAL_NAGA_PATH");
         if (env && access(env, F_OK) == 0) {
-            mental_set_tool_path(MENTAL_TOOL_NAGA, env);
+            mental_set_tool_path(MENTAL_TOOL_NAGA, resolve_path(env, resolved, sizeof(resolved)));
         } else {
             static const char *naga_candidates[] = {
                 "../external/naga/bin/naga",
@@ -79,7 +92,7 @@ static void auto_detect_tools(void) {
             };
             for (int i = 0; naga_candidates[i]; i++) {
                 if (access(naga_candidates[i], F_OK) == 0) {
-                    mental_set_tool_path(MENTAL_TOOL_NAGA, naga_candidates[i]);
+                    mental_set_tool_path(MENTAL_TOOL_NAGA, resolve_path(naga_candidates[i], resolved, sizeof(resolved)));
                     break;
                 }
             }
