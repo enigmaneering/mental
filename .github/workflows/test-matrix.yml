@@ -185,7 +185,7 @@ jobs:
         if: matrix.install_vulkan
         shell: pwsh
         run: |
-          $ver = (Invoke-RestMethod 'https://vulkan.lunarg.com/sdk/latest/windows.json').trim('"')
+          $ver = (Invoke-WebRequest -Uri 'https://vulkan.lunarg.com/sdk/latest/windows.json').Content.trim('" ')
           $url = "https://sdk.lunarg.com/sdk/download/$ver/windows/VulkanSDK-$ver-Installer.exe"
           Write-Host "Installing Vulkan SDK $ver"
           Invoke-WebRequest -Uri $url -OutFile VulkanSDK.exe

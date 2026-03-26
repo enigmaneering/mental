@@ -23,7 +23,7 @@ endif()
 set(MENTAL_SOURCES
     mental.c
     monotonic.c
-    ref.c
+    reference.c
     stdlink.c
     transpile.c
     transpile_other.c
