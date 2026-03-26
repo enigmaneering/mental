@@ -5,6 +5,7 @@
  * (see test_clone.c and test_buffer.c for pinning tests).
  */
 #include "../mental.h"
+#include "mental_test_fork.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -115,68 +116,71 @@ static int test_self_observer(void) {
     return 0;
 }
 
-/* ── Cross-process via fork() ──────────────────────────────────── */
+/* ── Cross-process ────────────────────────────────────────────── */
 
-#ifndef _WIN32
+struct xproc_shared {
+    char parent_uuid[33];
+    int flag;
+};
+
+static int xproc_child(void *shared_ptr, size_t shared_size) {
+    (void)shared_size;
+    struct xproc_shared *s = (struct xproc_shared *)shared_ptr;
+    size_t sz = 1024;
+
+    mental_reference child_obs = mental_reference_open(s->parent_uuid, "CrossProc");
+    if (!child_obs) return 1;
+
+    uint8_t *child_data = (uint8_t *)mental_reference_data(child_obs, NULL, 0);
+    if (!child_data) { mental_reference_close(child_obs); return 2; }
+
+    for (size_t i = 0; i < sz; i++) {
+        if (child_data[i] != (uint8_t)(i & 0xFF)) {
+            mental_reference_close(child_obs);
+            return 3;
+        }
+    }
+
+    child_data[0] = 0x42;
+    s->flag = 0xBEEF;
+    mental_reference_close(child_obs);
+    return 0;
+}
+
 static int test_cross_process(void) {
-    printf("  cross-process (fork)...\n");
+    printf("  cross-process...\n");
 
     size_t sz = 1024;
     mental_reference ref = mental_reference_create("CrossProc", sz);
     ASSERT(ref != NULL, "create returned NULL");
 
-    /* Write a pattern the child will verify */
     uint8_t *data = (uint8_t *)mental_reference_data(ref, NULL, 0);
     ASSERT(data != NULL, "owner data NULL");
     for (size_t i = 0; i < sz; i++) data[i] = (uint8_t)(i & 0xFF);
 
-    const char *parent_uuid = mental_uuid();
+    struct xproc_shared *shared = NULL;
+    mental_test_shm shm = mental_test_shm_create("xproc", sizeof(*shared), (void**)&shared);
+    ASSERT(shared != NULL, "shared memory creation failed");
+    strncpy(shared->parent_uuid, mental_uuid(), 32);
+    shared->parent_uuid[32] = '\0';
 
-    /* Shared flag: child writes 0xBEEF on success, parent reads it */
-    int *shared_flag = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE,
-                            MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    *shared_flag = 0;
+    int exit_code;
+#ifdef _WIN32
+    exit_code = mental_test_run_child(&shm, "xproc_child", shared, sizeof(*shared));
+#else
+    MENTAL_TEST_FORK(xproc_child, shared, sizeof(*shared), exit_code);
+#endif
 
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* ── Child process ────────────────────────────────────── */
-        mental_reference child_obs = mental_reference_open(parent_uuid, "CrossProc");
-        if (!child_obs) _exit(1);
-
-        uint8_t *child_data = (uint8_t *)mental_reference_data(child_obs, NULL, 0);
-        if (!child_data) { mental_reference_close(child_obs); _exit(2); }
-
-        /* Verify parent's data is visible */
-        for (size_t i = 0; i < sz; i++) {
-            if (child_data[i] != (uint8_t)(i & 0xFF)) {
-                mental_reference_close(child_obs);
-                _exit(3);
-            }
-        }
-
-        /* Write back a marker the parent will check */
-        child_data[0] = 0x42;
-        *shared_flag = 0xBEEF;
-
-        mental_reference_close(child_obs);
-        _exit(0);
-    }
-
-    /* ── Parent ───────────────────────────────────────────────── */
-    int status;
-    waitpid(pid, &status, 0);
-    ASSERT(WIFEXITED(status) && WEXITSTATUS(status) == 0,
-           "child process failed (see exit code)");
-    ASSERT(*shared_flag == 0xBEEF, "child did not signal success");
+    ASSERT(exit_code == 0, "child process failed");
+    ASSERT(shared->flag == 0xBEEF, "child did not signal success");
     ASSERT(data[0] == 0x42, "parent can't see child's write");
 
-    munmap(shared_flag, sizeof(int));
+    mental_test_shm_destroy(&shm);
     mental_reference_close(ref);
 
     printf("    OK\n");
     return 0;
 }
-#endif
 
 /* ── Disclosure: full matrix ───────────────────────────────────── */
 
@@ -464,74 +468,72 @@ static int test_observer_immutability(void) {
 
 /* ── Cross-process disclosure ──────────────────────────────────── */
 
-#ifndef _WIN32
-static int test_cross_process_disclosure(void) {
-    printf("  cross-process disclosure (fork)...\n");
+struct xproc_discl_shared {
+    char parent_uuid[33];
+    int results[4];
+};
 
+static int xproc_discl_child(void *shared_ptr, size_t shared_size) {
+    (void)shared_size;
+    struct xproc_discl_shared *s = (struct xproc_discl_shared *)shared_ptr;
     const uint8_t cred[] = { 0xCA, 0xFE, 0xBA, 0xBE };
 
+    mental_reference obs = mental_reference_open(s->parent_uuid, "XProcDiscl");
+    if (!obs) return 1;
+
+    void *p = mental_reference_data(obs, NULL, 0);
+    s->results[0] = (p == NULL) ? 1 : 0;
+
+    p = mental_reference_data(obs, cred, sizeof(cred));
+    s->results[1] = (p != NULL) ? 1 : 0;
+
+    if (p) s->results[2] = (((uint8_t *)p)[0] == 0x77) ? 1 : 0;
+
+    const uint8_t wrong[] = { 0x00 };
+    p = mental_reference_data(obs, wrong, sizeof(wrong));
+    s->results[3] = (p == NULL) ? 1 : 0;
+
+    mental_reference_close(obs);
+    return 0;
+}
+
+static int test_cross_process_disclosure(void) {
+    printf("  cross-process disclosure...\n");
+
+    const uint8_t cred[] = { 0xCA, 0xFE, 0xBA, 0xBE };
     mental_reference ref = mental_reference_create("XProcDiscl", 512);
     ASSERT(ref != NULL, "create failed");
 
-    /* Write marker data */
     uint8_t *data = (uint8_t *)mental_reference_data(ref, NULL, 0);
     memset(data, 0x77, 512);
-
-    /* Set exclusive disclosure */
     mental_reference_set_disclosure(ref, MENTAL_RELATIONALLY_EXCLUSIVE);
     mental_reference_set_credential(ref, cred, sizeof(cred));
 
-    const char *parent_uuid = mental_uuid();
+    struct xproc_discl_shared *shared = NULL;
+    mental_test_shm shm = mental_test_shm_create("xproc_discl", sizeof(*shared), (void**)&shared);
+    ASSERT(shared != NULL, "shared memory creation failed");
+    strncpy(shared->parent_uuid, mental_uuid(), 32);
+    shared->parent_uuid[32] = '\0';
 
-    /* Shared results: child writes exit codes */
-    int *results = mmap(NULL, 4 * sizeof(int), PROT_READ | PROT_WRITE,
-                        MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    memset(results, 0, 4 * sizeof(int));
+    int exit_code;
+#ifdef _WIN32
+    exit_code = mental_test_run_child(&shm, "xproc_discl_child", shared, sizeof(*shared));
+#else
+    MENTAL_TEST_FORK(xproc_discl_child, shared, sizeof(*shared), exit_code);
+#endif
 
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* ── Child ─────────────────────────────────────────── */
-        mental_reference child_obs = mental_reference_open(parent_uuid, "XProcDiscl");
-        if (!child_obs) _exit(1);
+    ASSERT(exit_code == 0, "child exited abnormally");
+    ASSERT(shared->results[0] == 1, "child: without cred should get NULL");
+    ASSERT(shared->results[1] == 1, "child: with cred should get data");
+    ASSERT(shared->results[2] == 1, "child: data content should match");
+    ASSERT(shared->results[3] == 1, "child: wrong cred should get NULL");
 
-        /* Without credential: data() should return NULL */
-        void *p = mental_reference_data(child_obs, NULL, 0);
-        results[0] = (p == NULL) ? 1 : 0;
-
-        /* With correct credential: should succeed */
-        p = mental_reference_data(child_obs, cred, sizeof(cred));
-        results[1] = (p != NULL) ? 1 : 0;
-
-        /* Verify data content */
-        if (p) {
-            results[2] = (((uint8_t *)p)[0] == 0x77) ? 1 : 0;
-        }
-
-        /* Wrong credential: should fail */
-        const uint8_t wrong[] = { 0x00 };
-        p = mental_reference_data(child_obs, wrong, sizeof(wrong));
-        results[3] = (p == NULL) ? 1 : 0;
-
-        mental_reference_close(child_obs);
-        _exit(0);
-    }
-
-    int status;
-    waitpid(pid, &status, 0);
-    ASSERT(WIFEXITED(status) && WEXITSTATUS(status) == 0, "child exited abnormally");
-
-    ASSERT(results[0] == 1, "child: without cred should get NULL");
-    ASSERT(results[1] == 1, "child: with cred should get data");
-    ASSERT(results[2] == 1, "child: data content should match");
-    ASSERT(results[3] == 1, "child: wrong cred should get NULL");
-
-    munmap(results, 4 * sizeof(int));
+    mental_test_shm_destroy(&shm);
     mental_reference_close(ref);
 
     printf("    OK\n");
     return 0;
 }
-#endif
 
 /* ── Reference write/read (shm only, no GPU) ──────────────────── */
 
@@ -614,7 +616,12 @@ static int test_edge_cases(void) {
 
 /* ── Main ──────────────────────────────────────────────────────── */
 
-int main(void) {
+int main(int argc, char **argv) {
+    /* Register child functions for Windows cross-process dispatch */
+    mental_test_register_child("xproc_child", xproc_child);
+    mental_test_register_child("xproc_discl_child", xproc_discl_child);
+    if (mental_test_child_dispatch(argc, argv)) return 0;
+
     printf("Testing reference...\n");
 
     test_uuid();
@@ -628,13 +635,8 @@ int main(void) {
     test_observer_immutability();
     test_write_read_shm();
     test_edge_cases();
-
-#ifndef _WIN32
     test_cross_process();
     test_cross_process_disclosure();
-#else
-    printf("  (cross-process tests skipped on Windows)\n");
-#endif
 
     if (g_failures > 0) {
         fprintf(stderr, "FAIL: %d test(s) failed\n", g_failures);

@@ -5,6 +5,7 @@
  * available (headless CI without GPU).
  */
 #include "../mental.h"
+#include "mental_test_fork.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -183,11 +184,45 @@ static int test_clone_disclosure(void) {
     return 0;
 }
 
-/* ── Cross-process clone via fork() ────────────────────────────── */
+/* ── Cross-process clone ──────────────────────────────────────── */
 
-#ifndef _WIN32
+struct clone_xproc_shared {
+    char parent_uuid[33];
+    int results[4];
+};
+
+static int clone_xproc_child(void *shared_ptr, size_t shared_size) {
+    (void)shared_size;
+    struct clone_xproc_shared *s = (struct clone_xproc_shared *)shared_ptr;
+    size_t sz = 256;
+
+    mental_reference obs = mental_reference_open(s->parent_uuid, "CloneXProc");
+    if (!obs) return 1;
+
+    mental_reference clone = mental_reference_clone(obs, "CloneXProcChild", NULL, NULL, 0);
+    if (!clone) { mental_reference_close(obs); return 2; }
+
+    uint8_t *cdata = (uint8_t *)mental_reference_data(clone, NULL, 0);
+    if (!cdata) return 3;
+
+    int match = 1;
+    for (size_t i = 0; i < sz; i++) {
+        if (cdata[i] != (uint8_t)((i * 7) & 0xFF)) { match = 0; break; }
+    }
+    s->results[0] = match;
+
+    memset(cdata, 0xFF, sz);
+    s->results[1] = 1;
+    s->results[2] = mental_reference_is_owner(clone);
+    s->results[3] = mental_reference_size(clone) == sz;
+
+    mental_reference_close(clone);
+    mental_reference_close(obs);
+    return 0;
+}
+
 static int test_clone_cross_process(void) {
-    printf("  clone cross-process (fork)...\n");
+    printf("  clone cross-process...\n");
 
     size_t sz = 256;
     mental_reference ref = mental_reference_create("CloneXProc", sz);
@@ -196,66 +231,34 @@ static int test_clone_cross_process(void) {
     uint8_t *data = (uint8_t *)mental_reference_data(ref, NULL, 0);
     for (size_t i = 0; i < sz; i++) data[i] = (uint8_t)((i * 7) & 0xFF);
 
-    const char *parent_uuid = mental_uuid();
+    struct clone_xproc_shared *shared = NULL;
+    mental_test_shm shm = mental_test_shm_create("clone_xproc", sizeof(*shared), (void**)&shared);
+    ASSERT(shared != NULL, "shared memory creation failed");
+    strncpy(shared->parent_uuid, mental_uuid(), 32);
+    shared->parent_uuid[32] = '\0';
 
-    /* Shared results buffer */
-    int *results = mmap(NULL, 4 * sizeof(int), PROT_READ | PROT_WRITE,
-                        MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    memset(results, 0, 4 * sizeof(int));
+    int exit_code;
+#ifdef _WIN32
+    exit_code = mental_test_run_child(&shm, "clone_xproc_child", shared, sizeof(*shared));
+#else
+    MENTAL_TEST_FORK(clone_xproc_child, shared, sizeof(*shared), exit_code);
+#endif
 
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* ── Child: open parent's ref and clone it ────────── */
-        mental_reference child_obs = mental_reference_open(parent_uuid, "CloneXProc");
-        if (!child_obs) _exit(1);
+    ASSERT(exit_code == 0, "child failed");
+    ASSERT(shared->results[0] == 1, "child: clone data should match parent");
+    ASSERT(shared->results[1] == 1, "child: clone was modified");
+    ASSERT(shared->results[2] == 1, "child: clone should be owned");
+    ASSERT(shared->results[3] == 1, "child: clone size should match");
 
-        mental_reference child_clone = mental_reference_clone(
-            child_obs, "CloneXProcChild", NULL, NULL, 0);
-        if (!child_clone) { mental_reference_close(child_obs); _exit(2); }
-
-        /* Verify clone data matches parent's data */
-        uint8_t *cdata = (uint8_t *)mental_reference_data(child_clone, NULL, 0);
-        if (!cdata) _exit(3);
-
-        int match = 1;
-        for (size_t i = 0; i < sz; i++) {
-            if (cdata[i] != (uint8_t)((i * 7) & 0xFF)) { match = 0; break; }
-        }
-        results[0] = match;
-
-        /* Modify clone — should not affect parent */
-        memset(cdata, 0xFF, sz);
-        results[1] = 1; /* signal we modified */
-
-        /* Clone is owned by child */
-        results[2] = mental_reference_is_owner(child_clone);
-        results[3] = mental_reference_size(child_clone) == sz;
-
-        mental_reference_close(child_clone);
-        mental_reference_close(child_obs);
-        _exit(0);
-    }
-
-    int status;
-    waitpid(pid, &status, 0);
-    ASSERT(WIFEXITED(status) && WEXITSTATUS(status) == 0, "child failed");
-
-    ASSERT(results[0] == 1, "child: clone data should match parent");
-    ASSERT(results[1] == 1, "child: clone was modified");
-    ASSERT(results[2] == 1, "child: clone should be owned");
-    ASSERT(results[3] == 1, "child: clone size should match");
-
-    /* Parent's data should be untouched */
     ASSERT(data[0] == (uint8_t)(0 & 0xFF), "parent data should be unchanged");
     ASSERT(data[100] == (uint8_t)((100 * 7) & 0xFF), "parent data integrity check");
 
-    munmap(results, 4 * sizeof(int));
+    mental_test_shm_destroy(&shm);
     mental_reference_close(ref);
 
     printf("    OK\n");
     return 0;
 }
-#endif
 
 /* ── Clone with GPU pinning (gracefully skips if no GPU) ───────── */
 
@@ -355,7 +358,10 @@ static int test_clone_pinned_source(void) {
 
 /* ── Main ──────────────────────────────────────────────────────── */
 
-int main(void) {
+int main(int argc, char **argv) {
+    mental_test_register_child("clone_xproc_child", clone_xproc_child);
+    if (mental_test_child_dispatch(argc, argv)) return 0;
+
     printf("Testing clone...\n");
 
     test_clone_unpinned();
@@ -364,12 +370,7 @@ int main(void) {
     test_clone_disclosure();
     test_clone_with_device();
     test_clone_pinned_source();
-
-#ifndef _WIN32
     test_clone_cross_process();
-#else
-    printf("  (cross-process tests skipped on Windows)\n");
-#endif
 
     if (g_failures > 0) {
         fprintf(stderr, "FAIL: %d test(s) failed\n", g_failures);
