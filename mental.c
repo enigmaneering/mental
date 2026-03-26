@@ -139,7 +139,14 @@ static void mental_initialize(void) {
     if (!mental_get_tool_path(MENTAL_TOOL_DXC)) {
         for (int i = 0; dxc_paths[i]; i++) {
             if (MENTAL_ACCESS(dxc_paths[i], F_OK) == 0) {
-                mental_set_tool_path(MENTAL_TOOL_DXC, dxc_paths[i]);
+                /* Resolve to absolute path — MSYS2 popen can't handle ../.. */
+                char resolved[4096];
+#ifdef _WIN32
+                if (_fullpath(resolved, dxc_paths[i], sizeof(resolved)))
+                    mental_set_tool_path(MENTAL_TOOL_DXC, resolved);
+                else
+#endif
+                    mental_set_tool_path(MENTAL_TOOL_DXC, dxc_paths[i]);
                 break;
             }
         }
@@ -147,7 +154,13 @@ static void mental_initialize(void) {
     if (!mental_get_tool_path(MENTAL_TOOL_NAGA)) {
         for (int i = 0; naga_paths[i]; i++) {
             if (MENTAL_ACCESS(naga_paths[i], F_OK) == 0) {
-                mental_set_tool_path(MENTAL_TOOL_NAGA, naga_paths[i]);
+                char resolved[4096];
+#ifdef _WIN32
+                if (_fullpath(resolved, naga_paths[i], sizeof(resolved)))
+                    mental_set_tool_path(MENTAL_TOOL_NAGA, resolved);
+                else
+#endif
+                    mental_set_tool_path(MENTAL_TOOL_NAGA, naga_paths[i]);
                 break;
             }
         }
