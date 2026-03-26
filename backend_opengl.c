@@ -77,36 +77,88 @@
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
-/*  GL function pointer types (4.3 compute subset)                    */
+/*  GL function pointer types                                         */
+/*                                                                    */
+/*  On Linux, GL/glext.h (included from GL/gl.h) provides all         */
+/*  PFN*PROC typedefs.  On Windows, gl.h is minimal and we may need   */
+/*  to define them ourselves.  Guard each with #ifndef.               */
 /* ------------------------------------------------------------------ */
 
+#ifndef PFNGLCREATESHADERPROC
 typedef GLuint (APIENTRY *PFNGLCREATESHADERPROC)(GLenum);
-typedef void   (APIENTRY *PFNGLSHADERSOURCEPROC)(GLuint, GLsizei, const GLchar**, const GLint*);
+#endif
+#ifndef PFNGLSHADERSOURCEPROC
+typedef void   (APIENTRY *PFNGLSHADERSOURCEPROC)(GLuint, GLsizei, const GLchar *const*, const GLint*);
+#endif
+#ifndef PFNGLCOMPILESHADERPROC
 typedef void   (APIENTRY *PFNGLCOMPILESHADERPROC)(GLuint);
+#endif
+#ifndef PFNGLGETSHADERIVPROC
 typedef void   (APIENTRY *PFNGLGETSHADERIVPROC)(GLuint, GLenum, GLint*);
+#endif
+#ifndef PFNGLGETSHADERINFOLOGPROC
 typedef void   (APIENTRY *PFNGLGETSHADERINFOLOGPROC)(GLuint, GLsizei, GLsizei*, GLchar*);
+#endif
+#ifndef PFNGLCREATEPROGRAMPROC
 typedef GLuint (APIENTRY *PFNGLCREATEPROGRAMPROC)(void);
+#endif
+#ifndef PFNGLATTACHSHADERPROC
 typedef void   (APIENTRY *PFNGLATTACHSHADERPROC)(GLuint, GLuint);
+#endif
+#ifndef PFNGLLINKPROGRAMPROC
 typedef void   (APIENTRY *PFNGLLINKPROGRAMPROC)(GLuint);
+#endif
+#ifndef PFNGLGETPROGRAMIVPROC
 typedef void   (APIENTRY *PFNGLGETPROGRAMIVPROC)(GLuint, GLenum, GLint*);
+#endif
+#ifndef PFNGLGETPROGRAMINFOLOGPROC
 typedef void   (APIENTRY *PFNGLGETPROGRAMINFOLOGPROC)(GLuint, GLsizei, GLsizei*, GLchar*);
+#endif
+#ifndef PFNGLUSEPROGRAMPROC
 typedef void   (APIENTRY *PFNGLUSEPROGRAMPROC)(GLuint);
+#endif
+#ifndef PFNGLDELETESHADERPROC
 typedef void   (APIENTRY *PFNGLDELETESHADERPROC)(GLuint);
+#endif
+#ifndef PFNGLDELETEPROGRAMPROC
 typedef void   (APIENTRY *PFNGLDELETEPROGRAMPROC)(GLuint);
+#endif
+#ifndef PFNGLDISPATCHCOMPUTEPROC
 typedef void   (APIENTRY *PFNGLDISPATCHCOMPUTEPROC)(GLuint, GLuint, GLuint);
+#endif
+#ifndef PFNGLMEMORYBARRIERPROC
 typedef void   (APIENTRY *PFNGLMEMORYBARRIERPROC)(GLbitfield);
-
+#endif
+#ifndef PFNGLGENBUFFERSPROC
 typedef void   (APIENTRY *PFNGLGENBUFFERSPROC)(GLsizei, GLuint*);
+#endif
+#ifndef PFNGLDELETEBUFFERSPROC
 typedef void   (APIENTRY *PFNGLDELETEBUFFERSPROC)(GLsizei, const GLuint*);
+#endif
+#ifndef PFNGLBINDBUFFERPROC
 typedef void   (APIENTRY *PFNGLBINDBUFFERPROC)(GLenum, GLuint);
+#endif
+#ifndef PFNGLBINDBUFFERBASEPROC
 typedef void   (APIENTRY *PFNGLBINDBUFFERBASEPROC)(GLenum, GLuint, GLuint);
+#endif
+#ifndef PFNGLBUFFERDATAPROC
 typedef void   (APIENTRY *PFNGLBUFFERDATAPROC)(GLenum, GLsizeiptr, const void*, GLenum);
+#endif
+#ifndef PFNGLBUFFERSUBDATAPROC
 typedef void   (APIENTRY *PFNGLBUFFERSUBDATAPROC)(GLenum, GLintptr, GLsizeiptr, const void*);
+#endif
+#ifndef PFNGLGETBUFFERSUBDATAPROC
 typedef void   (APIENTRY *PFNGLGETBUFFERSUBDATAPROC)(GLenum, GLintptr, GLsizeiptr, void*);
+#endif
+#ifndef PFNGLMAPBUFFERRANGEPROC
 typedef void*  (APIENTRY *PFNGLMAPBUFFERRANGEPROC)(GLenum, GLintptr, GLsizeiptr, GLbitfield);
+#endif
+#ifndef PFNGLUNMAPBUFFERPROC
 typedef GLboolean (APIENTRY *PFNGLUNMAPBUFFERPROC)(GLenum);
+#endif
+#ifndef PFNGLCOPYBUFFERSUBDATAPROC
 typedef void   (APIENTRY *PFNGLCOPYBUFFERSUBDATAPROC)(GLenum, GLenum, GLintptr, GLintptr, GLsizeiptr);
-typedef void   (APIENTRY *PFNGLFINISHPROC)(void);
+#endif
 
 /* ------------------------------------------------------------------ */
 /*  Resolved function pointers (populated during init)                */

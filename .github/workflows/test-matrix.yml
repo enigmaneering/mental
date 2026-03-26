@@ -173,6 +173,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ---- Fetch external dependencies (glslang, spirv-cross, etc) ----
+      - name: Fetch external dependencies
+        uses: actions/checkout@v4
+        with:
+          repository: enigmaneering/redistributables
+          path: external
+
       # ---- Linux packages ----
       - name: Install packages (Linux)
         if: runner.os == 'Linux' && matrix.packages != ''

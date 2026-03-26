@@ -45,6 +45,7 @@
 #endif
 
 #include "mental_internal.h"
+#include "transpile.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
