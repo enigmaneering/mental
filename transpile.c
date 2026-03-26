@@ -41,7 +41,11 @@ mental_language mental_detect_language(const char* source, size_t source_len) {
         contains(source, source_len, "@workgroup_size") ||
         contains(source, source_len, "var<") ||
         contains(source, source_len, "@group(") ||
-        contains(source, source_len, "@binding(")) {
+        contains(source, source_len, "@binding(") ||
+        contains(source, source_len, ": f32") ||
+        contains(source, source_len, ": vec") ||
+        contains(source, source_len, "-> f32") ||
+        contains(source, source_len, "-> vec")) {
         return MENTAL_LANG_WGSL;
     }
 

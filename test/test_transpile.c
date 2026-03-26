@@ -630,6 +630,10 @@ static int test_redetect_hlsl_to_glsl(void) {
                                   MENTAL_API_VULKAN, &out_len);
     ASSERT(glsl != NULL, "HLSL -> GLSL transpilation succeeded");
     mental_language detected = mental_detect_language(glsl, out_len);
+    if (detected != MENTAL_LANG_GLSL) {
+        fprintf(stderr, "  DEBUG: expected GLSL(%d), got %d\n", MENTAL_LANG_GLSL, detected);
+        fprintf(stderr, "  DEBUG: transpiled output (first 500 chars):\n%.500s\n", glsl);
+    }
     ASSERT(detected == MENTAL_LANG_GLSL, "transpiled GLSL re-detects as GLSL");
     mental_transpile_free(glsl);
     PASS("redetect_hlsl_to_glsl");
