@@ -126,11 +126,14 @@ static void mental_initialize(void) {
         "external/dxc/bin/dxc.exe", "external/dxc/dxc.exe",
         "../external/dxc/bin/dxc", "../external/dxc/dxc",
         "../external/dxc/bin/dxc.exe", "../external/dxc/dxc.exe",
+        "../../external/dxc/bin/dxc", "../../external/dxc/dxc",
+        "../../external/dxc/bin/dxc.exe", "../../external/dxc/dxc.exe",
         NULL
     };
     static const char *naga_paths[] = {
         "external/naga/bin/naga", "external/naga/bin/naga.exe",
         "../external/naga/bin/naga", "../external/naga/bin/naga.exe",
+        "../../external/naga/bin/naga", "../../external/naga/bin/naga.exe",
         NULL
     };
     if (!mental_get_tool_path(MENTAL_TOOL_DXC)) {

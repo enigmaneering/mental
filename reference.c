@@ -332,7 +332,9 @@ mental_reference mental_reference_create(const char *name, size_t size) {
     ref->hMap = CreateFileMappingA(
         INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
         (DWORD)(total >> 32), (DWORD)total, path + 1);
-    if (!ref->hMap) {
+    if (!ref->hMap || GetLastError() == ERROR_ALREADY_EXISTS) {
+        /* Emulate O_EXCL: fail if the mapping already exists */
+        if (ref->hMap) CloseHandle(ref->hMap);
         pthread_mutex_destroy(&ref->lock);
         free(ref);
         return NULL;
