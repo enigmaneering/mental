@@ -39,17 +39,54 @@
 
 #ifdef _WIN32
 
-/* On Windows, mental_stdlink_peer() returns an fd but the underlying
- * transport is pipe HANDLEs. We use mental_stdlink_send/recv via the
- * peer fd for the echo, which works in-process for threads. */
+/* On Windows, the echo thread must read/write the far-end pipe handles
+ * directly — mental_stdlink_send/recv use the near-end, which is what
+ * the main thread uses. Using both on the same end causes a deadlock.
+ *
+ * We get the far-end handles via mental_stdlink_peer_handles and use
+ * ReadFile/WriteFile with the same length-prefix protocol. */
+
+extern void mental_stdlink_peer_handles(uintptr_t *out_read, uintptr_t *out_write);
+
+static int win_read_all(HANDLE h, void *buf, size_t n) {
+    char *p = (char *)buf;
+    while (n > 0) {
+        DWORD got;
+        if (!ReadFile(h, p, (DWORD)n, &got, NULL) || got == 0) return -1;
+        p += got; n -= got;
+    }
+    return 0;
+}
+
+static int win_write_all(HANDLE h, const void *buf, size_t n) {
+    const char *p = (const char *)buf;
+    while (n > 0) {
+        DWORD written;
+        if (!WriteFile(h, p, (DWORD)n, &written, NULL)) return -1;
+        p += written; n -= written;
+    }
+    return 0;
+}
 
 static void *echo_thread(void *arg) {
     (void)arg;
-    /* Read via stdlink API using the peer end */
-    char buf[65536 + 256];
-    size_t len = 0;
-    if (mental_stdlink_recv(buf, sizeof(buf), &len) != 0) return NULL;
-    mental_stdlink_send(buf, len);
+    uintptr_t far_read = 0, far_write = 0;
+    mental_stdlink_peer_handles(&far_read, &far_write);
+    HANDLE hr = (HANDLE)far_read;
+    HANDLE hw = (HANDLE)far_write;
+
+    /* Read length-prefixed record from far end */
+    uint32_t net_len;
+    if (win_read_all(hr, &net_len, 4) != 0) return NULL;
+    uint32_t len = ntohl(net_len);
+
+    char *buf = (char *)malloc(len > 0 ? len : 1);
+    if (len > 0 && win_read_all(hr, buf, len) != 0) { free(buf); return NULL; }
+
+    /* Echo back on far end */
+    win_write_all(hw, &net_len, 4);
+    if (len > 0) win_write_all(hw, buf, len);
+    free(buf);
     return NULL;
 }
 
@@ -272,7 +309,6 @@ int main(int argc, char **argv) {
      * Parent sets MENTAL_STDLINK_READ/WRITE env vars with handle values,
      * then spawns the child. ensure_stdlink in the child picks them up. */
     {
-        extern void mental_stdlink_peer_handles(uintptr_t *out_read, uintptr_t *out_write);
 
         uintptr_t far_read = 0, far_write = 0;
         mental_stdlink_peer_handles(&far_read, &far_write);
