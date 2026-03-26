@@ -116,14 +116,7 @@ char* mental_spirv_to_msl(const unsigned char* spirv, size_t spirv_len,
     }
 }
 
-char* mental_spirv_to_wgsl(const unsigned char* spirv, size_t spirv_len,
-                           size_t* out_len, char* error, size_t error_len) {
-    /* WGSL transpilation not yet implemented - would use Naga or tint */
-    if (error) {
-        strncpy(error, "WGSL transpilation not yet implemented", error_len - 1);
-        error[error_len - 1] = '\0';
-    }
-    return nullptr;
-}
+/* mental_spirv_to_wgsl is implemented in transpile_other.c using Naga,
+ * since spirv-cross does not have a WGSL backend. */
 
 } /* extern "C" */

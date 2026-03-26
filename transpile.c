@@ -33,11 +33,15 @@ mental_language mental_detect_language(const char* source, size_t source_len) {
         }
     }
 
-    /* WGSL detection */
+    /* WGSL detection — use patterns that don't appear in GLSL/HLSL/MSL output.
+     * "fn " alone is too broad (appears in spirv-cross generated identifiers). */
     if (contains(source, source_len, "@compute") ||
         contains(source, source_len, "@vertex") ||
         contains(source, source_len, "@fragment") ||
-        contains(source, source_len, "fn ")) {
+        contains(source, source_len, "@workgroup_size") ||
+        contains(source, source_len, "var<") ||
+        contains(source, source_len, "@group(") ||
+        contains(source, source_len, "@binding(")) {
         return MENTAL_LANG_WGSL;
     }
 

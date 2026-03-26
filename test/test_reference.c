@@ -397,11 +397,15 @@ static int test_credential_provider(void) {
     g_provider_cred[0] = 0x99;
     int count_before = call_count;
 
-    /* Access check with old value should fail (provider refreshes) */
+    /* Owner must access to trigger provider refresh into shared memory */
+    void *owner_access = mental_reference_data(ref, NULL, 0);
+    ASSERT(owner_access != NULL, "owner access should trigger provider refresh");
+    ASSERT(call_count > count_before, "provider should be called on owner access");
+
+    /* Now observer check with old value should fail (credential was refreshed) */
     const uint8_t old_cred[] = { 0x10, 0x20, 0x30, 0x40 };
     void *result = mental_reference_data(obs, old_cred, sizeof(old_cred));
     ASSERT(result == NULL, "old provider value should be rejected after change");
-    ASSERT(call_count > count_before, "provider should be called on access check");
 
     /* Access with new value succeeds */
     ASSERT(mental_reference_data(obs, g_provider_cred, sizeof(g_provider_cred)) != NULL,
