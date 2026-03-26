@@ -175,10 +175,7 @@ jobs:
 
       # ---- Fetch external dependencies (glslang, spirv-cross, etc) ----
       - name: Fetch external dependencies
-        uses: actions/checkout@v4
-        with:
-          repository: enigmaneering/external
-          path: external
+        run: git clone https://git.enigmaneering.org/redistributables external
 
       # ---- Linux packages ----
       - name: Install packages (Linux)
