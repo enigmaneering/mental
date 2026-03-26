@@ -31,8 +31,9 @@ jobs:
             needs_xvfb: false
 
           - name: "macOS amd64"
-            runner: macos-13
+            runner: macos-14
             platform: darwin-amd64
+            cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=x86_64"
             packages: ""
             install_vulkan: false
             needs_xvfb: false
@@ -318,8 +319,8 @@ jobs:
         run: |
           $json = (Invoke-WebRequest -Uri 'https://vulkan.lunarg.com/sdk/latest/windows.json').Content | ConvertFrom-Json
           $ver = $json.windows
-          $url = "https://sdk.lunarg.com/sdk/download/$ver/windows/VulkanSDK-$ver-Installer.exe"
-          Write-Host "Installing Vulkan SDK $ver"
+          $url = "https://sdk.lunarg.com/sdk/download/$ver/windows/vulkan_sdk.exe"
+          Write-Host "Installing Vulkan SDK $ver from $url"
           Invoke-WebRequest -Uri $url -OutFile VulkanSDK.exe
           .\VulkanSDK.exe --accept-licenses --default-answer --confirm-command install copy_only=1
           $sdk = "C:\VulkanSDK\$ver"
@@ -342,7 +343,7 @@ jobs:
       # ---- Configure ----
       - name: Configure (Unix)
         if: runner.os != 'Windows'
-        run: cmake -B build -DBUILD_TESTING=ON
+        run: cmake -B build -DBUILD_TESTING=ON ${{ matrix.cmake_extra }}
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
