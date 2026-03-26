@@ -517,20 +517,35 @@ static void* d3d12_kernel_compile(void* dev, const char* source, size_t source_l
     D3D12Kernel* kernel = new D3D12Kernel();
     kernel->device = d3d_dev->device;
 
-    /* Create root signature with UAV descriptor table
-     * Note: This creates a simple root signature with one descriptor table
-     * containing UAVs for input/output buffers */
-    D3D12_DESCRIPTOR_RANGE range = {};
-    range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    range.NumDescriptors = 16;  /* Support up to 16 buffers */
-    range.BaseShaderRegister = 0;
-    range.RegisterSpace = 0;
-    range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    /* Create root signature with both UAV and SRV descriptor tables.
+     *
+     * Transpiled HLSL may use:
+     *   - RWStructuredBuffer (UAV, register(u#)) for read-write buffers
+     *   - StructuredBuffer (SRV, register(t#)) for read-only buffers
+     *
+     * WGSL var<storage, read> maps to SRV via Naga→spirv-cross, while
+     * GLSL/HLSL typically uses RWStructuredBuffer (UAV) for everything.
+     * Supporting both ensures all source languages work. */
+    D3D12_DESCRIPTOR_RANGE ranges[2] = {};
+
+    /* UAVs: RWStructuredBuffer at register(u0..u15) */
+    ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    ranges[0].NumDescriptors = 16;
+    ranges[0].BaseShaderRegister = 0;
+    ranges[0].RegisterSpace = 0;
+    ranges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    /* SRVs: StructuredBuffer at register(t0..t15) */
+    ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    ranges[1].NumDescriptors = 16;
+    ranges[1].BaseShaderRegister = 0;
+    ranges[1].RegisterSpace = 0;
+    ranges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
     D3D12_ROOT_PARAMETER param = {};
     param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    param.DescriptorTable.NumDescriptorRanges = 1;
-    param.DescriptorTable.pDescriptorRanges = &range;
+    param.DescriptorTable.NumDescriptorRanges = 2;
+    param.DescriptorTable.pDescriptorRanges = ranges;
     param.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
@@ -583,9 +598,9 @@ static void* d3d12_kernel_compile(void* dev, const char* source, size_t source_l
     /* DXIL bytecode no longer needed after pipeline creation */
     free(dxil);
 
-    /* Create descriptor heap for UAVs */
+    /* Create descriptor heap for UAVs + SRVs (16 each) */
     D3D12_DESCRIPTOR_HEAP_DESC heap_desc = {};
-    heap_desc.NumDescriptors = 16;
+    heap_desc.NumDescriptors = 32;  /* 0..15 = UAVs, 16..31 = SRVs */
     heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
@@ -621,31 +636,48 @@ static void d3d12_kernel_dispatch(void* kernel, void** inputs, int input_count,
     ID3D12DescriptorHeap* heaps[] = { d3d_kernel->descriptor_heap.Get() };
     d3d_dev->command_list->SetDescriptorHeaps(1, heaps);
 
-    /* Create UAVs for all buffers (inputs + output) */
+    /* Create UAV and SRV views for all buffers.
+     *
+     * Descriptor layout: [0..15] = UAVs (register(u#)), [16..31] = SRVs (register(t#))
+     *
+     * Transpiled HLSL from GLSL uses RWStructuredBuffer (UAV) for all buffers.
+     * Transpiled HLSL from WGSL uses StructuredBuffer (SRV) for read-only inputs.
+     * We bind every buffer to both slots so either style works. */
     D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle = d3d_kernel->descriptor_heap->GetCPUDescriptorHandleForHeapStart();
     UINT descriptor_size = d3d_dev->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-    /* Create UAVs for input buffers */
     for (int i = 0; i < input_count; i++) {
         D3D12Buffer* input_buf = (D3D12Buffer*)inputs[i];
+        UINT num_elements = (UINT)(input_buf->size / 4);
 
+        /* UAV at slot i (register(u{i})) */
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
         uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
         uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-        uav_desc.Buffer.FirstElement = 0;
-        uav_desc.Buffer.NumElements = (UINT)(input_buf->size / 4);
+        uav_desc.Buffer.NumElements = num_elements;
         uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
 
-        D3D12_CPU_DESCRIPTOR_HANDLE handle = cpu_handle;
-        handle.ptr += i * descriptor_size;
-        d3d_dev->device->CreateUnorderedAccessView(input_buf->resource.Get(), nullptr, &uav_desc, handle);
+        D3D12_CPU_DESCRIPTOR_HANDLE uav_handle = cpu_handle;
+        uav_handle.ptr += i * descriptor_size;
+        d3d_dev->device->CreateUnorderedAccessView(input_buf->resource.Get(), nullptr, &uav_desc, uav_handle);
+
+        /* SRV at slot 16+i (register(t{i})) */
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+        srv_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+        srv_desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv_desc.Buffer.NumElements = num_elements;
+        srv_desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE srv_handle = cpu_handle;
+        srv_handle.ptr += (16 + i) * descriptor_size;
+        d3d_dev->device->CreateShaderResourceView(input_buf->resource.Get(), &srv_desc, srv_handle);
     }
 
-    /* Create UAV for output buffer */
+    /* UAV for output buffer at slot input_count (register(u{input_count})) */
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
     uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
     uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    uav_desc.Buffer.FirstElement = 0;
     uav_desc.Buffer.NumElements = (UINT)(output_buf->size / 4);
     uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
 
