@@ -20,6 +20,75 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef _WIN32
+#include <unistd.h>
+#else
+#include <io.h>
+#define access _access
+#define F_OK 0
+#endif
+
+/*
+ * Auto-detect DXC and Naga tool paths.
+ *
+ * Checks (in order):
+ *   1. MENTAL_DXC_PATH / MENTAL_NAGA_PATH environment variables
+ *   2. Common relative paths from the build directory
+ *   3. Leaves unconfigured if not found (tests that need them will skip/fail)
+ */
+static void auto_detect_tools(void) {
+    /* DXC */
+    if (!mental_get_tool_path(MENTAL_TOOL_DXC)) {
+        const char *env = getenv("MENTAL_DXC_PATH");
+        if (env && access(env, F_OK) == 0) {
+            mental_set_tool_path(MENTAL_TOOL_DXC, env);
+        } else {
+            static const char *dxc_candidates[] = {
+                "../external/dxc/bin/dxc",
+                "../../external/dxc/bin/dxc",
+                "../external/dxc/bin/dxc.exe",
+                "../../external/dxc/bin/dxc.exe",
+                NULL
+            };
+            for (int i = 0; dxc_candidates[i]; i++) {
+                if (access(dxc_candidates[i], F_OK) == 0) {
+                    mental_set_tool_path(MENTAL_TOOL_DXC, dxc_candidates[i]);
+                    break;
+                }
+            }
+        }
+    }
+
+    /* Naga */
+    if (!mental_get_tool_path(MENTAL_TOOL_NAGA)) {
+        const char *env = getenv("MENTAL_NAGA_PATH");
+        if (env && access(env, F_OK) == 0) {
+            mental_set_tool_path(MENTAL_TOOL_NAGA, env);
+        } else {
+            static const char *naga_candidates[] = {
+                "../external/naga/bin/naga",
+                "../../external/naga/bin/naga",
+                "../external/naga/bin/naga.exe",
+                "../../external/naga/bin/naga.exe",
+                NULL
+            };
+            for (int i = 0; naga_candidates[i]; i++) {
+                if (access(naga_candidates[i], F_OK) == 0) {
+                    mental_set_tool_path(MENTAL_TOOL_NAGA, naga_candidates[i]);
+                    break;
+                }
+            }
+        }
+    }
+
+    const char *dxc = mental_get_tool_path(MENTAL_TOOL_DXC);
+    const char *naga = mental_get_tool_path(MENTAL_TOOL_NAGA);
+    if (dxc) printf("  DXC: %s\n", dxc);
+    else printf("  DXC: not found (HLSL tests will be skipped)\n");
+    if (naga) printf("  Naga: %s\n", naga);
+    else printf("  Naga: not found (WGSL tests will be skipped)\n");
+}
+
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
 /* ------------------------------------------------------------------ */
@@ -682,6 +751,11 @@ static int test_double_hop(mental_device dev, mental_api_type api) {
 
 int main(void) {
     printf("=== Transpilation Test Suite ===\n\n");
+
+    /* Auto-detect external tools before running any tests */
+    printf("[Tool Auto-Detection]\n");
+    auto_detect_tools();
+    printf("\n");
 
     /* ---- Section 1: Language Detection ---- */
     printf("[Language Detection]\n");

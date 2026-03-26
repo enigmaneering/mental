@@ -1,5 +1,6 @@
 /* Multi-language shader test: GLSL, HLSL, MSL, WGSL, ESSL */
 #include "../mental.h"
+#include "../transpile.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,7 +8,12 @@
 #include <unistd.h>
 #else
 #include <direct.h>
+#include <io.h>
 #define getcwd _getcwd
+#define access _access
+#ifndef F_OK
+#define F_OK 0
+#endif
 #endif
 
 #define ASSERT(cond, msg) do { \
@@ -185,8 +191,32 @@ static int test_shader(const char* name, const char* shader_source, mental_devic
     return 0;
 }
 
+/* Auto-detect DXC and Naga from common paths */
+static void setup_tools(void) {
+    if (!mental_get_tool_path(MENTAL_TOOL_DXC)) {
+        const char *env = getenv("MENTAL_DXC_PATH");
+        if (env) { mental_set_tool_path(MENTAL_TOOL_DXC, env); }
+        else {
+            const char *paths[] = {"../external/dxc/bin/dxc", "../../external/dxc/bin/dxc", NULL};
+            for (int i = 0; paths[i]; i++)
+                if (access(paths[i], F_OK) == 0) { mental_set_tool_path(MENTAL_TOOL_DXC, paths[i]); break; }
+        }
+    }
+    if (!mental_get_tool_path(MENTAL_TOOL_NAGA)) {
+        const char *env = getenv("MENTAL_NAGA_PATH");
+        if (env) { mental_set_tool_path(MENTAL_TOOL_NAGA, env); }
+        else {
+            const char *paths[] = {"../external/naga/bin/naga", "../../external/naga/bin/naga", NULL};
+            for (int i = 0; paths[i]; i++)
+                if (access(paths[i], F_OK) == 0) { mental_set_tool_path(MENTAL_TOOL_NAGA, paths[i]); break; }
+        }
+    }
+}
+
 int main(void) {
     printf("Testing multi-language shader support...\n");
+
+    setup_tools();
 
     char cwd[1024];
     if (getcwd(cwd, sizeof(cwd))) {
