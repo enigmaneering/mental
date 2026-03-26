@@ -281,6 +281,17 @@ static int test_api_mapping(void) {
 /* ================================================================== */
 
 static int test_tool_paths(void) {
+    /* Save any auto-detected paths so we can restore them after the test */
+    const char *saved_dxc = mental_get_tool_path(MENTAL_TOOL_DXC);
+    const char *saved_naga = mental_get_tool_path(MENTAL_TOOL_NAGA);
+    char dxc_backup[4096] = {0}, naga_backup[4096] = {0};
+    if (saved_dxc) strncpy(dxc_backup, saved_dxc, sizeof(dxc_backup) - 1);
+    if (saved_naga) strncpy(naga_backup, saved_naga, sizeof(naga_backup) - 1);
+
+    /* Clear to test from a clean state */
+    mental_set_tool_path(MENTAL_TOOL_DXC, NULL);
+    mental_set_tool_path(MENTAL_TOOL_NAGA, NULL);
+
     /* Initially NULL */
     ASSERT(mental_get_tool_path(MENTAL_TOOL_DXC) == NULL, "DXC path initially NULL");
     ASSERT(mental_get_tool_path(MENTAL_TOOL_NAGA) == NULL, "Naga path initially NULL");
@@ -299,7 +310,10 @@ static int test_tool_paths(void) {
     /* Naga should be unaffected */
     ASSERT(mental_get_tool_path(MENTAL_TOOL_NAGA) != NULL, "Naga path still set");
 
-    mental_set_tool_path(MENTAL_TOOL_NAGA, NULL);
+    /* Restore original auto-detected paths */
+    mental_set_tool_path(MENTAL_TOOL_DXC, dxc_backup[0] ? dxc_backup : NULL);
+    mental_set_tool_path(MENTAL_TOOL_NAGA, naga_backup[0] ? naga_backup : NULL);
+
     PASS("tool_path_configuration");
 }
 
