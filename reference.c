@@ -251,6 +251,7 @@ struct disclosure_header {
     uint32_t credential_len;
     uint8_t  credential[DISCLOSURE_CREDENTIAL_MAX];
     uint32_t lock;
+    uint64_t user_size;  /* actual user data size (set by owner, read by observer) */
 };
 
 /* ── Disclosure spinlock ───────────────────────────────────────── */
@@ -377,6 +378,7 @@ mental_reference mental_reference_create(const char *name, size_t size) {
     memset(hdr, 0, DISCLOSURE_HEADER_SIZE);
     ATOMIC_STORE32(&hdr->mode, MENTAL_RELATIONALLY_OPEN);
     ATOMIC_STORE32(&hdr->lock, 0);
+    hdr->user_size = (uint64_t)size;
 
     track_ref(path);
     return ref;
@@ -420,8 +422,15 @@ mental_reference mental_reference_open(const char *peer_uuid, const char *name) 
     }
     VirtualQuery(ref->addr, &info, sizeof(info));
     ref->total_size = info.RegionSize;
-    ref->user_size  = (ref->total_size > DISCLOSURE_HEADER_SIZE)
-                    ? ref->total_size - DISCLOSURE_HEADER_SIZE : 0;
+
+    /* Read the actual user_size from the disclosure header */
+    struct disclosure_header *hdr_win = (struct disclosure_header *)ref->addr;
+    if (hdr_win->user_size > 0) {
+        ref->user_size = (size_t)hdr_win->user_size;
+    } else {
+        ref->user_size = (ref->total_size > DISCLOSURE_HEADER_SIZE)
+                       ? ref->total_size - DISCLOSURE_HEADER_SIZE : 0;
+    }
 #else
     int fd = shm_open(path, O_RDWR, 0);
     if (fd < 0) {
@@ -450,8 +459,18 @@ mental_reference mental_reference_open(const char *peer_uuid, const char *name) 
     ref->fd         = fd;
     ref->addr       = addr;
     ref->total_size = (size_t)st.st_size;
-    ref->user_size  = (ref->total_size > DISCLOSURE_HEADER_SIZE)
-                    ? ref->total_size - DISCLOSURE_HEADER_SIZE : 0;
+
+    /* Read the actual user_size from the disclosure header.
+     * fstat may return a page-aligned size (macOS arm64 rounds to 16KB)
+     * so we can't infer user_size from total_size. */
+    struct disclosure_header *hdr = (struct disclosure_header *)ref->addr;
+    if (hdr->user_size > 0) {
+        ref->user_size = (size_t)hdr->user_size;
+    } else {
+        /* Fallback for pre-header-version shm segments */
+        ref->user_size = (ref->total_size > DISCLOSURE_HEADER_SIZE)
+                       ? ref->total_size - DISCLOSURE_HEADER_SIZE : 0;
+    }
 #endif
 
     return ref;
