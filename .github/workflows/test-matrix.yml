@@ -180,14 +180,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.packages }}
 
-      # ---- Windows: Vulkan SDK ----
+      # ---- Windows: Vulkan SDK (direct from LunarG, no third-party actions) ----
       - name: Install Vulkan SDK (Windows)
         if: matrix.install_vulkan
-        uses: humbletim/setup-vulkan-sdk@v1.2.0
-        with:
-          vulkan-query-version: latest
-          vulkan-components: Vulkan-Headers, Vulkan-Loader
-          vulkan-use-cache: true
+        shell: pwsh
+        run: |
+          $ver = (Invoke-RestMethod 'https://vulkan.lunarg.com/sdk/latest/windows.json').trim('"')
+          $url = "https://sdk.lunarg.com/sdk/download/$ver/windows/VulkanSDK-$ver-Installer.exe"
+          Write-Host "Installing Vulkan SDK $ver"
+          Invoke-WebRequest -Uri $url -OutFile VulkanSDK.exe
+          .\VulkanSDK.exe --accept-licenses --default-answer --confirm-command install copy_only=1
+          $sdk = "C:\VulkanSDK\$ver"
+          echo "VULKAN_SDK=$sdk" >> $env:GITHUB_ENV
+          echo "$sdk\Bin" >> $env:GITHUB_PATH
+          Remove-Item VulkanSDK.exe
 
       # ---- Configure ----
       - name: Configure
