@@ -289,7 +289,7 @@ elseif(PLATFORM_WINDOWS)
     endif()
 
     # Common dependencies
-    set(WINDOWS_LIBS)
+    set(WINDOWS_LIBS ws2_32)  # Winsock — needed for htonl/ntohl in stdlink.c
     if(MENTAL_HAS_D3D12)
         list(APPEND WINDOWS_LIBS d3d12.lib dxgi.lib)
     endif()
