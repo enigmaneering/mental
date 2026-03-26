@@ -50,17 +50,29 @@ static void stdlink_init_unlock(void) {
 }
 
 static int stdlink_create(void) {
+    /* The far-end handles must be inheritable so child processes can
+     * use them.  The near-end handles stay non-inheritable. */
+    SECURITY_ATTRIBUTES sa = {0};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
     HANDLE nr, nw, fr, fw;
-    if (!CreatePipe(&fr, &nw, NULL, 0)) return -1;
-    if (!CreatePipe(&nr, &fw, NULL, 0)) {
+    /* Pipe 1: near writes -> far reads (inheritable read end) */
+    if (!CreatePipe(&fr, &nw, &sa, 0)) return -1;
+    SetHandleInformation(nw, HANDLE_FLAG_INHERIT, 0); /* near write: not inheritable */
+
+    /* Pipe 2: far writes -> near reads (inheritable write end) */
+    if (!CreatePipe(&nr, &fw, &sa, 0)) {
         CloseHandle(fr);
         CloseHandle(nw);
         return -1;
     }
+    SetHandleInformation(nr, HANDLE_FLAG_INHERIT, 0); /* near read: not inheritable */
+
     g_near_read  = nr;
     g_near_write = nw;
-    g_far_read   = fr;
-    g_far_write  = fw;
+    g_far_read   = fr;  /* inheritable */
+    g_far_write  = fw;  /* inheritable */
     return 0;
 }
 
@@ -159,6 +171,20 @@ static int ensure_stdlink(void) {
 
     stdlink_init_lock();
     if (!g_stdlink_init) {
+#ifdef _WIN32
+        /* Check if we inherited handles from a parent process.
+         * Parent passes far-end handles via environment variables
+         * so the child uses them as its near-end (swapped perspective). */
+        const char *env_r = getenv("MENTAL_STDLINK_READ");
+        const char *env_w = getenv("MENTAL_STDLINK_WRITE");
+        if (env_r && env_w) {
+            g_near_read  = (HANDLE)(uintptr_t)strtoull(env_r, NULL, 10);
+            g_near_write = (HANDLE)(uintptr_t)strtoull(env_w, NULL, 10);
+            g_far_read   = INVALID_HANDLE_VALUE;
+            g_far_write  = INVALID_HANDLE_VALUE;
+            g_stdlink_init = 1;
+        } else
+#endif
         if (stdlink_create() == 0)
             g_stdlink_init = 1;
     }
@@ -189,6 +215,17 @@ int mental_stdlink_peer(void) {
     return g_stdlink_far;
 #endif
 }
+
+#ifdef _WIN32
+/* Get far-end handle values for passing to child processes via env vars.
+ * The child sets MENTAL_STDLINK_READ=far_read, MENTAL_STDLINK_WRITE=far_write
+ * and ensure_stdlink picks them up as its near-end. */
+void mental_stdlink_peer_handles(uintptr_t *out_read, uintptr_t *out_write) {
+    if (ensure_stdlink() < 0) return;
+    if (out_read)  *out_read  = (uintptr_t)g_far_read;
+    if (out_write) *out_write = (uintptr_t)g_far_write;
+}
+#endif
 
 int mental_stdlink_send(const void *data, size_t len) {
     if (ensure_stdlink() < 0) return -1;

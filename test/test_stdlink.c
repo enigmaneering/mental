@@ -160,6 +160,23 @@ static int xproc_stdlink_child(void *shared_ptr, size_t shared_size) {
 int main(int argc, char **argv) {
     if (mental_test_child_dispatch(argc, argv)) return 0;
 
+#ifdef _WIN32
+    /* Windows stdlink child mode: read one record, uppercase, echo back */
+    if (argc >= 2 && strcmp(argv[1], "--stdlink-child") == 0) {
+        /* ensure_stdlink picks up MENTAL_STDLINK_READ/WRITE from env */
+        char buf[65536];
+        size_t len = 0;
+        if (mental_stdlink_recv(buf, sizeof(buf), &len) != 0) return 1;
+
+        for (size_t i = 0; i < len; i++) {
+            if (buf[i] >= 'a' && buf[i] <= 'z') buf[i] -= 32;
+        }
+
+        if (mental_stdlink_send(buf, len) != 0) return 2;
+        return 0;
+    }
+#endif
+
     printf("Testing stdlink...\n");
 
     /* ── fd creation ───────────────────────────────────────── */
@@ -251,10 +268,61 @@ int main(int argc, char **argv) {
         printf("  cross-process (fork + socketpair): OK\n");
     }
 #else
-    /* Windows cross-process: use mental_stdlink_send/recv via the
-     * library's pipe-based implementation. The child process inherits
-     * the stdlink pipe handles and communicates through them. */
-    printf("  cross-process (Windows pipes): TODO - stdlink pipe inheritance\n");
+    /* Windows cross-process: child inherits the far-end pipe handles.
+     * Parent sets MENTAL_STDLINK_READ/WRITE env vars with handle values,
+     * then spawns the child. ensure_stdlink in the child picks them up. */
+    {
+        extern void mental_stdlink_peer_handles(uintptr_t *out_read, uintptr_t *out_write);
+
+        uintptr_t far_read = 0, far_write = 0;
+        mental_stdlink_peer_handles(&far_read, &far_write);
+
+        char env_r[64], env_w[64];
+        snprintf(env_r, sizeof(env_r), "MENTAL_STDLINK_READ=%llu", (unsigned long long)far_read);
+        snprintf(env_w, sizeof(env_w), "MENTAL_STDLINK_WRITE=%llu", (unsigned long long)far_write);
+        _putenv(env_r);
+        _putenv(env_w);
+
+        /* Get path to current executable */
+        char exe[MAX_PATH];
+        GetModuleFileNameA(NULL, exe, MAX_PATH);
+
+        /* Spawn child that runs --stdlink-child mode */
+        char cmd[4096];
+        snprintf(cmd, sizeof(cmd), "\"%s\" --stdlink-child", exe);
+
+        STARTUPINFOA si = {0};
+        si.cb = sizeof(si);
+        PROCESS_INFORMATION pi = {0};
+        ASSERT(CreateProcessA(NULL, cmd, NULL, NULL, TRUE /* inherit handles */,
+                              0, NULL, NULL, &si, &pi),
+               "CreateProcess failed for stdlink child");
+
+        /* Parent: send a message via stdlink, expect uppercase echo back */
+        const char *msg = "hello from parent";
+        size_t msg_len = strlen(msg);
+        ASSERT(mental_stdlink_send(msg, msg_len) == 0, "parent send failed");
+
+        char resp[256];
+        size_t out_len = 0;
+        ASSERT(mental_stdlink_recv(resp, sizeof(resp), &out_len) == 0, "parent recv failed");
+        ASSERT(out_len == msg_len, "response length mismatch");
+        ASSERT(memcmp(resp, "HELLO FROM PARENT", out_len) == 0,
+               "cross-process response mismatch");
+
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD exit_code;
+        GetExitCodeProcess(pi.hProcess, &exit_code);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        ASSERT(exit_code == 0, "child process failed");
+
+        /* Clean up env vars */
+        _putenv("MENTAL_STDLINK_READ=");
+        _putenv("MENTAL_STDLINK_WRITE=");
+
+        printf("  cross-process (Windows pipes): OK\n");
+    }
 #endif
 
     printf("PASS: stdlink\n");
