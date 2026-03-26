@@ -48,10 +48,12 @@ typedef struct {
 
 /* D3D12 viewport wrapper */
 typedef struct {
-    ComPtr<IDXGISwapChain3> swapChain;
+    ComPtr<IDXGISwapChain3> swapChain;  /* NULL in headless/single-buffer mode */
+    ComPtr<ID3D12Resource> renderTarget; /* single buffer when no swapchain */
     D3D12Buffer* buffer;
     D3D12Device* device;
     UINT bufferIndex;
+    int headless;  /* 1 = no swapchain, single render target */
 } D3D12Viewport;
 
 /* Global D3D12 state */
@@ -751,7 +753,7 @@ static void* d3d12_viewport_attach(void* dev, void* buffer, void* surface, char*
     swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
 
-    /* Create swap chain */
+    /* Try to create swap chain for double-buffered present */
     ComPtr<IDXGISwapChain1> swapChain1;
     hr = factory->CreateSwapChainForHwnd(
         d3d_dev->queue.Get(),
@@ -762,29 +764,58 @@ static void* d3d12_viewport_attach(void* dev, void* buffer, void* surface, char*
         &swapChain1
     );
 
-    if (FAILED(hr)) {
-        if (error) {
-            snprintf(error, error_len, "Failed to create swap chain");
-        }
-        return NULL;
-    }
-
-    /* Query for IDXGISwapChain3 */
-    ComPtr<IDXGISwapChain3> swapChain;
-    hr = swapChain1.As(&swapChain);
-    if (FAILED(hr)) {
-        if (error) {
-            snprintf(error, error_len, "Failed to query IDXGISwapChain3");
-        }
-        return NULL;
-    }
-
-    /* Create viewport */
     D3D12Viewport* viewport = new D3D12Viewport();
-    viewport->swapChain = swapChain;
     viewport->buffer = d3d_buf;
     viewport->device = d3d_dev;
     viewport->bufferIndex = 0;
+    viewport->headless = 0;
+
+    if (SUCCEEDED(hr)) {
+        /* Double-buffered path: swapchain available */
+        ComPtr<IDXGISwapChain3> swapChain;
+        hr = swapChain1.As(&swapChain);
+        if (FAILED(hr)) {
+            if (error) snprintf(error, error_len, "Failed to query IDXGISwapChain3");
+            delete viewport;
+            return NULL;
+        }
+        viewport->swapChain = swapChain;
+    } else {
+        /* Headless / software renderer: no swapchain, use a single
+         * render target.  Present becomes a no-op but the viewport
+         * lifecycle (attach/present/detach) still works for compute
+         * workflows that read back results rather than display them. */
+        RECT rect;
+        GetClientRect(hwnd, &rect);
+        UINT width  = rect.right  > 0 ? (UINT)rect.right  : 1;
+        UINT height = rect.bottom > 0 ? (UINT)rect.bottom : 1;
+
+        D3D12_RESOURCE_DESC rt_desc = {};
+        rt_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        rt_desc.Width = width;
+        rt_desc.Height = height;
+        rt_desc.DepthOrArraySize = 1;
+        rt_desc.MipLevels = 1;
+        rt_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        rt_desc.SampleDesc.Count = 1;
+        rt_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+        D3D12_HEAP_PROPERTIES heap_props = {};
+        heap_props.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+        hr = d3d_dev->device->CreateCommittedResource(
+            &heap_props, D3D12_HEAP_FLAG_NONE, &rt_desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&viewport->renderTarget));
+
+        if (FAILED(hr)) {
+            if (error) snprintf(error, error_len, "Failed to create headless render target");
+            delete viewport;
+            return NULL;
+        }
+
+        viewport->headless = 1;
+    }
 
     return viewport;
 }
@@ -794,17 +825,34 @@ static void d3d12_viewport_present(void* viewport_ptr) {
 
     D3D12Viewport* viewport = (D3D12Viewport*)viewport_ptr;
 
-    /* Get current back buffer */
+    /* Headless: copy buffer to render target (no display present) */
+    if (viewport->headless) {
+        viewport->device->allocator->Reset();
+        viewport->device->command_list->Reset(viewport->device->allocator.Get(), nullptr);
+        viewport->device->command_list->CopyResource(viewport->renderTarget.Get(),
+                                                      viewport->buffer->resource.Get());
+        viewport->device->command_list->Close();
+        ID3D12CommandList* cmd_lists[] = { viewport->device->command_list.Get() };
+        viewport->device->queue->ExecuteCommandLists(1, cmd_lists);
+
+        viewport->device->fence_value++;
+        viewport->device->queue->Signal(viewport->device->fence.Get(), viewport->device->fence_value);
+        if (viewport->device->fence->GetCompletedValue() < viewport->device->fence_value) {
+            viewport->device->fence->SetEventOnCompletion(viewport->device->fence_value, viewport->device->fence_event);
+            WaitForSingleObject(viewport->device->fence_event, INFINITE);
+        }
+        return;
+    }
+
+    /* Double-buffered path: swap chain present */
     viewport->bufferIndex = viewport->swapChain->GetCurrentBackBufferIndex();
     ComPtr<ID3D12Resource> backBuffer;
     HRESULT hr = viewport->swapChain->GetBuffer(viewport->bufferIndex, IID_PPV_ARGS(&backBuffer));
     if (FAILED(hr)) return;
 
-    /* Reset command list */
     viewport->device->allocator->Reset();
     viewport->device->command_list->Reset(viewport->device->allocator.Get(), nullptr);
 
-    /* Transition back buffer to COPY_DEST */
     D3D12_RESOURCE_BARRIER barrier = {};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition.pResource = backBuffer.Get();
@@ -813,23 +861,18 @@ static void d3d12_viewport_present(void* viewport_ptr) {
     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     viewport->device->command_list->ResourceBarrier(1, &barrier);
 
-    /* Copy from buffer to back buffer */
     viewport->device->command_list->CopyResource(backBuffer.Get(), viewport->buffer->resource.Get());
 
-    /* Transition back buffer to PRESENT */
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
     viewport->device->command_list->ResourceBarrier(1, &barrier);
 
-    /* Execute commands */
     viewport->device->command_list->Close();
     ID3D12CommandList* cmd_lists[] = { viewport->device->command_list.Get() };
     viewport->device->queue->ExecuteCommandLists(1, cmd_lists);
 
-    /* Present */
     viewport->swapChain->Present(1, 0);
 
-    /* Wait for GPU */
     viewport->device->fence_value++;
     viewport->device->queue->Signal(viewport->device->fence.Get(), viewport->device->fence_value);
     if (viewport->device->fence->GetCompletedValue() < viewport->device->fence_value) {
