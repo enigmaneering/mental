@@ -4,9 +4,21 @@
 
 #include "mental.h"
 #include "mental_internal.h"
+#include "transpile.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+#ifndef _WIN32
+#include <unistd.h>
+#define MENTAL_ACCESS access
+#else
+#include <io.h>
+#define MENTAL_ACCESS _access
+#ifndef F_OK
+#define F_OK 0
+#endif
+#endif
 
 /* Global state */
 mental_device* g_devices = NULL;
@@ -106,6 +118,37 @@ static void mental_initialize(void) {
 
     g_initialized = 1;
     pthread_mutex_unlock(&g_init_lock);
+
+    /* Auto-detect external tool paths (DXC, Naga) from common locations.
+     * Only probes if not already configured via mental_set_tool_path. */
+    static const char *dxc_paths[] = {
+        "external/dxc/bin/dxc", "external/dxc/dxc",
+        "external/dxc/bin/dxc.exe", "external/dxc/dxc.exe",
+        "../external/dxc/bin/dxc", "../external/dxc/dxc",
+        "../external/dxc/bin/dxc.exe", "../external/dxc/dxc.exe",
+        NULL
+    };
+    static const char *naga_paths[] = {
+        "external/naga/bin/naga", "external/naga/bin/naga.exe",
+        "../external/naga/bin/naga", "../external/naga/bin/naga.exe",
+        NULL
+    };
+    if (!mental_get_tool_path(MENTAL_TOOL_DXC)) {
+        for (int i = 0; dxc_paths[i]; i++) {
+            if (MENTAL_ACCESS(dxc_paths[i], F_OK) == 0) {
+                mental_set_tool_path(MENTAL_TOOL_DXC, dxc_paths[i]);
+                break;
+            }
+        }
+    }
+    if (!mental_get_tool_path(MENTAL_TOOL_NAGA)) {
+        for (int i = 0; naga_paths[i]; i++) {
+            if (MENTAL_ACCESS(naga_paths[i], F_OK) == 0) {
+                mental_set_tool_path(MENTAL_TOOL_NAGA, naga_paths[i]);
+                break;
+            }
+        }
+    }
 }
 
 /*

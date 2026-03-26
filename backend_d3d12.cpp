@@ -409,11 +409,16 @@ static unsigned char* compile_hlsl_to_dxil(const char* hlsl_source, size_t hlsl_
         return nullptr;
     }
 
-    /* Create temporary directory */
+    /* Create temporary directory.
+     * Use forward slashes throughout — MinGW/MSYS2 popen goes through sh
+     * which can mangle backslash-escaped paths. Native Windows APIs and
+     * DXC both accept forward slashes. */
     char temp_path[MAX_PATH];
     char temp_dir[MAX_PATH];
     GetTempPathA(MAX_PATH, temp_path);
-    snprintf(temp_dir, sizeof(temp_dir), "%smental_hlsl_%lu", temp_path, GetTickCount64());
+    /* Normalize backslashes to forward slashes */
+    for (char *p = temp_path; *p; p++) { if (*p == '\\') *p = '/'; }
+    snprintf(temp_dir, sizeof(temp_dir), "%smental_hlsl_%lu", temp_path, (unsigned long)GetTickCount64());
     if (!CreateDirectoryA(temp_dir, NULL)) {
         if (error) snprintf(error, error_len, "Failed to create temp directory");
         return nullptr;
@@ -421,7 +426,7 @@ static unsigned char* compile_hlsl_to_dxil(const char* hlsl_source, size_t hlsl_
 
     /* Write HLSL to temp file */
     char src_path[MAX_PATH];
-    snprintf(src_path, sizeof(src_path), "%s\\shader.hlsl", temp_dir);
+    snprintf(src_path, sizeof(src_path), "%s/shader.hlsl", temp_dir);
     FILE* f = fopen(src_path, "wb");
     if (!f) {
         if (error) snprintf(error, error_len, "Failed to write HLSL source");
@@ -434,9 +439,14 @@ static unsigned char* compile_hlsl_to_dxil(const char* hlsl_source, size_t hlsl_
     /* Compile HLSL to DXIL using DXC */
     char out_path[MAX_PATH];
     char cmd[4096];
-    snprintf(out_path, sizeof(out_path), "%s\\shader.dxil", temp_dir);
-    snprintf(cmd, sizeof(cmd), "\"%s\" -T cs_6_0 -E main -Fo \"%s\" \"%s\" 2>&1",
-             dxc, out_path, src_path);
+    snprintf(out_path, sizeof(out_path), "%s/shader.dxil", temp_dir);
+    /* Normalize DXC path too */
+    char dxc_norm[MAX_PATH];
+    strncpy(dxc_norm, dxc, sizeof(dxc_norm) - 1);
+    dxc_norm[sizeof(dxc_norm) - 1] = '\0';
+    for (char *p = dxc_norm; *p; p++) { if (*p == '\\') *p = '/'; }
+    snprintf(cmd, sizeof(cmd), "%s -T cs_6_0 -E main -Fo %s %s 2>&1",
+             dxc_norm, out_path, src_path);
 
     FILE* pipe = _popen(cmd, "r");
     if (!pipe) {
