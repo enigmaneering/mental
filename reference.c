@@ -179,9 +179,63 @@ static void untrack_ref(const char* path) {
 
 /* ── Helpers ───────────────────────────────────────────────────── */
 
+/*
+ * Build a shm name that fits within POSIX limits on all platforms.
+ *
+ * macOS enforces PSHMNAMLEN (31 chars including the leading '/').
+ * Linux allows up to PATH_MAX (~4096).
+ *
+ * Strategy: try the full readable name first ("/mental-{uuid}-{name}").
+ * If it exceeds the platform limit, hash it down to a fixed-width
+ * hex digest that always fits: "/m-{24 hex chars}" = 27 chars.
+ */
+
+/* Simple FNV-1a 64-bit hash — no crypto needed, just uniqueness */
+static uint64_t fnv1a(const char *s) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    while (*s) {
+        h ^= (uint64_t)(unsigned char)*s++;
+        h *= 0x100000001b3ULL;
+    }
+    return h;
+}
+
+/* macOS: PSHMNAMLEN is 31.  Leave room for the leading '/'. */
+#ifdef __APPLE__
+#define SHM_NAME_MAX 31
+#else
+#define SHM_NAME_MAX 255
+#endif
+
 static int build_shm_path(char *dst, size_t dst_len,
                            const char *uuid, const char *name) {
+    /* Try readable name first */
     int n = snprintf(dst, dst_len, "/mental-%s-%s", uuid, name);
+    if (n > 0 && (size_t)n < dst_len && n <= SHM_NAME_MAX)
+        return 0;
+
+    /* Too long — hash to "/m-{24 hex}" (27 chars, fits in 31) */
+    char full[640];
+    snprintf(full, sizeof(full), "%s-%s", uuid, name);
+    uint64_t h1 = fnv1a(full);
+    /* Hash again with a salt for 128 bits of uniqueness */
+    char salted[640];
+    snprintf(salted, sizeof(salted), "%s-%s-salt", uuid, name);
+    uint64_t h2 = fnv1a(salted);
+
+    static const char hex[] = "0123456789abcdef";
+    char tag[25]; /* 24 hex chars + nul */
+    for (int i = 0; i < 8; i++) {
+        tag[i * 2]     = hex[(h1 >> (i * 8 + 4)) & 0xF];
+        tag[i * 2 + 1] = hex[(h1 >> (i * 8))     & 0xF];
+    }
+    for (int i = 0; i < 4; i++) {
+        tag[16 + i * 2]     = hex[(h2 >> (i * 8 + 4)) & 0xF];
+        tag[16 + i * 2 + 1] = hex[(h2 >> (i * 8))     & 0xF];
+    }
+    tag[24] = '\0';
+
+    n = snprintf(dst, dst_len, "/m-%s", tag);
     return (n > 0 && (size_t)n < dst_len) ? 0 : -1;
 }
 
