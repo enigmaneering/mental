@@ -693,7 +693,7 @@ static void* vulkan_viewport_attach(void* dev, void* buffer, void* surface, char
         VkMemoryAllocateInfo mem_alloc = {};
         mem_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         mem_alloc.allocationSize = mem_req.size;
-        mem_alloc.memoryTypeIndex = find_memory_type(vk_dev, mem_req.memoryTypeBits,
+        mem_alloc.memoryTypeIndex = find_memory_type(vk_dev->physical_device, mem_req.memoryTypeBits,
                                                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
         if (vkAllocateMemory(vk_dev->device, &mem_alloc, nullptr, &viewport->headless_memory) != VK_SUCCESS) {
