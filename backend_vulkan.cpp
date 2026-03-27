@@ -205,6 +205,7 @@ static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type
 }
 
 static void* vulkan_buffer_alloc(void* dev, size_t bytes) {
+    fprintf(stderr, "[vulkan] buffer_alloc: %zu bytes\n", bytes);
     VulkanDevice* vk_dev = (VulkanDevice*)dev;
 
     VulkanBuffer* buf = new VulkanBuffer();
@@ -233,6 +234,12 @@ static void* vulkan_buffer_alloc(void* dev, size_t bytes) {
     alloc_info.memoryTypeIndex = find_memory_type(vk_dev->physical_device, mem_requirements.memoryTypeBits,
                                                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
+    if (alloc_info.memoryTypeIndex == UINT32_MAX) {
+        vkDestroyBuffer(vk_dev->device, buf->buffer, nullptr);
+        delete buf;
+        return NULL;
+    }
+
     if (vkAllocateMemory(vk_dev->device, &alloc_info, nullptr, &buf->memory) != VK_SUCCESS) {
         vkDestroyBuffer(vk_dev->device, buf->buffer, nullptr);
         delete buf;
@@ -241,19 +248,27 @@ static void* vulkan_buffer_alloc(void* dev, size_t bytes) {
 
     vkBindBufferMemory(vk_dev->device, buf->buffer, buf->memory, 0);
 
-    /* Map memory */
-    vkMapMemory(vk_dev->device, buf->memory, 0, bytes, 0, &buf->mapped_ptr);
+    /* Map memory persistently */
+    if (vkMapMemory(vk_dev->device, buf->memory, 0, bytes, 0, &buf->mapped_ptr) != VK_SUCCESS) {
+        vkFreeMemory(vk_dev->device, buf->memory, nullptr);
+        vkDestroyBuffer(vk_dev->device, buf->buffer, nullptr);
+        delete buf;
+        return NULL;
+    }
 
     return buf;
 }
 
 static void vulkan_buffer_write(void* buf, const void* data, size_t bytes) {
+    fprintf(stderr, "[vulkan] buffer_write: %zu bytes, buf=%p\n", bytes, buf);
     VulkanBuffer* vk_buf = (VulkanBuffer*)buf;
+    if (!vk_buf || !vk_buf->mapped_ptr) { fprintf(stderr, "[vulkan] buffer_write: NULL mapped_ptr!\n"); return; }
     memcpy(vk_buf->mapped_ptr, data, bytes);
 }
 
 static void vulkan_buffer_read(void* buf, void* data, size_t bytes) {
     VulkanBuffer* vk_buf = (VulkanBuffer*)buf;
+    if (!vk_buf || !vk_buf->mapped_ptr) return;
     memcpy(data, vk_buf->mapped_ptr, bytes);
 }
 
@@ -304,6 +319,7 @@ static void vulkan_buffer_destroy(void* buf) {
 
 static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_len,
                                     char* error, size_t error_len) {
+    fprintf(stderr, "[vulkan] kernel_compile: %zu bytes, dev=%p\n", source_len, dev);
     VulkanDevice* vk_dev = (VulkanDevice*)dev;
 
     /* The source arrives as GLSL text (transpiled by mental_compile).
@@ -444,6 +460,7 @@ static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_
 
 static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
                                     void* output, int work_size) {
+    fprintf(stderr, "[vulkan] kernel_dispatch: inputs=%d, work_size=%d\n", input_count, work_size);
     if (!kernel) return;
 
     VulkanKernel* vk_kernel = (VulkanKernel*)kernel;
