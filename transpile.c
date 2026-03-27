@@ -88,7 +88,7 @@ mental_language mental_api_to_language(mental_api_type api) {
     switch (api) {
         case MENTAL_API_METAL: return MENTAL_LANG_MSL;
         case MENTAL_API_D3D12: return MENTAL_LANG_HLSL;
-        case MENTAL_API_VULKAN: return MENTAL_LANG_GLSL;
+        case MENTAL_API_VULKAN: return MENTAL_LANG_SPIRV;
         case MENTAL_API_OPENCL: return MENTAL_LANG_GLSL; /* OpenCL uses GLSL compute */
         case MENTAL_API_OPENGL: return MENTAL_LANG_GLSL; /* OpenGL 4.3+ uses GLSL compute */
         case MENTAL_API_POCL:   return MENTAL_LANG_GLSL; /* PoCL uses OpenCL C (GLSL-like) */
@@ -164,6 +164,11 @@ char* mental_transpile(const char* source, size_t source_len, mental_api_type ta
         case MENTAL_LANG_WGSL:
             result = mental_spirv_to_wgsl(spirv, spirv_len, out_len, error, sizeof(error));
             break;
+        case MENTAL_LANG_SPIRV:
+            /* Target is SPIR-V — we already have it, just return as-is */
+            result = (char*)spirv;
+            *out_len = spirv_len;
+            return result; /* skip the free(spirv) below */
         default:
             fprintf(stderr, "ERROR: Unknown or unsupported target language\n");
             free(spirv);
