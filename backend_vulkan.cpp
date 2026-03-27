@@ -6,6 +6,7 @@
 
 #include <vulkan/vulkan.h>
 #include "mental_internal.h"
+#include "transpile.h"
 #include <vector>
 #include <string>
 #include <cstring>
@@ -302,23 +303,46 @@ static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_
                                     char* error, size_t error_len) {
     VulkanDevice* vk_dev = (VulkanDevice*)dev;
 
-    /* Assume source is SPIRV bytecode (already in SPIRV format or transpiled) */
+    /* The source arrives as GLSL text (transpiled by mental_compile).
+     * Vulkan needs SPIR-V binary, so compile it first via glslang. */
+    const uint32_t* spirv_data;
+    size_t spirv_len;
+    unsigned char* spirv_buf = nullptr;
+
+    /* Check if already SPIR-V (magic number 0x07230203) */
+    if (source_len >= 4 &&
+        (unsigned char)source[0] == 0x03 && (unsigned char)source[1] == 0x02 &&
+        (unsigned char)source[2] == 0x23 && (unsigned char)source[3] == 0x07) {
+        spirv_data = (const uint32_t*)source;
+        spirv_len = source_len;
+    } else {
+        /* Compile GLSL to SPIR-V */
+        spirv_buf = mental_glsl_to_spirv(source, source_len, &spirv_len, error, error_len);
+        if (!spirv_buf) {
+            return NULL;
+        }
+        spirv_data = (const uint32_t*)spirv_buf;
+    }
+
     VulkanKernel* kernel = new VulkanKernel();
     kernel->device_ctx = vk_dev;
 
-    /* Create shader module */
+    /* Create shader module from SPIR-V */
     VkShaderModuleCreateInfo module_info = {};
     module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    module_info.codeSize = source_len;
-    module_info.pCode = (const uint32_t*)source;
+    module_info.codeSize = spirv_len;
+    module_info.pCode = spirv_data;
 
     if (vkCreateShaderModule(vk_dev->device, &module_info, nullptr, &kernel->shader_module) != VK_SUCCESS) {
         if (error) {
             snprintf(error, error_len, "Failed to create shader module");
         }
+        free(spirv_buf);
         delete kernel;
         return NULL;
     }
+
+    free(spirv_buf); /* No longer needed after module creation */
 
     /* Create descriptor set layout for storage buffers
      * Support up to 16 buffers (inputs + outputs) */
