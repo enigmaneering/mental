@@ -484,48 +484,49 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
         return;
     }
 
-    /* Update descriptor set with buffer bindings */
-    std::vector<VkWriteDescriptorSet> descriptor_writes;
-    std::vector<VkDescriptorBufferInfo> buffer_infos;
+    fprintf(stderr, "[vulkan] dispatch: descriptors allocated\n"); fflush(stderr);
 
-    /* Bind input buffers */
+    /* Build buffer info array first (fixed size), then build descriptor
+     * writes pointing into it.  IMPORTANT: we must not push_back into
+     * buffer_infos after taking pointers — vector reallocation would
+     * invalidate them. Pre-allocate the full size. */
+    int total_buffers = input_count + 1;
+    std::vector<VkDescriptorBufferInfo> buffer_infos(total_buffers);
+    std::vector<VkWriteDescriptorSet> descriptor_writes(total_buffers);
+
     for (int i = 0; i < input_count; i++) {
         VulkanBuffer* input_buf = (VulkanBuffer*)inputs[i];
+        buffer_infos[i] = {};
+        buffer_infos[i].buffer = input_buf->buffer;
+        buffer_infos[i].offset = 0;
+        buffer_infos[i].range = input_buf->size;
 
-        VkDescriptorBufferInfo buffer_info = {};
-        buffer_info.buffer = input_buf->buffer;
-        buffer_info.offset = 0;
-        buffer_info.range = input_buf->size;
-        buffer_infos.push_back(buffer_info);
-
-        VkWriteDescriptorSet write = {};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = descriptor_set;
-        write.dstBinding = i;
-        write.dstArrayElement = 0;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        write.descriptorCount = 1;
-        write.pBufferInfo = &buffer_infos[i];
-        descriptor_writes.push_back(write);
+        descriptor_writes[i] = {};
+        descriptor_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptor_writes[i].dstSet = descriptor_set;
+        descriptor_writes[i].dstBinding = i;
+        descriptor_writes[i].dstArrayElement = 0;
+        descriptor_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        descriptor_writes[i].descriptorCount = 1;
+        descriptor_writes[i].pBufferInfo = &buffer_infos[i];
     }
 
-    /* Bind output buffer */
-    VkDescriptorBufferInfo output_info = {};
-    output_info.buffer = output_buf->buffer;
-    output_info.offset = 0;
-    output_info.range = output_buf->size;
-    buffer_infos.push_back(output_info);
+    /* Output buffer */
+    buffer_infos[input_count] = {};
+    buffer_infos[input_count].buffer = output_buf->buffer;
+    buffer_infos[input_count].offset = 0;
+    buffer_infos[input_count].range = output_buf->size;
 
-    VkWriteDescriptorSet output_write = {};
-    output_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    output_write.dstSet = descriptor_set;
-    output_write.dstBinding = input_count;
-    output_write.dstArrayElement = 0;
-    output_write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    output_write.descriptorCount = 1;
-    output_write.pBufferInfo = &buffer_infos[input_count];
-    descriptor_writes.push_back(output_write);
+    descriptor_writes[input_count] = {};
+    descriptor_writes[input_count].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptor_writes[input_count].dstSet = descriptor_set;
+    descriptor_writes[input_count].dstBinding = input_count;
+    descriptor_writes[input_count].dstArrayElement = 0;
+    descriptor_writes[input_count].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptor_writes[input_count].descriptorCount = 1;
+    descriptor_writes[input_count].pBufferInfo = &buffer_infos[input_count];
 
+    fprintf(stderr, "[vulkan] dispatch: updating %d descriptors\n", total_buffers); fflush(stderr);
     vkUpdateDescriptorSets(vk_dev->device, (uint32_t)descriptor_writes.size(),
                            descriptor_writes.data(), 0, nullptr);
 
@@ -546,20 +547,15 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
+    fprintf(stderr, "[vulkan] dispatch: recording command buffer\n"); fflush(stderr);
     vkBeginCommandBuffer(command_buffer, &begin_info);
-
-    /* Bind pipeline */
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_kernel->pipeline);
-
-    /* Bind descriptor sets */
     vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                             vk_kernel->pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
-
-    /* Dispatch compute shader */
     vkCmdDispatch(command_buffer, work_size, 1, 1);
-
     vkEndCommandBuffer(command_buffer);
 
+    fprintf(stderr, "[vulkan] dispatch: submitting to queue\n"); fflush(stderr);
     /* Submit command buffer */
     VkSubmitInfo submit_info = {};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -571,8 +567,9 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
         return;
     }
 
-    /* Wait for completion (synchronous execution) */
+    fprintf(stderr, "[vulkan] dispatch: waiting for queue idle\n"); fflush(stderr);
     vkQueueWaitIdle(vk_dev->queue);
+    fprintf(stderr, "[vulkan] dispatch: complete\n"); fflush(stderr);
 
     /* Free command buffer */
     vkFreeCommandBuffers(vk_dev->device, vk_dev->command_pool, 1, &command_buffer);
