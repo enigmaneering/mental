@@ -236,6 +236,11 @@ static void setup_tools(void) {
 int main(void) {
     printf("Testing multi-language shader support...\n");
 
+    if (mental_device_count() == 0) {
+        printf("SKIP: No GPU devices available\n");
+        return 0;
+    }
+
     setup_tools();
 
     char cwd[1024];
