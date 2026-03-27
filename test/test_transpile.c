@@ -504,10 +504,12 @@ static int test_transpile_passthrough_glsl(void) {
     size_t out_len = 0;
     char* result = mental_transpile(glsl_shader, strlen(glsl_shader),
                                     MENTAL_API_VULKAN, &out_len);
-    ASSERT(result != NULL, "GLSL pass-through to Vulkan succeeded");
-    /* Pass-through: output matches input exactly */
-    ASSERT(out_len == strlen(glsl_shader), "pass-through preserves size");
-    ASSERT(memcmp(result, glsl_shader, out_len) == 0, "pass-through preserves content");
+    ASSERT(result != NULL, "GLSL to Vulkan (SPIR-V) succeeded");
+    /* Vulkan target produces SPIR-V binary — verify magic number */
+    ASSERT(out_len >= 4, "output has at least SPIR-V header");
+    unsigned char *bytes = (unsigned char *)result;
+    ASSERT(bytes[0] == 0x03 && bytes[1] == 0x02 && bytes[2] == 0x23 && bytes[3] == 0x07,
+           "output is valid SPIR-V");
     mental_transpile_free(result);
     PASS("transpile_passthrough_glsl");
 }
@@ -642,15 +644,15 @@ static int test_redetect_glsl_to_hlsl(void) {
     PASS("redetect_glsl_to_hlsl");
 }
 
-static int test_redetect_hlsl_to_glsl(void) {
+static int test_redetect_hlsl_to_vulkan(void) {
     size_t out_len = 0;
-    char* glsl = mental_transpile(hlsl_shader, strlen(hlsl_shader),
-                                  MENTAL_API_VULKAN, &out_len);
-    ASSERT(glsl != NULL, "HLSL -> GLSL transpilation succeeded");
-    mental_language detected = mental_detect_language(glsl, out_len);
-    ASSERT(detected == MENTAL_LANG_GLSL, "transpiled GLSL re-detects as GLSL");
-    mental_transpile_free(glsl);
-    PASS("redetect_hlsl_to_glsl");
+    char* result = mental_transpile(hlsl_shader, strlen(hlsl_shader),
+                                    MENTAL_API_VULKAN, &out_len);
+    ASSERT(result != NULL, "HLSL -> Vulkan (SPIR-V) transpilation succeeded");
+    mental_language detected = mental_detect_language(result, out_len);
+    ASSERT(detected == MENTAL_LANG_SPIRV, "transpiled output re-detects as SPIR-V");
+    mental_transpile_free(result);
+    PASS("redetect_hlsl_to_vulkan");
 }
 
 /* ================================================================== */
@@ -849,7 +851,7 @@ int main(void) {
     printf("\n[Re-detection After Transpilation]\n");
     test_redetect_glsl_to_msl();
     test_redetect_glsl_to_hlsl();
-    test_redetect_hlsl_to_glsl();
+    test_redetect_hlsl_to_vulkan();
 
     /* ---- Section 8 & 9: Execution (hardware-dependent) ---- */
     printf("\n[Full Pipeline Execution]\n");

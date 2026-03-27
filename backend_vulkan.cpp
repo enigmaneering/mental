@@ -59,6 +59,7 @@ static VkInstance g_instance = VK_NULL_HANDLE;
 static std::vector<VkPhysicalDevice> g_physical_devices;
 
 static int vulkan_init(void) {
+    fprintf(stderr, "[vulkan] init: creating instance\n");
     /* Create instance */
     VkApplicationInfo app_info = {};
     app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -133,6 +134,7 @@ static uint32_t find_compute_queue_family(VkPhysicalDevice device) {
 }
 
 static void* vulkan_device_create(int index) {
+    fprintf(stderr, "[vulkan] device_create: index=%d\n", index);
     if (index < 0 || index >= (int)g_physical_devices.size()) return NULL;
 
     VulkanDevice* dev = new VulkanDevice();
@@ -343,6 +345,8 @@ static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_
         spirv_data = (const uint32_t*)spirv_buf;
     }
 
+    fprintf(stderr, "[vulkan] kernel_compile: SPIR-V ready, %zu bytes\n", spirv_len);
+
     VulkanKernel* kernel = new VulkanKernel();
     kernel->device_ctx = vk_dev;
 
@@ -361,6 +365,7 @@ static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_
         return NULL;
     }
 
+    fprintf(stderr, "[vulkan] kernel_compile: shader module created\n");
     free(spirv_buf); /* No longer needed after module creation */
 
     /* Create descriptor set layout for storage buffers
