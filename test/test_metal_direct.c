@@ -35,6 +35,10 @@ const char* msl_shader =
 int main(void) {
     printf("Testing direct Metal shader...\n");
 
+    if (mental_device_count() == 0) {
+        printf("SKIP: No GPU devices available\n");
+        return 0;
+    }
     mental_device dev = mental_device_get(0);
     ASSERT(dev != NULL, "Failed to get device");
     ASSERT_NO_ERROR();

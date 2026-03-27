@@ -37,6 +37,10 @@ int main(void) {
     printf("Testing real window viewport (D3D12)...\n");
 
     /* Check if we're on D3D12 backend */
+    if (mental_device_count() == 0) {
+        printf("SKIP: No GPU devices available\n");
+        return 0;
+    }
     mental_device dev = mental_device_get(0);
     ASSERT(dev != NULL, "Failed to get device");
     ASSERT_NO_ERROR();

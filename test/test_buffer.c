@@ -21,6 +21,10 @@
 int main(void) {
     printf("Testing buffer operations...\n");
 
+    if (mental_device_count() == 0) {
+        printf("SKIP: No GPU devices available\n");
+        return 0;
+    }
     mental_device dev = mental_device_get(0);
     ASSERT(dev != NULL, "Failed to create device");
     ASSERT_NO_ERROR();
