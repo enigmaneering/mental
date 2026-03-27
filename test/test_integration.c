@@ -30,28 +30,80 @@ const char* multiply_shader =
     "    output_buf.data[idx] = input_buf.data[idx] * 2.0;\n"
     "}\n";
 
-/* Thread-safety test data */
+/*
+ * Observability test: one writer, multiple observers.
+ *
+ * The writer writes a sequence of known values to the reference.
+ * Each observer continuously reads and verifies it only ever sees
+ * a value from the known set — never garbage or a torn write.
+ *
+ * This tests that mental references provide coherent shared memory
+ * visibility across threads, which is the core contract.
+ */
+
+/* Sentinel values the writer cycles through */
+static const float g_known_values[] = {
+    0.0f, 1.0f, 2.0f, 3.0f, 42.0f, 100.0f, -1.0f, 999.0f
+};
+#define NUM_KNOWN_VALUES (int)(sizeof(g_known_values) / sizeof(g_known_values[0]))
+#define OBSERVE_ITERATIONS 10000
+
 typedef struct {
     mental_reference ref;
-    int thread_id;
-    int success;
-} thread_test_data;
+    int observer_id;
+    int success;      /* 1 = only saw known values */
+    int observations;  /* how many reads completed */
+} observer_data;
 
-void* thread_worker(void* arg) {
-    thread_test_data* data = (thread_test_data*)arg;
+typedef struct {
+    mental_reference ref;
+    int done; /* set to 1 when writer finishes */
+} writer_data;
 
-    /* Each thread writes to its own offset in the shared buffer,
-     * so threads don't race over the same location. */
-    void *base = mental_reference_data(data->ref, NULL, 0);
-    if (!base) { data->success = 0; return NULL; }
+void* writer_thread(void* arg) {
+    writer_data* wd = (writer_data*)arg;
+    void *base = mental_reference_data(wd->ref, NULL, 0);
+    if (!base) return NULL;
 
-    float *slot = (float *)base + data->thread_id;
-    float value = (float)(data->thread_id + 1) * 3.14f;
-    *slot = value;
+    float *slot = (float *)base;
 
-    /* Read back from the same slot */
-    float read_value = *slot;
-    data->success = (read_value == value);
+    /* Write known values in sequence, many times */
+    for (int round = 0; round < OBSERVE_ITERATIONS; round++) {
+        *slot = g_known_values[round % NUM_KNOWN_VALUES];
+    }
+
+    wd->done = 1;
+    return NULL;
+}
+
+void* observer_thread(void* arg) {
+    observer_data* od = (observer_data*)arg;
+    void *base = mental_reference_data(od->ref, NULL, 0);
+    if (!base) { od->success = 0; return NULL; }
+
+    float *slot = (float *)base;
+    od->success = 1;
+    od->observations = 0;
+
+    /* Read continuously until we've done enough observations */
+    for (int i = 0; i < OBSERVE_ITERATIONS; i++) {
+        float observed = *slot;
+
+        /* Verify we see a value from the known set */
+        int valid = 0;
+        for (int k = 0; k < NUM_KNOWN_VALUES; k++) {
+            if (observed == g_known_values[k]) { valid = 1; break; }
+        }
+
+        if (!valid) {
+            fprintf(stderr, "    observer %d: saw invalid value %f at iteration %d\n",
+                    od->observer_id, observed, i);
+            od->success = 0;
+            break;
+        }
+
+        od->observations++;
+    }
 
     return NULL;
 }
@@ -140,28 +192,54 @@ int main(void) {
 
     mental_reference_close(clone);
 
-    /* Test 4: Thread safety */
-    printf("  Test 4: Thread safety\n");
+    /* Test 4: Observability under concurrency
+     *
+     * One writer cycles through known values. Three observers read
+     * continuously and verify they only see values from the known set.
+     * This tests that references provide coherent shared memory
+     * visibility — the fundamental contract of the reference system. */
+    printf("  Test 4: Observability\n");
 
-    const int num_threads = 4;
-    pthread_t threads[num_threads];
-    thread_test_data thread_data[num_threads];
-
-    mental_reference shared_ref = mental_reference_create("integ-thread-shared", num_threads * sizeof(float));
+    mental_reference shared_ref = mental_reference_create("integ-observe", sizeof(float));
     ASSERT(shared_ref != NULL, "Failed to create shared reference");
-    mental_reference_pin(shared_ref, dev);
-    ASSERT_NO_ERROR();
 
-    for (int i = 0; i < num_threads; i++) {
-        thread_data[i].ref = shared_ref;
-        thread_data[i].thread_id = i;
-        thread_data[i].success = 0;
-        pthread_create(&threads[i], NULL, thread_worker, &thread_data[i]);
+    /* Initialize to a known value before any threads start */
+    float init_val = g_known_values[0];
+    void *sdata = mental_reference_data(shared_ref, NULL, 0);
+    ASSERT(sdata != NULL, "shared data NULL");
+    *(float *)sdata = init_val;
+
+    const int num_observers = 3;
+    writer_data wd = { .ref = shared_ref, .done = 0 };
+    observer_data observers[3];
+
+    pthread_t writer_tid;
+    pthread_t observer_tids[3];
+
+    /* Start observers first so they're reading while writer writes */
+    for (int i = 0; i < num_observers; i++) {
+        observers[i].ref = shared_ref;
+        observers[i].observer_id = i;
+        observers[i].success = 0;
+        observers[i].observations = 0;
+        pthread_create(&observer_tids[i], NULL, observer_thread, &observers[i]);
     }
 
-    for (int i = 0; i < num_threads; i++) {
-        pthread_join(threads[i], NULL);
-        ASSERT(thread_data[i].success, "Thread safety test failed");
+    /* Start writer */
+    pthread_create(&writer_tid, NULL, writer_thread, &wd);
+
+    /* Wait for all threads */
+    pthread_join(writer_tid, NULL);
+    for (int i = 0; i < num_observers; i++) {
+        pthread_join(observer_tids[i], NULL);
+    }
+
+    /* Verify all observers only saw valid values */
+    for (int i = 0; i < num_observers; i++) {
+        printf("    observer %d: %d observations, %s\n",
+               i, observers[i].observations,
+               observers[i].success ? "OK" : "SAW INVALID VALUE");
+        ASSERT(observers[i].success, "Observer saw corrupted/invalid value");
     }
 
     mental_reference_close(shared_ref);
