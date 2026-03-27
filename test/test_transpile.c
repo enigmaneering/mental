@@ -667,7 +667,7 @@ static int test_redetect_hlsl_to_vulkan(void) {
 /*  MSL is only accepted on Metal.                                    */
 /* ================================================================== */
 
-static int run_shader_on_device(const char* label, const char* source,
+static int run_shader_on_device(const char* label, const char* source, size_t source_len,
                                 mental_device dev, int required) {
     /* Unique reference names per shader test */
     char n0[64], n1[64], n2[64];
@@ -675,7 +675,7 @@ static int run_shader_on_device(const char* label, const char* source,
     snprintf(n1, sizeof(n1), "tp-%s-i1", label);
     snprintf(n2, sizeof(n2), "tp-%s-out", label);
 
-    mental_kernel kernel = mental_compile(dev, source, strlen(source));
+    mental_kernel kernel = mental_compile(dev, source, source_len);
     if (!kernel) {
         if (!required) { SKIP(label, mental_get_error_message()); }
         ASSERT(kernel != NULL, mental_get_error_message());
@@ -721,22 +721,22 @@ static int run_shader_on_device(const char* label, const char* source,
 }
 
 static int test_exec_glsl(mental_device dev) {
-    return run_shader_on_device("exec-glsl", glsl_shader, dev, 1);
+    return run_shader_on_device("exec-glsl", glsl_shader, strlen(glsl_shader), dev, 1);
 }
 
 static int test_exec_hlsl(mental_device dev) {
-    return run_shader_on_device("exec-hlsl", hlsl_shader, dev, 1);
+    return run_shader_on_device("exec-hlsl", hlsl_shader, strlen(hlsl_shader), dev, 1);
 }
 
 static int test_exec_wgsl(mental_device dev) {
-    return run_shader_on_device("exec-wgsl", wgsl_shader, dev, 1);
+    return run_shader_on_device("exec-wgsl", wgsl_shader, strlen(wgsl_shader), dev, 1);
 }
 
 static int test_exec_msl(mental_device dev, mental_api_type api) {
     if (api != MENTAL_API_METAL) {
         SKIP("exec-msl", "MSL only supported on Metal backend");
     }
-    return run_shader_on_device("exec-msl", msl_shader, dev, 1);
+    return run_shader_on_device("exec-msl", msl_shader, strlen(msl_shader), dev, 1);
 }
 
 /* ================================================================== */
@@ -774,7 +774,7 @@ static int test_double_hop(mental_device dev, mental_api_type api) {
     ASSERT(final_src != NULL, "second hop transpilation succeeded");
 
     /* Execute the double-hopped shader */
-    int rc = run_shader_on_device(label, final_src, dev, 1);
+    int rc = run_shader_on_device(label, final_src, final_len, dev, 1);
     mental_transpile_free(final_src);
     return rc;
 }

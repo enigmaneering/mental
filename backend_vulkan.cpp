@@ -59,7 +59,6 @@ static VkInstance g_instance = VK_NULL_HANDLE;
 static std::vector<VkPhysicalDevice> g_physical_devices;
 
 static int vulkan_init(void) {
-    fprintf(stderr, "[vulkan] init: creating instance\n");
     /* Create instance */
     VkApplicationInfo app_info = {};
     app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -134,7 +133,6 @@ static uint32_t find_compute_queue_family(VkPhysicalDevice device) {
 }
 
 static void* vulkan_device_create(int index) {
-    fprintf(stderr, "[vulkan] device_create: index=%d\n", index);
     if (index < 0 || index >= (int)g_physical_devices.size()) return NULL;
 
     VulkanDevice* dev = new VulkanDevice();
@@ -207,7 +205,6 @@ static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type
 }
 
 static void* vulkan_buffer_alloc(void* dev, size_t bytes) {
-    fprintf(stderr, "[vulkan] buffer_alloc: %zu bytes\n", bytes);
     VulkanDevice* vk_dev = (VulkanDevice*)dev;
 
     VulkanBuffer* buf = new VulkanBuffer();
@@ -262,9 +259,7 @@ static void* vulkan_buffer_alloc(void* dev, size_t bytes) {
 }
 
 static void vulkan_buffer_write(void* buf, const void* data, size_t bytes) {
-    fprintf(stderr, "[vulkan] buffer_write: %zu bytes, buf=%p\n", bytes, buf);
     VulkanBuffer* vk_buf = (VulkanBuffer*)buf;
-    if (!vk_buf || !vk_buf->mapped_ptr) { fprintf(stderr, "[vulkan] buffer_write: NULL mapped_ptr!\n"); return; }
     memcpy(vk_buf->mapped_ptr, data, bytes);
 }
 
@@ -321,7 +316,6 @@ static void vulkan_buffer_destroy(void* buf) {
 
 static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_len,
                                     char* error, size_t error_len) {
-    fprintf(stderr, "[vulkan] kernel_compile: %zu bytes, dev=%p\n", source_len, dev);
     VulkanDevice* vk_dev = (VulkanDevice*)dev;
 
     /* The source arrives as GLSL text (transpiled by mental_compile).
@@ -345,7 +339,6 @@ static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_
         spirv_data = (const uint32_t*)spirv_buf;
     }
 
-    fprintf(stderr, "[vulkan] kernel_compile: SPIR-V ready, %zu bytes\n", spirv_len);
 
     VulkanKernel* kernel = new VulkanKernel();
     kernel->device_ctx = vk_dev;
@@ -365,7 +358,6 @@ static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_
         return NULL;
     }
 
-    fprintf(stderr, "[vulkan] kernel_compile: shader module created\n");
     free(spirv_buf); /* No longer needed after module creation */
 
     /* Create descriptor set layout for storage buffers
@@ -465,7 +457,6 @@ static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_
 
 static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
                                     void* output, int work_size) {
-    fprintf(stderr, "[vulkan] kernel_dispatch: inputs=%d, work_size=%d\n", input_count, work_size);
     if (!kernel) return;
 
     VulkanKernel* vk_kernel = (VulkanKernel*)kernel;
@@ -484,7 +475,6 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
         return;
     }
 
-    fprintf(stderr, "[vulkan] dispatch: descriptors allocated\n"); fflush(stderr);
 
     /* Build buffer info array first (fixed size), then build descriptor
      * writes pointing into it.  IMPORTANT: we must not push_back into
@@ -526,7 +516,6 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
     descriptor_writes[input_count].descriptorCount = 1;
     descriptor_writes[input_count].pBufferInfo = &buffer_infos[input_count];
 
-    fprintf(stderr, "[vulkan] dispatch: updating %d descriptors\n", total_buffers); fflush(stderr);
     vkUpdateDescriptorSets(vk_dev->device, (uint32_t)descriptor_writes.size(),
                            descriptor_writes.data(), 0, nullptr);
 
@@ -547,7 +536,6 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-    fprintf(stderr, "[vulkan] dispatch: recording command buffer\n"); fflush(stderr);
     vkBeginCommandBuffer(command_buffer, &begin_info);
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_kernel->pipeline);
     vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -560,7 +548,6 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
     vkCmdDispatch(command_buffer, num_groups, 1, 1);
     vkEndCommandBuffer(command_buffer);
 
-    fprintf(stderr, "[vulkan] dispatch: submitting to queue\n"); fflush(stderr);
     /* Submit command buffer */
     VkSubmitInfo submit_info = {};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -572,9 +559,7 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
         return;
     }
 
-    fprintf(stderr, "[vulkan] dispatch: waiting for queue idle\n"); fflush(stderr);
     vkQueueWaitIdle(vk_dev->queue);
-    fprintf(stderr, "[vulkan] dispatch: complete\n"); fflush(stderr);
 
     /* Free command buffer */
     vkFreeCommandBuffers(vk_dev->device, vk_dev->command_pool, 1, &command_buffer);
@@ -622,6 +607,28 @@ static void* vulkan_viewport_attach(void* dev, void* buffer, void* surface, char
         return NULL;
     }
 
+    /* Check if swapchain functions are available.
+     * On headless systems (lavapipe without display), the VK_KHR_swapchain
+     * extension may not be loaded, leaving function pointers NULL. */
+    int has_swapchain = (vkGetPhysicalDeviceSurfaceCapabilitiesKHR != NULL &&
+                         vkCreateSwapchainKHR != NULL);
+
+    VulkanViewport* viewport = new VulkanViewport();
+    viewport->surface = vk_surface;
+    viewport->buffer = vk_buf;
+    viewport->device_ctx = vk_dev;
+    viewport->image_index = 0;
+    viewport->headless = 0;
+    viewport->headless_image = VK_NULL_HANDLE;
+    viewport->headless_memory = VK_NULL_HANDLE;
+
+    if (!has_swapchain) {
+        /* No swapchain support — go straight to headless */
+        viewport->swapchain = VK_NULL_HANDLE;
+        viewport->headless = 1;
+        return viewport;
+    }
+
     /* Query surface capabilities */
     VkSurfaceCapabilitiesKHR capabilities;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vk_dev->physical_device, vk_surface, &capabilities);
@@ -662,15 +669,6 @@ static void* vulkan_viewport_attach(void* dev, void* buffer, void* surface, char
     swapchain_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     swapchain_info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
     swapchain_info.clipped = VK_TRUE;
-
-    VulkanViewport* viewport = new VulkanViewport();
-    viewport->surface = vk_surface;
-    viewport->buffer = vk_buf;
-    viewport->device_ctx = vk_dev;
-    viewport->image_index = 0;
-    viewport->headless = 0;
-    viewport->headless_image = VK_NULL_HANDLE;
-    viewport->headless_memory = VK_NULL_HANDLE;
 
     /* Try to create swapchain for double-buffered present */
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
