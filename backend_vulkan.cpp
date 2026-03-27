@@ -629,13 +629,22 @@ static void* vulkan_viewport_attach(void* dev, void* buffer, void* surface, char
         return viewport;
     }
 
-    /* Query surface capabilities */
-    VkSurfaceCapabilitiesKHR capabilities;
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vk_dev->physical_device, vk_surface, &capabilities);
+    /* Query surface capabilities — if this fails, fall back to headless */
+    VkSurfaceCapabilitiesKHR capabilities = {};
+    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vk_dev->physical_device, vk_surface, &capabilities) != VK_SUCCESS) {
+        viewport->swapchain = VK_NULL_HANDLE;
+        viewport->headless = 1;
+        return viewport;
+    }
 
     /* Query surface formats */
-    uint32_t format_count;
+    uint32_t format_count = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(vk_dev->physical_device, vk_surface, &format_count, nullptr);
+    if (format_count == 0) {
+        viewport->swapchain = VK_NULL_HANDLE;
+        viewport->headless = 1;
+        return viewport;
+    }
     std::vector<VkSurfaceFormatKHR> formats(format_count);
     vkGetPhysicalDeviceSurfaceFormatsKHR(vk_dev->physical_device, vk_surface, &format_count, formats.data());
 
