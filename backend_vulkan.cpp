@@ -49,6 +49,9 @@ typedef struct {
     VulkanDevice* device_ctx;
     std::vector<VkImage> swapchain_images;
     uint32_t image_index;
+    VkImage headless_image;         /* single render target when no swapchain */
+    VkDeviceMemory headless_memory;
+    int headless;                    /* 1 = no swapchain */
 } VulkanViewport;
 
 /* Global Vulkan state */
@@ -636,28 +639,72 @@ static void* vulkan_viewport_attach(void* dev, void* buffer, void* surface, char
     swapchain_info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
     swapchain_info.clipped = VK_TRUE;
 
-    VkSwapchainKHR swapchain;
-    if (vkCreateSwapchainKHR(vk_dev->device, &swapchain_info, nullptr, &swapchain) != VK_SUCCESS) {
-        if (error) {
-            snprintf(error, error_len, "Failed to create swapchain");
-        }
-        return NULL;
-    }
-
-    /* Get swapchain images */
-    uint32_t image_count;
-    vkGetSwapchainImagesKHR(vk_dev->device, swapchain, &image_count, nullptr);
-    std::vector<VkImage> swapchain_images(image_count);
-    vkGetSwapchainImagesKHR(vk_dev->device, swapchain, &image_count, swapchain_images.data());
-
-    /* Create viewport */
     VulkanViewport* viewport = new VulkanViewport();
     viewport->surface = vk_surface;
-    viewport->swapchain = swapchain;
     viewport->buffer = vk_buf;
     viewport->device_ctx = vk_dev;
-    viewport->swapchain_images = swapchain_images;
     viewport->image_index = 0;
+    viewport->headless = 0;
+    viewport->headless_image = VK_NULL_HANDLE;
+    viewport->headless_memory = VK_NULL_HANDLE;
+
+    /* Try to create swapchain for double-buffered present */
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    VkResult sc_result = vkCreateSwapchainKHR(vk_dev->device, &swapchain_info, nullptr, &swapchain);
+
+    if (sc_result == VK_SUCCESS && swapchain != VK_NULL_HANDLE) {
+        /* Double-buffered path */
+        viewport->swapchain = swapchain;
+
+        uint32_t image_count;
+        vkGetSwapchainImagesKHR(vk_dev->device, swapchain, &image_count, nullptr);
+        viewport->swapchain_images.resize(image_count);
+        vkGetSwapchainImagesKHR(vk_dev->device, swapchain, &image_count, viewport->swapchain_images.data());
+    } else {
+        /* Headless fallback: create a single image as render target.
+         * Present becomes a copy-only operation (no display output). */
+        viewport->swapchain = VK_NULL_HANDLE;
+        viewport->headless = 1;
+
+        VkImageCreateInfo img_info = {};
+        img_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        img_info.imageType = VK_IMAGE_TYPE_2D;
+        img_info.format = VK_FORMAT_B8G8R8A8_UNORM;
+        img_info.extent.width = capabilities.currentExtent.width > 0 ? capabilities.currentExtent.width : 1;
+        img_info.extent.height = capabilities.currentExtent.height > 0 ? capabilities.currentExtent.height : 1;
+        img_info.extent.depth = 1;
+        img_info.mipLevels = 1;
+        img_info.arrayLayers = 1;
+        img_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        img_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (vkCreateImage(vk_dev->device, &img_info, nullptr, &viewport->headless_image) != VK_SUCCESS) {
+            if (error) snprintf(error, error_len, "Failed to create headless render target");
+            delete viewport;
+            return NULL;
+        }
+
+        VkMemoryRequirements mem_req;
+        vkGetImageMemoryRequirements(vk_dev->device, viewport->headless_image, &mem_req);
+
+        VkMemoryAllocateInfo mem_alloc = {};
+        mem_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        mem_alloc.allocationSize = mem_req.size;
+        mem_alloc.memoryTypeIndex = find_memory_type(vk_dev, mem_req.memoryTypeBits,
+                                                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        if (vkAllocateMemory(vk_dev->device, &mem_alloc, nullptr, &viewport->headless_memory) != VK_SUCCESS) {
+            vkDestroyImage(vk_dev->device, viewport->headless_image, nullptr);
+            if (error) snprintf(error, error_len, "Failed to allocate headless image memory");
+            delete viewport;
+            return NULL;
+        }
+
+        vkBindImageMemory(vk_dev->device, viewport->headless_image, viewport->headless_memory, 0);
+    }
 
     return viewport;
 }
@@ -668,14 +715,17 @@ static void vulkan_viewport_present(void* viewport_ptr) {
     VulkanViewport* viewport = (VulkanViewport*)viewport_ptr;
     VulkanDevice* vk_dev = viewport->device_ctx;
 
-    /* Acquire next image */
+    if (viewport->headless) {
+        /* Headless: just wait for any pending work to complete.
+         * The data is in the buffer — no display output needed. */
+        vkQueueWaitIdle(vk_dev->queue);
+        return;
+    }
+
+    /* Double-buffered path: acquire, present */
     vkAcquireNextImageKHR(vk_dev->device, viewport->swapchain, UINT64_MAX,
                           VK_NULL_HANDLE, VK_NULL_HANDLE, &viewport->image_index);
 
-    /* Copy buffer to swapchain image - would need command buffer and proper synchronization */
-    /* This is a simplified stub - full implementation would need semaphores, fences, etc. */
-
-    /* Present */
     VkPresentInfoKHR present_info = {};
     present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     present_info.swapchainCount = 1;
@@ -690,9 +740,16 @@ static void vulkan_viewport_detach(void* viewport_ptr) {
     if (!viewport_ptr) return;
 
     VulkanViewport* viewport = (VulkanViewport*)viewport_ptr;
+    VkDevice device = viewport->device_ctx->device;
 
     if (viewport->swapchain != VK_NULL_HANDLE) {
-        vkDestroySwapchainKHR(viewport->device_ctx->device, viewport->swapchain, nullptr);
+        vkDestroySwapchainKHR(device, viewport->swapchain, nullptr);
+    }
+    if (viewport->headless_image != VK_NULL_HANDLE) {
+        vkDestroyImage(device, viewport->headless_image, nullptr);
+    }
+    if (viewport->headless_memory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, viewport->headless_memory, nullptr);
     }
 
     delete viewport;
