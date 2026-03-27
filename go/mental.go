@@ -38,6 +38,8 @@ const (
 	APID3D12  APIType = 1
 	APIVulkan APIType = 2
 	APIOpenCL APIType = 3
+	APIOpenGL APIType = 4
+	APIPoCL   APIType = 5
 )
 
 // Error codes returned by the C library.

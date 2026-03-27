@@ -61,6 +61,18 @@ type funcTable struct {
 	referenceRead                  uintptr
 	referenceIsPinned              uintptr
 	referenceDevice                uintptr
+
+	// Transpilation (transpile.h)
+	detectLanguage  uintptr
+	apiToLanguage   uintptr
+	glslToSpirv     uintptr
+	hlslToSpirv     uintptr
+	wgslToSpirv     uintptr
+	spirvToGlsl     uintptr
+	spirvToHlsl     uintptr
+	spirvToMsl      uintptr
+	spirvToWgsl     uintptr
+	transpileFree   uintptr
 }
 
 var (
@@ -181,6 +193,17 @@ var symbolNames = [...]struct {
 	{"mental_reference_read", ptrOffset(42)},
 	{"mental_reference_is_pinned", ptrOffset(43)},
 	{"mental_reference_device", ptrOffset(44)},
+
+	{"mental_detect_language", ptrOffset(45)},
+	{"mental_api_to_language", ptrOffset(46)},
+	{"mental_glsl_to_spirv", ptrOffset(47)},
+	{"mental_hlsl_to_spirv", ptrOffset(48)},
+	{"mental_wgsl_to_spirv", ptrOffset(49)},
+	{"mental_spirv_to_glsl", ptrOffset(50)},
+	{"mental_spirv_to_hlsl", ptrOffset(51)},
+	{"mental_spirv_to_msl", ptrOffset(52)},
+	{"mental_spirv_to_wgsl", ptrOffset(53)},
+	{"mental_transpile_free", ptrOffset(54)},
 }
 
 func ptrOffset(index int) uintptr {
@@ -190,7 +213,7 @@ func ptrOffset(index int) uintptr {
 const ptrSize = 8 // all supported platforms are 64-bit
 
 func resolveSymbols(handle uintptr) error {
-	base := (*[45]uintptr)(unsafePointer(&ft))
+	base := (*[55]uintptr)(unsafePointer(&ft))
 	for i, sym := range symbolNames {
 		addr, err := lookupSymbol(handle, sym.name)
 		if err != nil {
