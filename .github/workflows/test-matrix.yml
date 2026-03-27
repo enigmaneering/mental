@@ -57,103 +57,39 @@ jobs:
             needs_xvfb: false
 
           # ============================================================
-          #  Linux — everything is package-controlled.
-          #  This is where the real fallback variety lives.
+          #  Linux — 4 distinct scenarios per architecture.
+          #
+          #  1. Vulkan compute (lavapipe software renderer)
+          #  2. PoCL CPU compute (OpenCL fallback via PoCL)
+          #  3. OpenGL compute (Mesa llvmpipe GL 4.5)
+          #  4. Bare (no GPU packages — graceful MENTAL_ERROR_NO_DEVICES)
           # ============================================================
 
-          # Full: Vulkan + OpenCL + OpenGL + PoCL all present
-          - name: "Linux amd64 (full)"
+          # 1. Vulkan compute — primary Linux GPU path
+          - name: "Linux amd64 (Vulkan)"
             runner: ubuntu-latest
             platform: linux-amd64
             packages: >-
               libvulkan-dev mesa-vulkan-drivers
               libopengl-dev libglx-dev libx11-dev
-              ocl-icd-opencl-dev mesa-opencl-icd
-              pocl-opencl-icd
+              ocl-icd-opencl-dev pocl-opencl-icd
               xvfb
             install_vulkan: false
             needs_xvfb: true
 
-          - name: "Linux arm64 (full)"
+          - name: "Linux arm64 (Vulkan)"
             runner: ubuntu-24.04-arm
             platform: linux-arm64
             packages: >-
               libvulkan-dev mesa-vulkan-drivers
               libopengl-dev libglx-dev libx11-dev
-              ocl-icd-opencl-dev mesa-opencl-icd
-              pocl-opencl-icd
+              ocl-icd-opencl-dev pocl-opencl-icd
               xvfb
             install_vulkan: false
             needs_xvfb: true
 
-          # No Vulkan: simulates a machine with no Vulkan drivers
-          # (older hardware, minimal server install, embedded Linux).
-          # OpenCL should take over.
-          - name: "Linux amd64 (no Vulkan)"
-            runner: ubuntu-latest
-            platform: linux-amd64
-            packages: >-
-              libopengl-dev libglx-dev libx11-dev
-              ocl-icd-opencl-dev mesa-opencl-icd
-              pocl-opencl-icd
-              xvfb
-            install_vulkan: false
-            needs_xvfb: true
-
-          - name: "Linux arm64 (no Vulkan)"
-            runner: ubuntu-24.04-arm
-            platform: linux-arm64
-            packages: >-
-              libopengl-dev libglx-dev libx11-dev
-              ocl-icd-opencl-dev mesa-opencl-icd
-              pocl-opencl-icd
-              xvfb
-            install_vulkan: false
-            needs_xvfb: true
-
-          # No Vulkan, no OpenCL: only OpenGL available.
-          # Tests the OpenGL 4.3+ compute path via Mesa llvmpipe.
-          - name: "Linux amd64 (OpenGL only)"
-            runner: ubuntu-latest
-            platform: linux-amd64
-            packages: >-
-              libopengl-dev libglx-dev libx11-dev
-              xvfb
-            install_vulkan: false
-            needs_xvfb: true
-
-          - name: "Linux arm64 (OpenGL only)"
-            runner: ubuntu-24.04-arm
-            platform: linux-arm64
-            packages: >-
-              libopengl-dev libglx-dev libx11-dev
-              xvfb
-            install_vulkan: false
-            needs_xvfb: true
-
-          # OpenCL only: no Vulkan drivers, no OpenGL dev headers.
-          # Simulates a system with a proprietary OpenCL runtime
-          # but nothing else (some HPC / cloud GPU nodes).
-          - name: "Linux amd64 (OpenCL only)"
-            runner: ubuntu-latest
-            platform: linux-amd64
-            packages: >-
-              ocl-icd-opencl-dev mesa-opencl-icd
-            install_vulkan: false
-            needs_xvfb: false
-
-          - name: "Linux arm64 (OpenCL only)"
-            runner: ubuntu-24.04-arm
-            platform: linux-arm64
-            packages: >-
-              ocl-icd-opencl-dev mesa-opencl-icd
-            install_vulkan: false
-            needs_xvfb: false
-
-          # PoCL via system package: no Vulkan, no OpenGL dev headers.
-          # The system OpenCL ICD loader picks up PoCL's CPU devices.
-          # Tests that OpenCL backend handles CPU-only devices correctly.
-          - name: "Linux amd64 (PoCL via system OpenCL)"
+          # 2. PoCL CPU compute — OpenCL fallback when no Vulkan
+          - name: "Linux amd64 (PoCL)"
             runner: ubuntu-latest
             platform: linux-amd64
             packages: >-
@@ -161,7 +97,7 @@ jobs:
             install_vulkan: false
             needs_xvfb: false
 
-          - name: "Linux arm64 (PoCL via system OpenCL)"
+          - name: "Linux arm64 (PoCL)"
             runner: ubuntu-24.04-arm
             platform: linux-arm64
             packages: >-
@@ -169,9 +105,28 @@ jobs:
             install_vulkan: false
             needs_xvfb: false
 
-          # Bare: no GPU packages installed at all.
-          # Library should build, report MENTAL_ERROR_NO_DEVICES,
-          # and not crash. Transpilation-only tests still pass.
+          # 3. OpenGL compute — Mesa llvmpipe provides GL 4.5 in software
+          - name: "Linux amd64 (OpenGL)"
+            runner: ubuntu-latest
+            platform: linux-amd64
+            packages: >-
+              libopengl-dev libglx-dev libx11-dev
+              mesa-utils libgl1-mesa-dri
+              xvfb
+            install_vulkan: false
+            needs_xvfb: true
+
+          - name: "Linux arm64 (OpenGL)"
+            runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            packages: >-
+              libopengl-dev libglx-dev libx11-dev
+              mesa-utils libgl1-mesa-dri
+              xvfb
+            install_vulkan: false
+            needs_xvfb: true
+
+          # 4. Bare — no GPU packages, tests graceful degradation
           - name: "Linux amd64 (bare)"
             runner: ubuntu-latest
             platform: linux-amd64
