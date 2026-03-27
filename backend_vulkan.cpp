@@ -552,7 +552,12 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_kernel->pipeline);
     vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                             vk_kernel->pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
-    vkCmdDispatch(command_buffer, work_size, 1, 1);
+    /* work_size is the total number of invocations. The shader's
+     * local_size_x defines the workgroup size (typically 256).
+     * vkCmdDispatch takes the number of workgroups, not invocations. */
+    uint32_t local_size = 256;
+    uint32_t num_groups = ((uint32_t)work_size + local_size - 1) / local_size;
+    vkCmdDispatch(command_buffer, num_groups, 1, 1);
     vkEndCommandBuffer(command_buffer);
 
     fprintf(stderr, "[vulkan] dispatch: submitting to queue\n"); fflush(stderr);

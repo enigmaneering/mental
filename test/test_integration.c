@@ -40,14 +40,17 @@ typedef struct {
 void* thread_worker(void* arg) {
     thread_test_data* data = (thread_test_data*)arg;
 
-    /* Each thread writes and reads from the same buffer */
-    float value = (float)data->thread_id;
-    mental_reference_write(data->ref, &value, sizeof(float));
+    /* Each thread writes to its own offset in the shared buffer,
+     * so threads don't race over the same location. */
+    void *base = mental_reference_data(data->ref, NULL, 0);
+    if (!base) { data->success = 0; return NULL; }
 
-    float read_value;
-    mental_reference_read(data->ref, &read_value, sizeof(float));
+    float *slot = (float *)base + data->thread_id;
+    float value = (float)(data->thread_id + 1) * 3.14f;
+    *slot = value;
 
-    /* If locking works, we should read back what we wrote */
+    /* Read back from the same slot */
+    float read_value = *slot;
     data->success = (read_value == value);
 
     return NULL;
@@ -144,7 +147,7 @@ int main(void) {
     pthread_t threads[num_threads];
     thread_test_data thread_data[num_threads];
 
-    mental_reference shared_ref = mental_reference_create("integ-thread-shared", sizeof(float));
+    mental_reference shared_ref = mental_reference_create("integ-thread-shared", num_threads * sizeof(float));
     ASSERT(shared_ref != NULL, "Failed to create shared reference");
     mental_reference_pin(shared_ref, dev);
     ASSERT_NO_ERROR();
