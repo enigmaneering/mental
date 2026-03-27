@@ -2,7 +2,7 @@
  * Mental - D3D12 Backend (Windows)
  */
 
-#ifdef _WIN32
+#ifdef MENTAL_HAS_D3D12
 
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -48,10 +48,12 @@ typedef struct {
 
 /* D3D12 viewport wrapper */
 typedef struct {
-    ComPtr<IDXGISwapChain3> swapChain;
+    ComPtr<IDXGISwapChain3> swapChain;  /* NULL in headless/single-buffer mode */
+    ComPtr<ID3D12Resource> renderTarget; /* single buffer when no swapchain */
     D3D12Buffer* buffer;
     D3D12Device* device;
     UINT bufferIndex;
+    int headless;  /* 1 = no swapchain, single render target */
 } D3D12Viewport;
 
 /* Global D3D12 state */
@@ -409,11 +411,16 @@ static unsigned char* compile_hlsl_to_dxil(const char* hlsl_source, size_t hlsl_
         return nullptr;
     }
 
-    /* Create temporary directory */
+    /* Create temporary directory.
+     * Use forward slashes throughout — MinGW/MSYS2 popen goes through sh
+     * which can mangle backslash-escaped paths. Native Windows APIs and
+     * DXC both accept forward slashes. */
     char temp_path[MAX_PATH];
     char temp_dir[MAX_PATH];
     GetTempPathA(MAX_PATH, temp_path);
-    snprintf(temp_dir, sizeof(temp_dir), "%smental_hlsl_%lu", temp_path, GetTickCount64());
+    /* Normalize backslashes to forward slashes */
+    for (char *p = temp_path; *p; p++) { if (*p == '\\') *p = '/'; }
+    snprintf(temp_dir, sizeof(temp_dir), "%smental_hlsl_%lu", temp_path, (unsigned long)GetTickCount64());
     if (!CreateDirectoryA(temp_dir, NULL)) {
         if (error) snprintf(error, error_len, "Failed to create temp directory");
         return nullptr;
@@ -421,7 +428,7 @@ static unsigned char* compile_hlsl_to_dxil(const char* hlsl_source, size_t hlsl_
 
     /* Write HLSL to temp file */
     char src_path[MAX_PATH];
-    snprintf(src_path, sizeof(src_path), "%s\\shader.hlsl", temp_dir);
+    snprintf(src_path, sizeof(src_path), "%s/shader.hlsl", temp_dir);
     FILE* f = fopen(src_path, "wb");
     if (!f) {
         if (error) snprintf(error, error_len, "Failed to write HLSL source");
@@ -434,9 +441,14 @@ static unsigned char* compile_hlsl_to_dxil(const char* hlsl_source, size_t hlsl_
     /* Compile HLSL to DXIL using DXC */
     char out_path[MAX_PATH];
     char cmd[4096];
-    snprintf(out_path, sizeof(out_path), "%s\\shader.dxil", temp_dir);
-    snprintf(cmd, sizeof(cmd), "\"%s\" -T cs_6_0 -E main -Fo \"%s\" \"%s\" 2>&1",
-             dxc, out_path, src_path);
+    snprintf(out_path, sizeof(out_path), "%s/shader.dxil", temp_dir);
+    /* Normalize DXC path too */
+    char dxc_norm[MAX_PATH];
+    strncpy(dxc_norm, dxc, sizeof(dxc_norm) - 1);
+    dxc_norm[sizeof(dxc_norm) - 1] = '\0';
+    for (char *p = dxc_norm; *p; p++) { if (*p == '\\') *p = '/'; }
+    snprintf(cmd, sizeof(cmd), "%s -T cs_6_0 -E main -Fo %s %s 2>&1",
+             dxc_norm, out_path, src_path);
 
     FILE* pipe = _popen(cmd, "r");
     if (!pipe) {
@@ -507,20 +519,35 @@ static void* d3d12_kernel_compile(void* dev, const char* source, size_t source_l
     D3D12Kernel* kernel = new D3D12Kernel();
     kernel->device = d3d_dev->device;
 
-    /* Create root signature with UAV descriptor table
-     * Note: This creates a simple root signature with one descriptor table
-     * containing UAVs for input/output buffers */
-    D3D12_DESCRIPTOR_RANGE range = {};
-    range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    range.NumDescriptors = 16;  /* Support up to 16 buffers */
-    range.BaseShaderRegister = 0;
-    range.RegisterSpace = 0;
-    range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+    /* Create root signature with both UAV and SRV descriptor tables.
+     *
+     * Transpiled HLSL may use:
+     *   - RWStructuredBuffer (UAV, register(u#)) for read-write buffers
+     *   - StructuredBuffer (SRV, register(t#)) for read-only buffers
+     *
+     * WGSL var<storage, read> maps to SRV via Naga→spirv-cross, while
+     * GLSL/HLSL typically uses RWStructuredBuffer (UAV) for everything.
+     * Supporting both ensures all source languages work. */
+    D3D12_DESCRIPTOR_RANGE ranges[2] = {};
+
+    /* UAVs: RWStructuredBuffer at register(u0..u15) */
+    ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    ranges[0].NumDescriptors = 16;
+    ranges[0].BaseShaderRegister = 0;
+    ranges[0].RegisterSpace = 0;
+    ranges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    /* SRVs: StructuredBuffer at register(t0..t15) */
+    ranges[1].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    ranges[1].NumDescriptors = 16;
+    ranges[1].BaseShaderRegister = 0;
+    ranges[1].RegisterSpace = 0;
+    ranges[1].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
     D3D12_ROOT_PARAMETER param = {};
     param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    param.DescriptorTable.NumDescriptorRanges = 1;
-    param.DescriptorTable.pDescriptorRanges = &range;
+    param.DescriptorTable.NumDescriptorRanges = 2;
+    param.DescriptorTable.pDescriptorRanges = ranges;
     param.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC root_sig_desc = {};
@@ -573,9 +600,9 @@ static void* d3d12_kernel_compile(void* dev, const char* source, size_t source_l
     /* DXIL bytecode no longer needed after pipeline creation */
     free(dxil);
 
-    /* Create descriptor heap for UAVs */
+    /* Create descriptor heap for UAVs + SRVs (16 each) */
     D3D12_DESCRIPTOR_HEAP_DESC heap_desc = {};
-    heap_desc.NumDescriptors = 16;
+    heap_desc.NumDescriptors = 32;  /* 0..15 = UAVs, 16..31 = SRVs */
     heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
@@ -611,31 +638,48 @@ static void d3d12_kernel_dispatch(void* kernel, void** inputs, int input_count,
     ID3D12DescriptorHeap* heaps[] = { d3d_kernel->descriptor_heap.Get() };
     d3d_dev->command_list->SetDescriptorHeaps(1, heaps);
 
-    /* Create UAVs for all buffers (inputs + output) */
+    /* Create UAV and SRV views for all buffers.
+     *
+     * Descriptor layout: [0..15] = UAVs (register(u#)), [16..31] = SRVs (register(t#))
+     *
+     * Transpiled HLSL from GLSL uses RWStructuredBuffer (UAV) for all buffers.
+     * Transpiled HLSL from WGSL uses StructuredBuffer (SRV) for read-only inputs.
+     * We bind every buffer to both slots so either style works. */
     D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle = d3d_kernel->descriptor_heap->GetCPUDescriptorHandleForHeapStart();
     UINT descriptor_size = d3d_dev->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-    /* Create UAVs for input buffers */
     for (int i = 0; i < input_count; i++) {
         D3D12Buffer* input_buf = (D3D12Buffer*)inputs[i];
+        UINT num_elements = (UINT)(input_buf->size / 4);
 
+        /* UAV at slot i (register(u{i})) */
         D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
         uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
         uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-        uav_desc.Buffer.FirstElement = 0;
-        uav_desc.Buffer.NumElements = (UINT)(input_buf->size / 4);
+        uav_desc.Buffer.NumElements = num_elements;
         uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
 
-        D3D12_CPU_DESCRIPTOR_HANDLE handle = cpu_handle;
-        handle.ptr += i * descriptor_size;
-        d3d_dev->device->CreateUnorderedAccessView(input_buf->resource.Get(), nullptr, &uav_desc, handle);
+        D3D12_CPU_DESCRIPTOR_HANDLE uav_handle = cpu_handle;
+        uav_handle.ptr += i * descriptor_size;
+        d3d_dev->device->CreateUnorderedAccessView(input_buf->resource.Get(), nullptr, &uav_desc, uav_handle);
+
+        /* SRV at slot 16+i (register(t{i})) */
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+        srv_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+        srv_desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv_desc.Buffer.NumElements = num_elements;
+        srv_desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE srv_handle = cpu_handle;
+        srv_handle.ptr += (16 + i) * descriptor_size;
+        d3d_dev->device->CreateShaderResourceView(input_buf->resource.Get(), &srv_desc, srv_handle);
     }
 
-    /* Create UAV for output buffer */
+    /* UAV for output buffer at slot input_count (register(u{input_count})) */
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
     uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
     uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    uav_desc.Buffer.FirstElement = 0;
     uav_desc.Buffer.NumElements = (UINT)(output_buf->size / 4);
     uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
 
@@ -709,7 +753,7 @@ static void* d3d12_viewport_attach(void* dev, void* buffer, void* surface, char*
     swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
 
-    /* Create swap chain */
+    /* Try to create swap chain for double-buffered present */
     ComPtr<IDXGISwapChain1> swapChain1;
     hr = factory->CreateSwapChainForHwnd(
         d3d_dev->queue.Get(),
@@ -720,29 +764,58 @@ static void* d3d12_viewport_attach(void* dev, void* buffer, void* surface, char*
         &swapChain1
     );
 
-    if (FAILED(hr)) {
-        if (error) {
-            snprintf(error, error_len, "Failed to create swap chain");
-        }
-        return NULL;
-    }
-
-    /* Query for IDXGISwapChain3 */
-    ComPtr<IDXGISwapChain3> swapChain;
-    hr = swapChain1.As(&swapChain);
-    if (FAILED(hr)) {
-        if (error) {
-            snprintf(error, error_len, "Failed to query IDXGISwapChain3");
-        }
-        return NULL;
-    }
-
-    /* Create viewport */
     D3D12Viewport* viewport = new D3D12Viewport();
-    viewport->swapChain = swapChain;
     viewport->buffer = d3d_buf;
     viewport->device = d3d_dev;
     viewport->bufferIndex = 0;
+    viewport->headless = 0;
+
+    if (SUCCEEDED(hr)) {
+        /* Double-buffered path: swapchain available */
+        ComPtr<IDXGISwapChain3> swapChain;
+        hr = swapChain1.As(&swapChain);
+        if (FAILED(hr)) {
+            if (error) snprintf(error, error_len, "Failed to query IDXGISwapChain3");
+            delete viewport;
+            return NULL;
+        }
+        viewport->swapChain = swapChain;
+    } else {
+        /* Headless / software renderer: no swapchain, use a single
+         * render target.  Present becomes a no-op but the viewport
+         * lifecycle (attach/present/detach) still works for compute
+         * workflows that read back results rather than display them. */
+        RECT rect;
+        GetClientRect(hwnd, &rect);
+        UINT width  = rect.right  > 0 ? (UINT)rect.right  : 1;
+        UINT height = rect.bottom > 0 ? (UINT)rect.bottom : 1;
+
+        D3D12_RESOURCE_DESC rt_desc = {};
+        rt_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        rt_desc.Width = width;
+        rt_desc.Height = height;
+        rt_desc.DepthOrArraySize = 1;
+        rt_desc.MipLevels = 1;
+        rt_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        rt_desc.SampleDesc.Count = 1;
+        rt_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+        D3D12_HEAP_PROPERTIES heap_props = {};
+        heap_props.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+        hr = d3d_dev->device->CreateCommittedResource(
+            &heap_props, D3D12_HEAP_FLAG_NONE, &rt_desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&viewport->renderTarget));
+
+        if (FAILED(hr)) {
+            if (error) snprintf(error, error_len, "Failed to create headless render target");
+            delete viewport;
+            return NULL;
+        }
+
+        viewport->headless = 1;
+    }
 
     return viewport;
 }
@@ -752,17 +825,34 @@ static void d3d12_viewport_present(void* viewport_ptr) {
 
     D3D12Viewport* viewport = (D3D12Viewport*)viewport_ptr;
 
-    /* Get current back buffer */
+    /* Headless: copy buffer to render target (no display present) */
+    if (viewport->headless) {
+        viewport->device->allocator->Reset();
+        viewport->device->command_list->Reset(viewport->device->allocator.Get(), nullptr);
+        viewport->device->command_list->CopyResource(viewport->renderTarget.Get(),
+                                                      viewport->buffer->resource.Get());
+        viewport->device->command_list->Close();
+        ID3D12CommandList* cmd_lists[] = { viewport->device->command_list.Get() };
+        viewport->device->queue->ExecuteCommandLists(1, cmd_lists);
+
+        viewport->device->fence_value++;
+        viewport->device->queue->Signal(viewport->device->fence.Get(), viewport->device->fence_value);
+        if (viewport->device->fence->GetCompletedValue() < viewport->device->fence_value) {
+            viewport->device->fence->SetEventOnCompletion(viewport->device->fence_value, viewport->device->fence_event);
+            WaitForSingleObject(viewport->device->fence_event, INFINITE);
+        }
+        return;
+    }
+
+    /* Double-buffered path: swap chain present */
     viewport->bufferIndex = viewport->swapChain->GetCurrentBackBufferIndex();
     ComPtr<ID3D12Resource> backBuffer;
     HRESULT hr = viewport->swapChain->GetBuffer(viewport->bufferIndex, IID_PPV_ARGS(&backBuffer));
     if (FAILED(hr)) return;
 
-    /* Reset command list */
     viewport->device->allocator->Reset();
     viewport->device->command_list->Reset(viewport->device->allocator.Get(), nullptr);
 
-    /* Transition back buffer to COPY_DEST */
     D3D12_RESOURCE_BARRIER barrier = {};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition.pResource = backBuffer.Get();
@@ -771,23 +861,18 @@ static void d3d12_viewport_present(void* viewport_ptr) {
     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     viewport->device->command_list->ResourceBarrier(1, &barrier);
 
-    /* Copy from buffer to back buffer */
     viewport->device->command_list->CopyResource(backBuffer.Get(), viewport->buffer->resource.Get());
 
-    /* Transition back buffer to PRESENT */
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
     viewport->device->command_list->ResourceBarrier(1, &barrier);
 
-    /* Execute commands */
     viewport->device->command_list->Close();
     ID3D12CommandList* cmd_lists[] = { viewport->device->command_list.Get() };
     viewport->device->queue->ExecuteCommandLists(1, cmd_lists);
 
-    /* Present */
     viewport->swapChain->Present(1, 0);
 
-    /* Wait for GPU */
     viewport->device->fence_value++;
     viewport->device->queue->Signal(viewport->device->fence.Get(), viewport->device->fence_value);
     if (viewport->device->fence->GetCompletedValue() < viewport->device->fence_value) {
@@ -829,4 +914,4 @@ mental_backend* d3d12_backend = &g_d3d12_backend;
 
 #else
 mental_backend* d3d12_backend = NULL;
-#endif
+#endif /* MENTAL_HAS_D3D12 */

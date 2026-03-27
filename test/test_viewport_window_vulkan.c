@@ -33,6 +33,10 @@ int main(void) {
     printf("Testing real window viewport (Vulkan/X11)...\n");
 
     /* Check if we're on Vulkan backend */
+    if (mental_device_count() == 0) {
+        printf("SKIP: No GPU devices available\n");
+        return 0;
+    }
     mental_device dev = mental_device_get(0);
     ASSERT(dev != NULL, "Failed to get device");
     ASSERT_NO_ERROR();
@@ -91,7 +95,8 @@ int main(void) {
     size_t height = 600;
     size_t size = width * height * 4; /* BGRA8 */
 
-    mental_reference ref = mental_alloc(dev, size);
+    mental_reference ref = mental_reference_create("vk-window-buf", size);
+    mental_reference_pin(ref, dev);
     ASSERT(ref != NULL, "Failed to allocate buffer");
     ASSERT_NO_ERROR();
 
@@ -103,7 +108,7 @@ int main(void) {
         orange_buffer[i * 4 + 2] = 255;  /* R */
         orange_buffer[i * 4 + 3] = 255;  /* A */
     }
-    mental_write(ref, orange_buffer, size);
+    mental_reference_write(ref, orange_buffer, size);
     free(orange_buffer);
     ASSERT_NO_ERROR();
 
@@ -151,7 +156,7 @@ int main(void) {
     printf("  Viewport detached\n");
 
     /* Cleanup */
-    mental_finalize(ref);
+    mental_reference_close(ref);
     XDestroyWindow(display, window);
     XCloseDisplay(display);
 

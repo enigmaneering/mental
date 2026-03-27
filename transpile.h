@@ -59,7 +59,8 @@ mental_language mental_api_to_language(mental_api_type api);
 /* External tool identifiers */
 typedef enum {
     MENTAL_TOOL_DXC  = 0,
-    MENTAL_TOOL_NAGA = 1
+    MENTAL_TOOL_NAGA = 1,
+    MENTAL_TOOL_POCL = 2
 } mental_tool;
 
 /* Configure the path to an external tool (DXC, Naga).

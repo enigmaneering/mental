@@ -1,0 +1,324 @@
+name: Test Matrix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["claude/review-assembly-conversion-4nDa2"]
+
+# Cancel in-flight runs for the same ref
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: "${{ matrix.name }}"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ============================================================
+          #  macOS — Metal + OpenCL ship with Xcode, always present.
+          # ============================================================
+          - name: "macOS arm64"
+            runner: macos-14
+            platform: darwin-arm64
+            packages: ""
+            install_vulkan: false
+            needs_xvfb: false
+
+          - name: "macOS amd64"
+            runner: macos-14
+            platform: darwin-amd64
+            cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=x86_64"
+            packages: ""
+            install_vulkan: false
+            needs_xvfb: false
+
+          # ============================================================
+          #  Windows — D3D12 ships with the Windows SDK, always present.
+          #  Variation: whether Vulkan SDK is also installed.
+          # ============================================================
+          - name: "Windows amd64"
+            runner: windows-latest
+            platform: windows-amd64
+            packages: ""
+            install_vulkan: false
+            needs_xvfb: false
+
+          - name: "Windows arm64"
+            runner: windows-11-arm
+            platform: windows-arm64
+            packages: ""
+            install_vulkan: false
+            needs_xvfb: false
+
+          - name: "Windows amd64 + Vulkan"
+            runner: windows-latest
+            platform: windows-amd64
+            packages: ""
+            install_vulkan: true
+            needs_xvfb: false
+
+          # ============================================================
+          #  Linux — 2 scenarios per architecture.
+          #
+          #  1. Vulkan compute (lavapipe software renderer)
+          #  2. Bare (no GPU packages — graceful MENTAL_ERROR_NO_DEVICES)
+          #
+          #  PoCL and OpenGL backends need lab environments to test:
+          #  - PoCL requires OpenCL-environment SPIR-V (needs clspv integration)
+          #  - OpenGL 4.3+ compute needs Mesa drivers that CI can't provide
+          # ============================================================
+
+          # Vulkan compute — primary Linux GPU path via lavapipe
+          - name: "Linux amd64 (Vulkan)"
+            runner: ubuntu-latest
+            platform: linux-amd64
+            packages: >-
+              libvulkan-dev mesa-vulkan-drivers
+              libopengl-dev libglx-dev libx11-dev
+              xvfb
+            install_vulkan: false
+            needs_xvfb: true
+
+          - name: "Linux arm64 (Vulkan)"
+            runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            packages: >-
+              libvulkan-dev mesa-vulkan-drivers
+              libopengl-dev libglx-dev libx11-dev
+              xvfb
+            install_vulkan: false
+            needs_xvfb: true
+
+          # 4. Bare — no GPU packages, tests graceful degradation
+          - name: "Linux amd64 (bare)"
+            runner: ubuntu-latest
+            platform: linux-amd64
+            packages: ""
+            install_vulkan: false
+            needs_xvfb: false
+
+          - name: "Linux arm64 (bare)"
+            runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            packages: ""
+            install_vulkan: false
+            needs_xvfb: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---- Fetch external dependencies from GitHub Releases ----
+      - name: Fetch external dependencies (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
+          echo "Downloading external deps $VERSION for ${{ matrix.platform }}"
+          mkdir -p external/glslang external/spirv-cross external/dxc external/naga/bin
+
+          # glslang (required)
+          gh release download "$VERSION" --repo enigmaneering/redistributables \
+            --pattern "glslang-${{ matrix.platform }}.tar.gz" --dir .
+          tar -xzf "glslang-${{ matrix.platform }}.tar.gz"
+          cp -r "glslang-${{ matrix.platform }}"/* external/glslang/
+
+          # spirv-cross (required)
+          gh release download "$VERSION" --repo enigmaneering/redistributables \
+            --pattern "spirv-cross-${{ matrix.platform }}.tar.gz" --dir .
+          tar -xzf "spirv-cross-${{ matrix.platform }}.tar.gz"
+          cp -r "spirv-cross-${{ matrix.platform }}"/* external/spirv-cross/
+
+          # dxc (optional)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "dxc-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "dxc-${{ matrix.platform }}.tar.gz"
+            cp -r "dxc-${{ matrix.platform }}"/* external/dxc/
+          else
+            echo "DXC not available for ${{ matrix.platform }} (optional)"
+          fi
+
+          # naga (optional)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "naga-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "naga-${{ matrix.platform }}.tar.gz"
+            if [ -d "naga-${{ matrix.platform }}/bin" ]; then
+              cp -r "naga-${{ matrix.platform }}/bin"/* external/naga/bin/
+            else
+              cp -r "naga-${{ matrix.platform }}"/* external/naga/bin/
+            fi
+          else
+            echo "Naga not available for ${{ matrix.platform }} (optional)"
+          fi
+
+          # Make binaries executable and remove macOS quarantine
+          chmod +x external/dxc/bin/* external/naga/bin/* 2>/dev/null || true
+          if [ "$(uname)" = "Darwin" ]; then
+            xattr -d com.apple.quarantine external/dxc/bin/* external/dxc/lib/* external/naga/bin/* 2>/dev/null || true
+          fi
+
+          echo "External deps layout:"
+          ls -la external/
+
+      - name: Fetch external dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
+          echo "Downloading external deps $VERSION for ${{ matrix.platform }}"
+          mkdir -p external/glslang external/spirv-cross external/dxc external/naga/bin
+
+          # glslang (required — try tar.gz first, then zip)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "glslang-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "glslang-${{ matrix.platform }}.tar.gz"
+          else
+            gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "glslang-${{ matrix.platform }}.zip" --dir .
+            unzip -q "glslang-${{ matrix.platform }}.zip"
+          fi
+          cp -r "glslang-${{ matrix.platform }}"/* external/glslang/
+
+          # spirv-cross (required — try tar.gz first, then zip)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "spirv-cross-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "spirv-cross-${{ matrix.platform }}.tar.gz"
+          else
+            gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "spirv-cross-${{ matrix.platform }}.zip" --dir .
+            unzip -q "spirv-cross-${{ matrix.platform }}.zip"
+          fi
+          cp -r "spirv-cross-${{ matrix.platform }}"/* external/spirv-cross/
+
+          # dxc (optional — try zip first for Windows)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "dxc-${{ matrix.platform }}.zip" --dir . 2>/dev/null; then
+            unzip -q "dxc-${{ matrix.platform }}.zip"
+            cp -r "dxc-${{ matrix.platform }}"/* external/dxc/
+          elif gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "dxc-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "dxc-${{ matrix.platform }}.tar.gz"
+            cp -r "dxc-${{ matrix.platform }}"/* external/dxc/
+          else
+            echo "DXC not available for ${{ matrix.platform }} (optional)"
+          fi
+
+          # naga (optional)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "naga-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "naga-${{ matrix.platform }}.tar.gz"
+            if [ -d "naga-${{ matrix.platform }}/bin" ]; then
+              cp -r "naga-${{ matrix.platform }}/bin"/* external/naga/bin/
+            else
+              cp -r "naga-${{ matrix.platform }}"/* external/naga/bin/
+            fi
+          else
+            echo "Naga not available for ${{ matrix.platform }} (optional)"
+          fi
+
+          echo "External deps layout:"
+          ls -la external/
+
+      # ---- Linux packages ----
+      - name: Install packages (Linux)
+        if: runner.os == 'Linux' && matrix.packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+
+      # ---- Windows: Vulkan SDK (direct from LunarG, no third-party actions) ----
+      - name: Install Vulkan SDK (Windows)
+        if: matrix.install_vulkan
+        shell: pwsh
+        run: |
+          $json = (Invoke-WebRequest -Uri 'https://vulkan.lunarg.com/sdk/latest/windows.json').Content | ConvertFrom-Json
+          $ver = $json.windows
+          $url = "https://sdk.lunarg.com/sdk/download/$ver/windows/vulkan_sdk.exe"
+          Write-Host "Installing Vulkan SDK $ver from $url"
+          Invoke-WebRequest -Uri $url -OutFile VulkanSDK.exe
+          .\VulkanSDK.exe --accept-licenses --default-answer --confirm-command install copy_only=1
+          $sdk = "C:\VulkanSDK\$ver"
+          echo "VULKAN_SDK=$sdk" >> $env:GITHUB_ENV
+          echo "$sdk\Bin" >> $env:GITHUB_PATH
+          Remove-Item VulkanSDK.exe
+
+      # ---- Install MinGW (Windows — needed for .a static libs) ----
+      - name: Set up MinGW (Windows amd64)
+        if: runner.os == 'Windows' && matrix.platform == 'windows-amd64'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            make
+
+      - name: Set up MinGW (Windows arm64)
+        if: runner.os == 'Windows' && matrix.platform == 'windows-arm64'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANGARM64
+          update: false
+          install: >-
+            mingw-w64-clang-aarch64-cc
+            mingw-w64-clang-aarch64-cmake
+            make
+
+      # ---- Configure ----
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
+        run: cmake -B build -DBUILD_TESTING=ON ${{ matrix.cmake_extra }}
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: cmake -B build -G "MSYS Makefiles" -DBUILD_TESTING=ON
+
+      # ---- Build ----
+      - name: Build (Unix)
+        if: runner.os != 'Windows'
+        run: cmake --build build --parallel
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: cmake --build build --parallel
+
+      # ---- Test (with virtual X server when OpenGL needs it) ----
+      - name: Test
+        if: ${{ !matrix.needs_xvfb && runner.os != 'Windows' }}
+        working-directory: build
+        run: ctest --output-on-failure --timeout 120
+
+      - name: Test (with Xvfb)
+        if: ${{ matrix.needs_xvfb }}
+        working-directory: build
+        run: xvfb-run --auto-servernum ctest --output-on-failure --timeout 120
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          cd build
+          ctest --output-on-failure --timeout 120
+
+      # ---- Report what was discovered ----
+      - name: Report discovered backends
+        if: always()
+        shell: bash
+        run: |
+          echo "### Backend Discovery" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "MENTAL_HAS_" build/CMakeCache.txt >> $GITHUB_STEP_SUMMARY || echo "No backends discovered" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

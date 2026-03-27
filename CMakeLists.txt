@@ -22,6 +22,9 @@ endif()
 # Source files
 set(MENTAL_SOURCES
     mental.c
+    monotonic.c
+    reference.c
+    stdlink.c
     transpile.c
     transpile_other.c
 )
@@ -31,14 +34,107 @@ set(MENTAL_CXX_SOURCES
     transpile_spirv_cross.cpp
 )
 
-# Platform-specific backends (OpenCL is added conditionally later)
+# Backend disable switches (for CI fallback-chain testing)
+option(MENTAL_DISABLE_METAL  "Force-disable Metal backend"  OFF)
+option(MENTAL_DISABLE_D3D12  "Force-disable D3D12 backend"  OFF)
+option(MENTAL_DISABLE_VULKAN "Force-disable Vulkan backend" OFF)
+option(MENTAL_DISABLE_OPENCL "Force-disable OpenCL backend" OFF)
+option(MENTAL_DISABLE_OPENGL "Force-disable OpenGL backend" OFF)
+option(MENTAL_DISABLE_POCL   "Force-disable PoCL backend"   OFF)
+
+# Platform-specific backends (all optional — library degrades gracefully)
 if(PLATFORM_DARWIN)
-    list(APPEND MENTAL_SOURCES backend_metal.m)
-    set_source_files_properties(backend_metal.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    if(NOT MENTAL_DISABLE_METAL)
+        find_library(METAL_LIBRARY Metal)
+        if(METAL_LIBRARY)
+            list(APPEND MENTAL_SOURCES backend_metal.m)
+            set_source_files_properties(backend_metal.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+            set(MENTAL_HAS_METAL ON)
+            message(STATUS "Metal found - enabling Metal backend")
+        else()
+            message(STATUS "Metal not found - Metal backend disabled")
+        endif()
+    else()
+        message(STATUS "Metal backend force-disabled")
+    endif()
 elseif(PLATFORM_WINDOWS)
-    list(APPEND MENTAL_CXX_SOURCES backend_d3d12.cpp)
+    if(NOT MENTAL_DISABLE_D3D12)
+        find_library(D3D12_LIBRARY d3d12)
+        find_library(DXGI_LIBRARY dxgi)
+        if(D3D12_LIBRARY AND DXGI_LIBRARY)
+            list(APPEND MENTAL_CXX_SOURCES backend_d3d12.cpp)
+            set(MENTAL_HAS_D3D12 ON)
+            message(STATUS "D3D12 found - enabling D3D12 backend")
+        else()
+            message(STATUS "D3D12 not found - D3D12 backend disabled")
+        endif()
+    else()
+        message(STATUS "D3D12 backend force-disabled")
+    endif()
+    if(NOT MENTAL_DISABLE_VULKAN)
+        find_package(Vulkan)
+        if(Vulkan_FOUND)
+            list(APPEND MENTAL_CXX_SOURCES backend_vulkan.cpp)
+            set(MENTAL_HAS_VULKAN ON)
+            message(STATUS "Vulkan found - enabling Vulkan backend")
+        else()
+            message(STATUS "Vulkan not found - Vulkan backend disabled")
+        endif()
+    else()
+        message(STATUS "Vulkan backend force-disabled")
+    endif()
 elseif(PLATFORM_LINUX)
-    list(APPEND MENTAL_CXX_SOURCES backend_vulkan.cpp)
+    if(NOT MENTAL_DISABLE_VULKAN)
+        find_package(Vulkan)
+        if(Vulkan_FOUND)
+            list(APPEND MENTAL_CXX_SOURCES backend_vulkan.cpp)
+            set(MENTAL_HAS_VULKAN ON)
+            message(STATUS "Vulkan found - enabling Vulkan backend")
+        else()
+            message(STATUS "Vulkan not found - Vulkan backend disabled")
+        endif()
+    else()
+        message(STATUS "Vulkan backend force-disabled")
+    endif()
+endif()
+
+# OpenGL compute backend (Linux + Windows only — macOS capped at 4.1, below the 4.3 floor)
+if(NOT PLATFORM_DARWIN AND NOT MENTAL_DISABLE_OPENGL)
+    find_package(OpenGL)
+    if(OpenGL_FOUND OR OPENGL_FOUND)
+        list(APPEND MENTAL_SOURCES backend_opengl.c)
+        set(MENTAL_HAS_OPENGL ON)
+        message(STATUS "OpenGL found - enabling OpenGL compute backend (requires 4.3+ at runtime)")
+    else()
+        message(STATUS "OpenGL not found - OpenGL backend disabled")
+    endif()
+endif()
+
+# PoCL — CPU-only OpenCL last resort (all platforms, dlopen'd at runtime).
+# Only needs OpenCL headers at build time; the library is loaded dynamically.
+# Check for headers via OpenCL package or a manual header search.
+if(MENTAL_DISABLE_POCL)
+    message(STATUS "PoCL backend force-disabled")
+elseif(OpenCL_FOUND OR OPENCL_FOUND)
+    set(MENTAL_POCL_HEADERS ON)
+elseif(PLATFORM_DARWIN AND OPENCL_LIBRARY)
+    set(MENTAL_POCL_HEADERS ON)
+else()
+    find_path(POCL_CL_HEADER "CL/cl.h" HINTS ${EXTERNAL_DIR}/pocl/include)
+    if(POCL_CL_HEADER)
+        set(MENTAL_POCL_HEADERS ON)
+    endif()
+endif()
+
+if(MENTAL_POCL_HEADERS)
+    list(APPEND MENTAL_SOURCES backend_pocl.c)
+    set(MENTAL_HAS_POCL ON)
+    message(STATUS "OpenCL headers available - enabling PoCL fallback backend (dlopen'd at runtime)")
+    if(EXISTS "${EXTERNAL_DIR}/pocl")
+        set(MENTAL_POCL_LIB_PATH "${EXTERNAL_DIR}/pocl/${POCL_LIB_NAME}" CACHE STRING "Bundled PoCL library path")
+    endif()
+else()
+    message(STATUS "OpenCL headers not found - PoCL backend disabled")
 endif()
 
 # Create both static and dynamic libraries
@@ -71,35 +167,55 @@ target_include_directories(mental PUBLIC
 
 # Platform-specific configurations
 if(PLATFORM_DARWIN)
-    # Metal framework
-    find_library(METAL_LIBRARY Metal)
-    find_library(FOUNDATION_LIBRARY Foundation)
-    find_library(QUARTZCORE_LIBRARY QuartzCore)
-    find_library(APPKIT_LIBRARY AppKit)
-
-    # OpenCL framework (optional - may be deprecated in future macOS versions)
-    find_library(OPENCL_LIBRARY OpenCL)
-    if(OPENCL_LIBRARY)
-        target_sources(mental-static PRIVATE backend_opencl.c)
-        target_sources(mental PRIVATE backend_opencl.c)
-        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_OPENCL=1)
-        target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENCL=1)
-        message(STATUS "OpenCL found - enabling OpenCL backend")
-    else()
-        message(STATUS "OpenCL not found - only Metal backend available")
+    # Metal framework (already discovered above)
+    if(MENTAL_HAS_METAL)
+        find_library(FOUNDATION_LIBRARY Foundation)
+        find_library(QUARTZCORE_LIBRARY QuartzCore)
+        find_library(APPKIT_LIBRARY AppKit)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_METAL=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_METAL=1)
     endif()
 
-    # Common dependencies for both shared and static
-    set(DARWIN_LIBS
-        ${METAL_LIBRARY} ${FOUNDATION_LIBRARY} ${QUARTZCORE_LIBRARY} ${APPKIT_LIBRARY}
-        c++
-    )
+    # OpenCL framework (optional - may be deprecated in future macOS versions)
+    if(NOT MENTAL_DISABLE_OPENCL)
+        find_library(OPENCL_LIBRARY OpenCL)
+        if(OPENCL_LIBRARY)
+            target_sources(mental-static PRIVATE backend_opencl.c)
+            target_sources(mental PRIVATE backend_opencl.c)
+            target_compile_definitions(mental-static PRIVATE MENTAL_HAS_OPENCL=1)
+            target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENCL=1)
+            message(STATUS "OpenCL found - enabling OpenCL backend")
+        else()
+            message(STATUS "OpenCL not found")
+        endif()
+    else()
+        message(STATUS "OpenCL backend force-disabled")
+    endif()
 
+    # PoCL (already discovered above)
+    if(MENTAL_HAS_POCL)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_POCL=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_POCL=1)
+        if(MENTAL_POCL_LIB_PATH)
+            target_compile_definitions(mental-static PRIVATE MENTAL_POCL_LIB_PATH="${MENTAL_POCL_LIB_PATH}")
+            target_compile_definitions(mental PRIVATE MENTAL_POCL_LIB_PATH="${MENTAL_POCL_LIB_PATH}")
+        endif()
+    endif()
+
+    if(NOT MENTAL_HAS_METAL AND NOT OPENCL_LIBRARY AND NOT MENTAL_HAS_POCL)
+        message(WARNING "No GPU backend available on macOS - library will report MENTAL_ERROR_NO_DEVICES at runtime")
+    endif()
+
+    # Common dependencies
+    set(DARWIN_LIBS c++)
+    if(MENTAL_HAS_METAL)
+        list(APPEND DARWIN_LIBS ${METAL_LIBRARY} ${FOUNDATION_LIBRARY} ${QUARTZCORE_LIBRARY} ${APPKIT_LIBRARY})
+    endif()
     if(OPENCL_LIBRARY)
         list(APPEND DARWIN_LIBS ${OPENCL_LIBRARY})
     endif()
 
-    # glslang and SPIRV-Cross static libraries (only for mental-static)
+    # glslang and SPIRV-Cross static libraries
     # Link order matters: dependencies must come after libraries that use them
     set(DARWIN_STATIC_LIBS
         ${EXTERNAL_DIR}/glslang/libglslang.a
@@ -120,39 +236,75 @@ if(PLATFORM_DARWIN)
         ${EXTERNAL_DIR}/glslang/libSPIRV-Tools.a
     )
 
-    # Link shared library (needs glslang/SPIRV-Cross too for symbols)
     target_link_libraries(mental PUBLIC ${DARWIN_LIBS} ${DARWIN_STATIC_LIBS})
-
-    # Link static library (with all static dependencies embedded)
     target_link_libraries(mental-static PUBLIC ${DARWIN_LIBS} ${DARWIN_STATIC_LIBS})
 
 elseif(PLATFORM_WINDOWS)
-    # OpenCL (optional on Windows - D3D12 is the primary backend)
-    find_package(OpenCL)
-
-    # Add OpenCL backend source if OpenCL is available
-    if(OpenCL_FOUND)
-        target_sources(mental-static PRIVATE backend_opencl.c)
-        target_sources(mental PRIVATE backend_opencl.c)
-        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_OPENCL=1)
-        target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENCL=1)
-        message(STATUS "OpenCL found - enabling OpenCL backend")
-    else()
-        message(STATUS "OpenCL not found - only D3D12 backend available")
+    # D3D12 (already discovered above)
+    if(MENTAL_HAS_D3D12)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_D3D12=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_D3D12=1)
     endif()
 
-    # Common dependencies for both shared and static
-    set(WINDOWS_LIBS
-        d3d12.lib dxgi.lib
-    )
+    # Vulkan (already discovered above)
+    if(MENTAL_HAS_VULKAN)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_VULKAN=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_VULKAN=1)
+    endif()
 
+    # OpenCL (optional)
+    if(NOT MENTAL_DISABLE_OPENCL)
+        find_package(OpenCL)
+        if(OpenCL_FOUND)
+            target_sources(mental-static PRIVATE backend_opencl.c)
+            target_sources(mental PRIVATE backend_opencl.c)
+            target_compile_definitions(mental-static PRIVATE MENTAL_HAS_OPENCL=1)
+            target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENCL=1)
+            message(STATUS "OpenCL found - enabling OpenCL backend")
+        else()
+            message(STATUS "OpenCL not found")
+        endif()
+    else()
+        message(STATUS "OpenCL backend force-disabled")
+    endif()
+
+    # OpenGL (already discovered above — shared across Linux/Windows)
+    if(MENTAL_HAS_OPENGL)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_OPENGL=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENGL=1)
+    endif()
+
+    # PoCL (already discovered above)
+    if(MENTAL_HAS_POCL)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_POCL=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_POCL=1)
+        if(MENTAL_POCL_LIB_PATH)
+            target_compile_definitions(mental-static PRIVATE MENTAL_POCL_LIB_PATH="${MENTAL_POCL_LIB_PATH}")
+            target_compile_definitions(mental PRIVATE MENTAL_POCL_LIB_PATH="${MENTAL_POCL_LIB_PATH}")
+        endif()
+    endif()
+
+    if(NOT MENTAL_HAS_D3D12 AND NOT MENTAL_HAS_VULKAN AND NOT OpenCL_FOUND AND NOT MENTAL_HAS_OPENGL AND NOT MENTAL_HAS_POCL)
+        message(WARNING "No GPU backend available on Windows - library will report MENTAL_ERROR_NO_DEVICES at runtime")
+    endif()
+
+    # Common dependencies
+    set(WINDOWS_LIBS ws2_32)  # Winsock — needed for htonl/ntohl in stdlink.c
+    if(MENTAL_HAS_D3D12)
+        list(APPEND WINDOWS_LIBS d3d12.lib dxgi.lib)
+    endif()
+    if(MENTAL_HAS_VULKAN)
+        list(APPEND WINDOWS_LIBS Vulkan::Vulkan)
+    endif()
     if(OpenCL_FOUND)
         list(APPEND WINDOWS_LIBS OpenCL::OpenCL)
     endif()
+    if(MENTAL_HAS_OPENGL)
+        list(APPEND WINDOWS_LIBS OpenGL::GL)
+    endif()
 
-    # glslang and SPIRV-Cross static libraries (only for mental-static)
+    # glslang and SPIRV-Cross static libraries
     # Link order matters: dependencies must come after libraries that use them
-    # MinGW uses .a extension for static libraries
     set(WINDOWS_STATIC_LIBS
         ${EXTERNAL_DIR}/glslang/libglslang.a
         ${EXTERNAL_DIR}/glslang/libglslang-default-resource-limits.a
@@ -172,39 +324,68 @@ elseif(PLATFORM_WINDOWS)
         ${EXTERNAL_DIR}/glslang/libSPIRV-Tools.a
     )
 
-    # Link shared library (needs glslang/SPIRV-Cross too for symbols)
     target_link_libraries(mental PUBLIC ${WINDOWS_LIBS} ${WINDOWS_STATIC_LIBS})
-
-    # Link static library (with all static dependencies embedded)
     target_link_libraries(mental-static PUBLIC ${WINDOWS_LIBS} ${WINDOWS_STATIC_LIBS})
 
 elseif(PLATFORM_LINUX)
-    # Vulkan
-    find_package(Vulkan REQUIRED)
-
-    # OpenCL (optional - not all Linux systems have it)
-    find_package(OpenCL)
-    if(OpenCL_FOUND)
-        target_sources(mental-static PRIVATE backend_opencl.c)
-        target_sources(mental PRIVATE backend_opencl.c)
-        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_OPENCL=1)
-        target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENCL=1)
-        message(STATUS "OpenCL found - enabling OpenCL backend")
-    else()
-        message(STATUS "OpenCL not found - only Vulkan backend available")
+    # Vulkan (already discovered above)
+    if(MENTAL_HAS_VULKAN)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_VULKAN=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_VULKAN=1)
     endif()
 
-    # Common dependencies for both shared and static
-    set(LINUX_LIBS
-        Vulkan::Vulkan
-        stdc++ pthread
-    )
+    # OpenCL (optional)
+    if(NOT MENTAL_DISABLE_OPENCL)
+        find_package(OpenCL)
+        if(OpenCL_FOUND)
+            target_sources(mental-static PRIVATE backend_opencl.c)
+            target_sources(mental PRIVATE backend_opencl.c)
+            target_compile_definitions(mental-static PRIVATE MENTAL_HAS_OPENCL=1)
+            target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENCL=1)
+            message(STATUS "OpenCL found - enabling OpenCL backend")
+        else()
+            message(STATUS "OpenCL not found")
+        endif()
+    else()
+        message(STATUS "OpenCL backend force-disabled")
+    endif()
 
+    # OpenGL (already discovered above — shared across Linux/Windows)
+    if(MENTAL_HAS_OPENGL)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_OPENGL=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_OPENGL=1)
+    endif()
+
+    # PoCL (already discovered above)
+    if(MENTAL_HAS_POCL)
+        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_POCL=1)
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_POCL=1)
+        if(MENTAL_POCL_LIB_PATH)
+            target_compile_definitions(mental-static PRIVATE MENTAL_POCL_LIB_PATH="${MENTAL_POCL_LIB_PATH}")
+            target_compile_definitions(mental PRIVATE MENTAL_POCL_LIB_PATH="${MENTAL_POCL_LIB_PATH}")
+        endif()
+    endif()
+
+    if(NOT MENTAL_HAS_VULKAN AND NOT OpenCL_FOUND AND NOT MENTAL_HAS_OPENGL AND NOT MENTAL_HAS_POCL)
+        message(WARNING "No GPU backend available on Linux - library will report MENTAL_ERROR_NO_DEVICES at runtime")
+    endif()
+
+    # Common dependencies
+    set(LINUX_LIBS stdc++ pthread rt)
+    if(MENTAL_HAS_VULKAN)
+        list(APPEND LINUX_LIBS Vulkan::Vulkan)
+    endif()
     if(OpenCL_FOUND)
         list(APPEND LINUX_LIBS OpenCL::OpenCL)
     endif()
+    if(MENTAL_HAS_OPENGL)
+        list(APPEND LINUX_LIBS OpenGL::GL X11)
+    endif()
+    if(MENTAL_HAS_POCL)
+        list(APPEND LINUX_LIBS dl)
+    endif()
 
-    # glslang and SPIRV-Cross static libraries (only for mental-static)
+    # glslang and SPIRV-Cross static libraries
     # Link order matters: dependencies must come after libraries that use them
     set(LINUX_STATIC_LIBS
         ${EXTERNAL_DIR}/glslang/libglslang.a
@@ -225,10 +406,7 @@ elseif(PLATFORM_LINUX)
         ${EXTERNAL_DIR}/glslang/libSPIRV-Tools.a
     )
 
-    # Link shared library (needs glslang/SPIRV-Cross too for symbols)
     target_link_libraries(mental PUBLIC ${LINUX_LIBS} ${LINUX_STATIC_LIBS})
-
-    # Link static library (with all static dependencies embedded)
     target_link_libraries(mental-static PUBLIC ${LINUX_LIBS} ${LINUX_STATIC_LIBS})
 endif()
 

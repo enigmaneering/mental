@@ -9,7 +9,11 @@
 #define MENTAL_INTERNAL_H
 
 #include "mental.h"
-#include <pthread.h>
+#include "mental_pthread.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* Forward declarations */
 typedef struct mental_backend_t mental_backend;
@@ -23,13 +27,42 @@ struct mental_device_t {
     void* backend_device;  /* Backend-specific device handle */
 };
 
-/* Reference structure (GPU memory buffer) */
+/*
+ * Unified Reference structure.
+ *
+ * Every reference has shared-memory backing (named, UUID-scoped,
+ * cross-process visible).  Optionally, it can be pinned to a GPU
+ * device, adding a backend buffer for compute operations.
+ *
+ * Shared memory provides the cross-process data plane.
+ * GPU pinning provides the compute plane.
+ * Disclosure controls the access plane.
+ */
 struct mental_reference_t {
+    /* Shared memory (always present) */
+    void  *addr;       /* mmap'd / MapViewOfFile address (includes header) */
+    size_t total_size; /* total mapped size (header + user data) */
+    size_t user_size;  /* user-visible data size */
+    int    owner;      /* 1 = we created it, 0 = observer */
+    char   path[320];  /* shm path for cleanup */
+
+    /* GPU backing (optional — NULL if CPU-only) */
     mental_device device;
-    void* backend_buffer;  /* Backend-specific buffer handle */
-    size_t size;
+    void *backend_buffer;
+
+    /* Credential provider (owner only) — evaluated under spinlock */
+    mental_credential_fn credential_fn;
+    void                *credential_ctx;
+
+    /* Thread safety */
     pthread_mutex_t lock;
     int valid;
+
+#ifdef _WIN32
+    HANDLE hMap;
+#else
+    int    fd;
+#endif
 };
 
 /* Kernel structure (compiled shader) */
@@ -82,12 +115,24 @@ struct mental_backend_t {
     void (*viewport_detach)(void* viewport);
 };
 
-/* Backend registry */
+/* Backend registry — each is only available when its SDK was found at build time */
+#ifdef MENTAL_HAS_METAL
 extern mental_backend* metal_backend;
+#endif
+#ifdef MENTAL_HAS_D3D12
 extern mental_backend* d3d12_backend;
+#endif
+#ifdef MENTAL_HAS_VULKAN
 extern mental_backend* vulkan_backend;
+#endif
 #ifdef MENTAL_HAS_OPENCL
 extern mental_backend* opencl_backend;
+#endif
+#ifdef MENTAL_HAS_OPENGL
+extern mental_backend* opengl_backend;
+#endif
+#ifdef MENTAL_HAS_POCL
+extern mental_backend* pocl_backend;
 #endif
 
 /* Error handling (thread-local) */
@@ -96,5 +141,9 @@ void mental_set_error(mental_error code, const char* message);
 /* Transpilation */
 char* mental_transpile(const char* source, size_t source_len, mental_api_type target_api, size_t* out_len);
 void mental_transpile_free(char* transpiled);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* MENTAL_INTERNAL_H */

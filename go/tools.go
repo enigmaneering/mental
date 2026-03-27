@@ -15,6 +15,7 @@ import (
 const (
 	toolDXC  = 0 // MENTAL_TOOL_DXC
 	toolNaga = 1 // MENTAL_TOOL_NAGA
+	toolPOCL = 2 // MENTAL_TOOL_POCL
 )
 
 // toolSpec describes an external tool to locate.

@@ -10,28 +10,69 @@ import (
 
 // funcTable holds resolved C function pointers for the mental library.
 type funcTable struct {
-	deviceCount      uintptr
-	deviceGet        uintptr
-	deviceName       uintptr
-	deviceAPI        uintptr
-	deviceAPIName    uintptr
-	alloc            uintptr
-	write            uintptr
-	read             uintptr
-	size             uintptr
-	clone            uintptr
-	finalize         uintptr
-	compile          uintptr
-	dispatch         uintptr
-	kernelFinalize   uintptr
-	viewportAttach   uintptr
-	viewportPres     uintptr
-	viewportDet      uintptr
-	getError         uintptr
-	getErrorMsg      uintptr
-	setToolPath      uintptr
-	getToolPath      uintptr
+	deviceCount   uintptr
+	deviceGet     uintptr
+	deviceName    uintptr
+	deviceAPI     uintptr
+	deviceAPIName uintptr
+
+	compile        uintptr
+	dispatch       uintptr
+	kernelFinalize uintptr
+
+	viewportAttach uintptr
+	viewportPres   uintptr
+	viewportDet    uintptr
+
+	getError    uintptr
+	getErrorMsg uintptr
+	setToolPath uintptr
+	getToolPath uintptr
+
 	mentalAtexit uintptr
+	stdlink      uintptr
+	stdlinkPeer  uintptr
+	stdlinkSend  uintptr
+	stdlinkRecv  uintptr
+
+	count            uintptr
+	counterCreate    uintptr
+	counterIncrement uintptr
+	counterDecrement uintptr
+	counterEmpty     uintptr
+	counterReset     uintptr
+	counterFinalize  uintptr
+
+	uuid                           uintptr
+	referenceCreate                uintptr
+	referenceOpen                  uintptr
+	referenceData                  uintptr
+	referenceSize                  uintptr
+	referenceWritable              uintptr
+	referenceGetDisclosure         uintptr
+	referenceSetDisclosure         uintptr
+	referenceSetCredential         uintptr
+	referenceSetCredentialProvider uintptr
+	referenceIsOwner               uintptr
+	referenceClone                 uintptr
+	referenceClose                 uintptr
+	referencePin                   uintptr
+	referenceWrite                 uintptr
+	referenceRead                  uintptr
+	referenceIsPinned              uintptr
+	referenceDevice                uintptr
+
+	// Transpilation (transpile.h)
+	detectLanguage  uintptr
+	apiToLanguage   uintptr
+	glslToSpirv     uintptr
+	hlslToSpirv     uintptr
+	wgslToSpirv     uintptr
+	spirvToGlsl     uintptr
+	spirvToHlsl     uintptr
+	spirvToMsl      uintptr
+	spirvToWgsl     uintptr
+	transpileFree   uintptr
 }
 
 var (
@@ -101,56 +142,69 @@ var symbolNames = [...]struct {
 	name   string
 	offset uintptr
 }{
-	{"mental_device_count", offsetOf_deviceCount},
-	{"mental_device_get", offsetOf_deviceGet},
-	{"mental_device_name", offsetOf_deviceName},
-	{"mental_device_api", offsetOf_deviceAPI},
-	{"mental_device_api_name", offsetOf_deviceAPIName},
-	{"mental_alloc", offsetOf_alloc},
-	{"mental_write", offsetOf_write},
-	{"mental_read", offsetOf_read},
-	{"mental_size", offsetOf_size},
-	{"mental_clone", offsetOf_clone},
-	{"mental_finalize", offsetOf_finalize},
-	{"mental_compile", offsetOf_compile},
-	{"mental_dispatch", offsetOf_dispatch},
-	{"mental_kernel_finalize", offsetOf_kernelFinalize},
-	{"mental_viewport_attach", offsetOf_viewportAttach},
-	{"mental_viewport_present", offsetOf_viewportPres},
-	{"mental_viewport_detach", offsetOf_viewportDet},
-	{"mental_get_error", offsetOf_getError},
-	{"mental_get_error_message", offsetOf_getErrorMsg},
-	{"mental_set_tool_path", offsetOf_setToolPath},
-	{"mental_get_tool_path", offsetOf_getToolPath},
-	{"mental_atexit", offsetOf_mentalAtexit},
-}
+	{"mental_device_count", ptrOffset(0)},
+	{"mental_device_get", ptrOffset(1)},
+	{"mental_device_name", ptrOffset(2)},
+	{"mental_device_api", ptrOffset(3)},
+	{"mental_device_api_name", ptrOffset(4)},
 
-// Field offsets computed via unsafe.Offsetof — kept in a single place
-// so the symbol table and struct stay in sync.
-var (
-	offsetOf_deviceCount      = ptrOffset(0)
-	offsetOf_deviceGet        = ptrOffset(1)
-	offsetOf_deviceName       = ptrOffset(2)
-	offsetOf_deviceAPI        = ptrOffset(3)
-	offsetOf_deviceAPIName    = ptrOffset(4)
-	offsetOf_alloc            = ptrOffset(5)
-	offsetOf_write            = ptrOffset(6)
-	offsetOf_read             = ptrOffset(7)
-	offsetOf_size             = ptrOffset(8)
-	offsetOf_clone            = ptrOffset(9)
-	offsetOf_finalize         = ptrOffset(10)
-	offsetOf_compile          = ptrOffset(11)
-	offsetOf_dispatch         = ptrOffset(12)
-	offsetOf_kernelFinalize   = ptrOffset(13)
-	offsetOf_viewportAttach   = ptrOffset(14)
-	offsetOf_viewportPres     = ptrOffset(15)
-	offsetOf_viewportDet      = ptrOffset(16)
-	offsetOf_getError         = ptrOffset(17)
-	offsetOf_getErrorMsg      = ptrOffset(18)
-	offsetOf_setToolPath      = ptrOffset(19)
-	offsetOf_getToolPath      = ptrOffset(20)
-	offsetOf_mentalAtexit = ptrOffset(21)
-)
+	{"mental_compile", ptrOffset(5)},
+	{"mental_dispatch", ptrOffset(6)},
+	{"mental_kernel_finalize", ptrOffset(7)},
+
+	{"mental_viewport_attach", ptrOffset(8)},
+	{"mental_viewport_present", ptrOffset(9)},
+	{"mental_viewport_detach", ptrOffset(10)},
+
+	{"mental_get_error", ptrOffset(11)},
+	{"mental_get_error_message", ptrOffset(12)},
+	{"mental_set_tool_path", ptrOffset(13)},
+	{"mental_get_tool_path", ptrOffset(14)},
+
+	{"mental_atexit", ptrOffset(15)},
+	{"mental_stdlink", ptrOffset(16)},
+	{"mental_stdlink_peer", ptrOffset(17)},
+	{"mental_stdlink_send", ptrOffset(18)},
+	{"mental_stdlink_recv", ptrOffset(19)},
+
+	{"mental_count", ptrOffset(20)},
+	{"mental_counter_create", ptrOffset(21)},
+	{"mental_counter_increment", ptrOffset(22)},
+	{"mental_counter_decrement", ptrOffset(23)},
+	{"mental_counter_empty", ptrOffset(24)},
+	{"mental_counter_reset", ptrOffset(25)},
+	{"mental_counter_finalize", ptrOffset(26)},
+
+	{"mental_uuid", ptrOffset(27)},
+	{"mental_reference_create", ptrOffset(28)},
+	{"mental_reference_open", ptrOffset(29)},
+	{"mental_reference_data", ptrOffset(30)},
+	{"mental_reference_size", ptrOffset(31)},
+	{"mental_reference_writable", ptrOffset(32)},
+	{"mental_reference_get_disclosure", ptrOffset(33)},
+	{"mental_reference_set_disclosure", ptrOffset(34)},
+	{"mental_reference_set_credential", ptrOffset(35)},
+	{"mental_reference_set_credential_provider", ptrOffset(36)},
+	{"mental_reference_is_owner", ptrOffset(37)},
+	{"mental_reference_clone", ptrOffset(38)},
+	{"mental_reference_close", ptrOffset(39)},
+	{"mental_reference_pin", ptrOffset(40)},
+	{"mental_reference_write", ptrOffset(41)},
+	{"mental_reference_read", ptrOffset(42)},
+	{"mental_reference_is_pinned", ptrOffset(43)},
+	{"mental_reference_device", ptrOffset(44)},
+
+	{"mental_detect_language", ptrOffset(45)},
+	{"mental_api_to_language", ptrOffset(46)},
+	{"mental_glsl_to_spirv", ptrOffset(47)},
+	{"mental_hlsl_to_spirv", ptrOffset(48)},
+	{"mental_wgsl_to_spirv", ptrOffset(49)},
+	{"mental_spirv_to_glsl", ptrOffset(50)},
+	{"mental_spirv_to_hlsl", ptrOffset(51)},
+	{"mental_spirv_to_msl", ptrOffset(52)},
+	{"mental_spirv_to_wgsl", ptrOffset(53)},
+	{"mental_transpile_free", ptrOffset(54)},
+}
 
 func ptrOffset(index int) uintptr {
 	return uintptr(index) * ptrSize
@@ -159,7 +213,7 @@ func ptrOffset(index int) uintptr {
 const ptrSize = 8 // all supported platforms are 64-bit
 
 func resolveSymbols(handle uintptr) error {
-	base := (*[22]uintptr)(unsafePointer(&ft))
+	base := (*[55]uintptr)(unsafePointer(&ft))
 	for i, sym := range symbolNames {
 		addr, err := lookupSymbol(handle, sym.name)
 		if err != nil {

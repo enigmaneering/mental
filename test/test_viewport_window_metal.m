@@ -82,7 +82,8 @@ int main(int argc, char** argv) {
         size_t height = 600;
         size_t size = width * height * 4; /* BGRA8 */
 
-        mental_reference ref = mental_alloc(dev, size);
+        mental_reference ref = mental_reference_create("metal-window-buf", size);
+        mental_reference_pin(ref, dev);
         ASSERT(ref != NULL, "Failed to allocate buffer");
         ASSERT_NO_ERROR();
 
@@ -94,7 +95,7 @@ int main(int argc, char** argv) {
             orange_buffer[i * 4 + 2] = 255;  /* R */
             orange_buffer[i * 4 + 3] = 255;  /* A */
         }
-        mental_write(ref, orange_buffer, size);
+        mental_reference_write(ref, orange_buffer, size);
         free(orange_buffer);
         ASSERT_NO_ERROR();
 
@@ -136,7 +137,7 @@ int main(int argc, char** argv) {
         printf("  Viewport detached\n");
 
         /* Cleanup */
-        mental_finalize(ref);
+        mental_reference_close(ref);
         [window close];
 
         printf("PASS: Window viewport test successful\n");

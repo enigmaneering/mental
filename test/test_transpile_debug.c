@@ -71,21 +71,24 @@ int main(void) {
     size_t count = 4;  // Small test
     size_t size = count * sizeof(float);
 
-    mental_reference input0 = mental_alloc(dev, size);
-    mental_reference input1 = mental_alloc(dev, size);
-    mental_reference output = mental_alloc(dev, size);
+    mental_reference input0 = mental_reference_create("transpile-in0", size);
+    mental_reference_pin(input0, dev);
+    mental_reference input1 = mental_reference_create("transpile-in1", size);
+    mental_reference_pin(input1, dev);
+    mental_reference output = mental_reference_create("transpile-out", size);
+    mental_reference_pin(output, dev);
 
     float data0[] = {1.0f, 2.0f, 3.0f, 4.0f};
     float data1[] = {10.0f, 20.0f, 30.0f, 40.0f};
 
-    mental_write(input0, data0, size);
-    mental_write(input1, data1, size);
+    mental_reference_write(input0, data0, size);
+    mental_reference_write(input1, data1, size);
 
     mental_reference inputs[] = {input0, input1};
     mental_dispatch(kernel, inputs, 2, output, count);
 
     float results[4] = {0};
-    mental_read(output, results, size);
+    mental_reference_read(output, results, size);
 
     printf("\n=== Execution Results ===\n");
     for (int i = 0; i < 4; i++) {
@@ -95,9 +98,9 @@ int main(void) {
                results[i] == expected ? "✓" : "✗");
     }
 
-    mental_finalize(input0);
-    mental_finalize(input1);
-    mental_finalize(output);
+    mental_reference_close(input0);
+    mental_reference_close(input1);
+    mental_reference_close(output);
     mental_kernel_finalize(kernel);
     free(spirv);
     free(msl);

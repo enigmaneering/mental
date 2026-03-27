@@ -4,9 +4,21 @@
 
 #include "mental.h"
 #include "mental_internal.h"
+#include "transpile.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+#ifndef _WIN32
+#include <unistd.h>
+#define MENTAL_ACCESS access
+#else
+#include <io.h>
+#define MENTAL_ACCESS _access
+#ifndef F_OK
+#define F_OK 0
+#endif
+#endif
 
 /* Global state */
 mental_device* g_devices = NULL;
@@ -18,29 +30,43 @@ static int g_initialized = 0;
 static _Thread_local mental_error g_last_error = MENTAL_SUCCESS;
 static _Thread_local char g_last_error_message[512] = {0};
 
-/* Backend priority order by platform */
+/* Backend priority order by platform.
+ * Each backend is only in the list when its SDK was found at build time.
+ * The runtime init loop (mental_initialize) tries them in order and picks
+ * the first one that successfully initialises and reports devices. */
 static mental_backend** get_backend_priority(int* count) {
-    static mental_backend* backends[4];
+    static mental_backend* backends[8];
     *count = 0;
 
 #if defined(__APPLE__)
     /* macOS: Metal -> OpenCL */
+#ifdef MENTAL_HAS_METAL
     if (metal_backend) backends[(*count)++] = metal_backend;
-#ifdef MENTAL_HAS_OPENCL
-    if (opencl_backend) backends[(*count)++] = opencl_backend;
 #endif
 #elif defined(_WIN32)
-    /* Windows: D3D12 -> OpenCL */
+    /* Windows: D3D12 -> Vulkan -> OpenCL -> OpenGL -> PoCL */
+#ifdef MENTAL_HAS_D3D12
     if (d3d12_backend) backends[(*count)++] = d3d12_backend;
-#ifdef MENTAL_HAS_OPENCL
-    if (opencl_backend) backends[(*count)++] = opencl_backend;
+#endif
+#ifdef MENTAL_HAS_VULKAN
+    if (vulkan_backend) backends[(*count)++] = vulkan_backend;
 #endif
 #else
     /* Linux: Vulkan -> OpenCL */
+#ifdef MENTAL_HAS_VULKAN
     if (vulkan_backend) backends[(*count)++] = vulkan_backend;
+#endif
+#endif
+
+    /* Universal fallbacks: OpenCL -> OpenGL 4.3+ -> PoCL (CPU-only last resort) */
 #ifdef MENTAL_HAS_OPENCL
     if (opencl_backend) backends[(*count)++] = opencl_backend;
 #endif
+#ifdef MENTAL_HAS_OPENGL
+    if (opengl_backend) backends[(*count)++] = opengl_backend;
+#endif
+#ifdef MENTAL_HAS_POCL
+    if (pocl_backend) backends[(*count)++] = pocl_backend;
 #endif
 
     return backends;
@@ -92,6 +118,53 @@ static void mental_initialize(void) {
 
     g_initialized = 1;
     pthread_mutex_unlock(&g_init_lock);
+
+    /* Auto-detect external tool paths (DXC, Naga) from common locations.
+     * Only probes if not already configured via mental_set_tool_path. */
+    static const char *dxc_paths[] = {
+        "external/dxc/bin/dxc", "external/dxc/dxc",
+        "external/dxc/bin/dxc.exe", "external/dxc/dxc.exe",
+        "../external/dxc/bin/dxc", "../external/dxc/dxc",
+        "../external/dxc/bin/dxc.exe", "../external/dxc/dxc.exe",
+        "../../external/dxc/bin/dxc", "../../external/dxc/dxc",
+        "../../external/dxc/bin/dxc.exe", "../../external/dxc/dxc.exe",
+        NULL
+    };
+    static const char *naga_paths[] = {
+        "external/naga/bin/naga", "external/naga/bin/naga.exe",
+        "../external/naga/bin/naga", "../external/naga/bin/naga.exe",
+        "../../external/naga/bin/naga", "../../external/naga/bin/naga.exe",
+        NULL
+    };
+    if (!mental_get_tool_path(MENTAL_TOOL_DXC)) {
+        for (int i = 0; dxc_paths[i]; i++) {
+            if (MENTAL_ACCESS(dxc_paths[i], F_OK) == 0) {
+                /* Resolve to absolute path — MSYS2 popen can't handle ../.. */
+                char resolved[4096];
+#ifdef _WIN32
+                if (_fullpath(resolved, dxc_paths[i], sizeof(resolved)))
+                    mental_set_tool_path(MENTAL_TOOL_DXC, resolved);
+                else
+#endif
+                    mental_set_tool_path(MENTAL_TOOL_DXC, dxc_paths[i]);
+                break;
+            }
+        }
+    }
+    if (!mental_get_tool_path(MENTAL_TOOL_NAGA)) {
+        for (int i = 0; naga_paths[i]; i++) {
+            if (MENTAL_ACCESS(naga_paths[i], F_OK) == 0) {
+                char resolved[4096];
+#ifdef _WIN32
+                if (_fullpath(resolved, naga_paths[i], sizeof(resolved)))
+                    mental_set_tool_path(MENTAL_TOOL_NAGA, resolved);
+                else
+#endif
+                    mental_set_tool_path(MENTAL_TOOL_NAGA, naga_paths[i]);
+                break;
+            }
+        }
+    }
 }
 
 /*
@@ -132,154 +205,10 @@ const char* mental_device_api_name(mental_device dev) {
         case MENTAL_API_D3D12: return "D3D12";
         case MENTAL_API_VULKAN: return "Vulkan";
         case MENTAL_API_OPENCL: return "OpenCL";
+        case MENTAL_API_OPENGL: return "OpenGL";
+        case MENTAL_API_POCL: return "PoCL";
         default: return "Unknown";
     }
-}
-
-/*
- * Reference (GPU Memory Buffer)
- */
-
-mental_reference mental_alloc(mental_device dev, size_t bytes) {
-    if (!dev) {
-        mental_set_error(MENTAL_ERROR_INVALID_DEVICE, "Invalid device");
-        return NULL;
-    }
-
-    mental_reference ref = malloc(sizeof(struct mental_reference_t));
-    if (!ref) {
-        mental_set_error(MENTAL_ERROR_ALLOCATION_FAILED, "Failed to allocate reference");
-        return NULL;
-    }
-
-    ref->device = dev;
-    ref->size = bytes;
-    ref->valid = 1;
-    pthread_mutex_init(&ref->lock, NULL);
-
-    ref->backend_buffer = dev->backend->buffer_alloc(dev->backend_device, bytes);
-    if (!ref->backend_buffer) {
-        pthread_mutex_destroy(&ref->lock);
-        free(ref);
-        mental_set_error(MENTAL_ERROR_ALLOCATION_FAILED, "Backend buffer allocation failed");
-        return NULL;
-    }
-
-    return ref;
-}
-
-void mental_write(mental_reference ref, const void* data, size_t bytes) {
-    if (!ref || !ref->valid) {
-        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Invalid reference");
-        return;
-    }
-
-    pthread_mutex_lock(&ref->lock);
-
-    /* Auto-resize if needed */
-    if (bytes > ref->size) {
-        void* new_buffer = ref->device->backend->buffer_resize(
-            ref->device->backend_device,
-            ref->backend_buffer,
-            ref->size,
-            bytes
-        );
-
-        if (!new_buffer) {
-            pthread_mutex_unlock(&ref->lock);
-            mental_set_error(MENTAL_ERROR_ALLOCATION_FAILED, "Failed to resize buffer");
-            return;
-        }
-
-        ref->backend_buffer = new_buffer;
-        ref->size = bytes;
-    }
-
-    /* Write data */
-    ref->device->backend->buffer_write(ref->backend_buffer, data, bytes);
-
-    pthread_mutex_unlock(&ref->lock);
-}
-
-void mental_read(mental_reference ref, void* data, size_t bytes) {
-    if (!ref || !ref->valid) {
-        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Invalid reference");
-        return;
-    }
-
-    pthread_mutex_lock(&ref->lock);
-
-    size_t read_size = bytes < ref->size ? bytes : ref->size;
-    ref->device->backend->buffer_read(ref->backend_buffer, data, read_size);
-
-    pthread_mutex_unlock(&ref->lock);
-}
-
-size_t mental_size(mental_reference ref) {
-    if (!ref || !ref->valid) return 0;
-
-    pthread_mutex_lock(&ref->lock);
-    size_t size = ref->size;
-    pthread_mutex_unlock(&ref->lock);
-
-    return size;
-}
-
-mental_reference mental_clone(mental_reference ref) {
-    if (!ref || !ref->valid) {
-        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Invalid reference");
-        return NULL;
-    }
-
-    /* Lock source buffer */
-    pthread_mutex_lock(&ref->lock);
-
-    /* Create new reference structure */
-    mental_reference clone = (mental_reference)malloc(sizeof(struct mental_reference_t));
-    if (!clone) {
-        pthread_mutex_unlock(&ref->lock);
-        mental_set_error(MENTAL_ERROR_ALLOCATION_FAILED, "Failed to allocate clone reference");
-        return NULL;
-    }
-
-    clone->device = ref->device;
-    clone->size = ref->size;
-    clone->valid = 1;
-    pthread_mutex_init(&clone->lock, NULL);
-
-    /* Use backend's buffer_clone to copy data */
-    clone->backend_buffer = ref->device->backend->buffer_clone(
-        ref->device->backend_device,
-        ref->backend_buffer,
-        ref->size
-    );
-
-    if (!clone->backend_buffer) {
-        pthread_mutex_unlock(&ref->lock);
-        pthread_mutex_destroy(&clone->lock);
-        free(clone);
-        mental_set_error(MENTAL_ERROR_ALLOCATION_FAILED, "Failed to clone buffer");
-        return NULL;
-    }
-
-    /* Unlock source buffer */
-    pthread_mutex_unlock(&ref->lock);
-
-    return clone;
-}
-
-void mental_finalize(mental_reference ref) {
-    if (!ref) return;
-
-    if (ref->valid) {
-        pthread_mutex_lock(&ref->lock);
-        ref->device->backend->buffer_destroy(ref->backend_buffer);
-        ref->valid = 0;
-        pthread_mutex_unlock(&ref->lock);
-        pthread_mutex_destroy(&ref->lock);
-    }
-
-    free(ref);
 }
 
 /*
@@ -343,6 +272,19 @@ void mental_dispatch(mental_kernel kernel, mental_reference* inputs, int input_c
     if (!output || !output->valid) {
         mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Invalid output reference");
         return;
+    }
+
+    /* All references must be pinned to a GPU device */
+    if (!output->backend_buffer) {
+        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Output reference is not pinned to a GPU device");
+        return;
+    }
+
+    for (int i = 0; i < input_count; i++) {
+        if (inputs[i] && !inputs[i]->backend_buffer) {
+            mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Input reference is not pinned to a GPU device");
+            return;
+        }
     }
 
     /* Lock kernel */
@@ -409,6 +351,11 @@ void mental_kernel_finalize(mental_kernel kernel) {
 mental_viewport mental_viewport_attach(mental_reference ref, void* surface) {
     if (!ref || !ref->valid) {
         mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Invalid reference");
+        return NULL;
+    }
+
+    if (!ref->backend_buffer || !ref->device) {
+        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Reference is not pinned to a GPU device");
         return NULL;
     }
 

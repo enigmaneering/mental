@@ -45,6 +45,10 @@ add_executable(test_opencl_direct test_opencl_direct.c)
 target_link_libraries(test_opencl_direct mental-static)
 add_test(NAME OpenCLDirect COMMAND test_opencl_direct)
 
+add_executable(test_transpile test_transpile.c)
+target_link_libraries(test_transpile mental-static)
+add_test(NAME Transpilation COMMAND test_transpile)
+
 add_executable(test_transpile_debug test_transpile_debug.c)
 target_link_libraries(test_transpile_debug mental-static)
 
@@ -55,8 +59,23 @@ add_executable(test_paths_debug test_paths_debug.c)
 target_link_libraries(test_paths_debug mental-static)
 add_test(NAME PathDebug COMMAND test_paths_debug)
 
+add_executable(test_stdlink test_stdlink.c)
+target_link_libraries(test_stdlink mental-static)
+add_test(NAME Stdlink COMMAND test_stdlink)
+
+add_executable(test_reference test_reference.c)
+target_link_libraries(test_reference mental-static)
+add_test(NAME Reference COMMAND test_reference)
+
+add_executable(test_clone test_clone.c)
+target_link_libraries(test_clone mental-static)
+add_test(NAME Clone COMMAND test_clone)
+
 add_executable(test_hlsl_debug test_hlsl_debug.c)
 target_link_libraries(test_hlsl_debug mental-static)
+
+add_executable(test_external_compilers test_external_compilers.c)
+target_link_libraries(test_external_compilers mental-static)
 
 # Real window viewport tests (platform-specific)
 if(APPLE)

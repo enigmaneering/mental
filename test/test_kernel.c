@@ -33,6 +33,10 @@ const char* add_shader_glsl =
 int main(void) {
     printf("Testing kernel operations...\n");
 
+    if (mental_device_count() == 0) {
+        printf("SKIP: No GPU devices available\n");
+        return 0;
+    }
     mental_device dev = mental_device_get(0);
     ASSERT(dev != NULL, "Failed to create device");
     ASSERT_NO_ERROR();
@@ -46,10 +50,19 @@ int main(void) {
     size_t count = 256;
     size_t size = count * sizeof(float);
 
-    mental_reference input0 = mental_alloc(dev, size);
-    mental_reference input1 = mental_alloc(dev, size);
-    mental_reference output = mental_alloc(dev, size);
-    ASSERT(input0 && input1 && output, "Failed to allocate buffers");
+    mental_reference input0 = mental_reference_create("kernel-in0", size);
+    ASSERT(input0 != NULL, "Failed to create input0 reference");
+    mental_reference_pin(input0, dev);
+    ASSERT_NO_ERROR();
+
+    mental_reference input1 = mental_reference_create("kernel-in1", size);
+    ASSERT(input1 != NULL, "Failed to create input1 reference");
+    mental_reference_pin(input1, dev);
+    ASSERT_NO_ERROR();
+
+    mental_reference output = mental_reference_create("kernel-out", size);
+    ASSERT(output != NULL, "Failed to create output reference");
+    mental_reference_pin(output, dev);
     ASSERT_NO_ERROR();
 
     /* Fill input buffers */
@@ -58,8 +71,8 @@ int main(void) {
         data0[i] = (float)i;
         data1[i] = (float)i * 2.0f;
     }
-    mental_write(input0, data0, size);
-    mental_write(input1, data1, size);
+    mental_reference_write(input0, data0, size);
+    mental_reference_write(input1, data1, size);
     ASSERT_NO_ERROR();
 
     /* Dispatch kernel */
@@ -69,7 +82,7 @@ int main(void) {
 
     /* Read results */
     float results[256];
-    mental_read(output, results, size);
+    mental_reference_read(output, results, size);
     ASSERT_NO_ERROR();
 
     /* Verify computation */
@@ -86,11 +99,11 @@ int main(void) {
     ASSERT(match, "Kernel computation incorrect");
 
     /* Cleanup */
-    mental_finalize(input0);
-    mental_finalize(input1);
-    mental_finalize(output);
+    mental_reference_close(input0);
+    mental_reference_close(input1);
+    mental_reference_close(output);
     mental_kernel_finalize(kernel);
-    
+
     ASSERT_NO_ERROR();
 
     printf("PASS: All kernel tests passed\n");
