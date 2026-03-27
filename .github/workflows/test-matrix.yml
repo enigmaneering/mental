@@ -49,6 +49,13 @@ jobs:
             install_vulkan: false
             needs_xvfb: false
 
+          - name: "Windows arm64"
+            runner: windows-11-arm
+            platform: windows-arm64
+            packages: ""
+            install_vulkan: false
+            needs_xvfb: false
+
           - name: "Windows amd64 + Vulkan"
             runner: windows-latest
             platform: windows-amd64
