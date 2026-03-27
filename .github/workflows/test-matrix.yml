@@ -57,22 +57,23 @@ jobs:
             needs_xvfb: false
 
           # ============================================================
-          #  Linux — 4 distinct scenarios per architecture.
+          #  Linux — 2 scenarios per architecture.
           #
           #  1. Vulkan compute (lavapipe software renderer)
-          #  2. PoCL CPU compute (OpenCL fallback via PoCL)
-          #  3. OpenGL compute (Mesa llvmpipe GL 4.5)
-          #  4. Bare (no GPU packages — graceful MENTAL_ERROR_NO_DEVICES)
+          #  2. Bare (no GPU packages — graceful MENTAL_ERROR_NO_DEVICES)
+          #
+          #  PoCL and OpenGL backends need lab environments to test:
+          #  - PoCL requires OpenCL-environment SPIR-V (needs clspv integration)
+          #  - OpenGL 4.3+ compute needs Mesa drivers that CI can't provide
           # ============================================================
 
-          # 1. Vulkan compute — primary Linux GPU path
+          # Vulkan compute — primary Linux GPU path via lavapipe
           - name: "Linux amd64 (Vulkan)"
             runner: ubuntu-latest
             platform: linux-amd64
             packages: >-
               libvulkan-dev mesa-vulkan-drivers
               libopengl-dev libglx-dev libx11-dev
-              ocl-icd-opencl-dev pocl-opencl-icd
               xvfb
             install_vulkan: false
             needs_xvfb: true
@@ -83,45 +84,6 @@ jobs:
             packages: >-
               libvulkan-dev mesa-vulkan-drivers
               libopengl-dev libglx-dev libx11-dev
-              ocl-icd-opencl-dev pocl-opencl-icd
-              xvfb
-            install_vulkan: false
-            needs_xvfb: true
-
-          # 2. PoCL CPU compute — OpenCL fallback when no Vulkan
-          - name: "Linux amd64 (PoCL)"
-            runner: ubuntu-latest
-            platform: linux-amd64
-            packages: >-
-              ocl-icd-opencl-dev pocl-opencl-icd
-            install_vulkan: false
-            needs_xvfb: false
-
-          - name: "Linux arm64 (PoCL)"
-            runner: ubuntu-24.04-arm
-            platform: linux-arm64
-            packages: >-
-              ocl-icd-opencl-dev pocl-opencl-icd
-            install_vulkan: false
-            needs_xvfb: false
-
-          # 3. OpenGL compute — Mesa llvmpipe provides GL 4.5 in software
-          - name: "Linux amd64 (OpenGL)"
-            runner: ubuntu-latest
-            platform: linux-amd64
-            packages: >-
-              libopengl-dev libglx-dev libx11-dev
-              mesa-utils libgl1-mesa-dri
-              xvfb
-            install_vulkan: false
-            needs_xvfb: true
-
-          - name: "Linux arm64 (OpenGL)"
-            runner: ubuntu-24.04-arm
-            platform: linux-arm64
-            packages: >-
-              libopengl-dev libglx-dev libx11-dev
-              mesa-utils libgl1-mesa-dri
               xvfb
             install_vulkan: false
             needs_xvfb: true
