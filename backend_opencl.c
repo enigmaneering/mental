@@ -256,15 +256,42 @@ static void* opencl_kernel_compile(void* dev, const char* source, size_t source_
     OpenCLDevice* cl_dev = (OpenCLDevice*)dev;
 
     cl_int err;
-    cl_program program = clCreateProgramWithSource(cl_dev->context,
-                                                    1,
-                                                    &source,
-                                                    &source_len,
-                                                    &err);
-    if (err != CL_SUCCESS) {
-        if (error) {
-            snprintf(error, error_len, "Failed to create OpenCL program");
+    cl_program program = NULL;
+
+    /* Check if source is SPIR-V binary (magic number 0x07230203).
+     * If so, use clCreateProgramWithIL (OpenCL 2.1+).
+     * Otherwise, fall back to clCreateProgramWithSource for text. */
+    int is_spirv = (source_len >= 4 &&
+                    (unsigned char)source[0] == 0x03 &&
+                    (unsigned char)source[1] == 0x02 &&
+                    (unsigned char)source[2] == 0x23 &&
+                    (unsigned char)source[3] == 0x07);
+
+    if (is_spirv) {
+#ifdef CL_VERSION_2_1
+        program = clCreateProgramWithIL(cl_dev->context, source, source_len, &err);
+#else
+        /* clCreateProgramWithIL not available — try loading it dynamically */
+        typedef cl_program (CL_API_CALL *pfn_clCreateProgramWithIL)(
+            cl_context, const void*, size_t, cl_int*);
+        pfn_clCreateProgramWithIL fn = NULL;
+#ifdef clGetExtensionFunctionAddressForPlatform
+        fn = (pfn_clCreateProgramWithIL)clGetExtensionFunctionAddressForPlatform(
+            NULL, "clCreateProgramWithIL");
+#endif
+        if (fn) {
+            program = fn(cl_dev->context, source, source_len, &err);
+        } else {
+            if (error) snprintf(error, error_len, "SPIR-V input requires OpenCL 2.1+ (clCreateProgramWithIL not available)");
+            return NULL;
         }
+#endif
+    } else {
+        program = clCreateProgramWithSource(cl_dev->context, 1, &source, &source_len, &err);
+    }
+
+    if (!program || err != CL_SUCCESS) {
+        if (error) snprintf(error, error_len, "Failed to create OpenCL program (err=%d)", err);
         return NULL;
     }
 

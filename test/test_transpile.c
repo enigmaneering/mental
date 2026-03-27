@@ -288,9 +288,9 @@ static int test_api_mapping(void) {
     ASSERT(mental_api_to_language(MENTAL_API_METAL)  == MENTAL_LANG_MSL,  "Metal -> MSL");
     ASSERT(mental_api_to_language(MENTAL_API_D3D12)  == MENTAL_LANG_HLSL, "D3D12 -> HLSL");
     ASSERT(mental_api_to_language(MENTAL_API_VULKAN) == MENTAL_LANG_SPIRV, "Vulkan -> SPIRV");
-    ASSERT(mental_api_to_language(MENTAL_API_OPENCL) == MENTAL_LANG_GLSL, "OpenCL -> GLSL");
+    ASSERT(mental_api_to_language(MENTAL_API_OPENCL) == MENTAL_LANG_SPIRV, "OpenCL -> SPIRV");
     ASSERT(mental_api_to_language(MENTAL_API_OPENGL) == MENTAL_LANG_GLSL, "OpenGL -> GLSL");
-    ASSERT(mental_api_to_language(MENTAL_API_POCL)   == MENTAL_LANG_GLSL, "PoCL -> GLSL");
+    ASSERT(mental_api_to_language(MENTAL_API_POCL)   == MENTAL_LANG_SPIRV, "PoCL -> SPIRV");
     PASS("api_to_language_mapping");
 }
 
