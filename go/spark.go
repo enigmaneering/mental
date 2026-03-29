@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"syscall"
 	"unsafe"
@@ -143,12 +144,17 @@ const sparkFD = 3
 // Spark spawns a new process at path with a pre-established link.
 // The child retrieves its end via [Sparked].
 //
-// Process spawning uses Go's os/exec package, which cooperates with
-// the Go runtime's poller, GC, and thread manager.  The link itself
-// is a socketpair — the child's end is placed at fd 42.
+// Optional [*os.File] arguments redirect the child's standard streams:
+//
+//	mental.Spark[T](path)                          // inherit parent's stdin/stdout/stderr
+//	mental.Spark[T](path, nil, outFile, errFile)   // custom stdout/stderr, no stdin
+//	mental.Spark[T](path, inFile)                  // custom stdin, inherit stdout/stderr
+//
+// The order is: stdin, stdout, stderr.  Omitted or nil entries inherit
+// the parent's corresponding stream.
 //
 // Returns the parent's side of the link, or an error.
-func Spark[T any](path string) (*SparkLink[T], error) {
+func Spark[T any](path string, stdio ...*os.File) (*SparkLink[T], error) {
 	// Create a bidirectional socket pair.
 	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
@@ -157,13 +163,37 @@ func Spark[T any](path string) (*SparkLink[T], error) {
 	parentFD := fds[0]
 	childFD := fds[1]
 
+	// Resolve stdin/stdout/stderr: use provided files or inherit parent's.
+	childIn := os.Stdin
+	childOut := os.Stdout
+	childErr := os.Stderr
+	if len(stdio) > 0 && stdio[0] != nil {
+		childIn = stdio[0]
+	}
+	if len(stdio) > 1 && stdio[1] != nil {
+		childOut = stdio[1]
+	}
+	if len(stdio) > 2 && stdio[2] != nil {
+		childErr = stdio[2]
+	}
+
 	// Build the child command.  The child's end of the socketpair
 	// is passed as ExtraFiles[0], which becomes fd 3 in the child.
 	// MENTAL_SPARK=3 tells the child's mental_sparked() which fd to use.
+	// Split path into executable + args, respecting quotes and backslash escapes.
+	// e.g. `/usr/bin/foo --name "hello world" --dir /some\ path`
+	parts := shellSplit(path)
+	if len(parts) == 0 {
+		syscall.Close(parentFD)
+		syscall.Close(childFD)
+		return nil, fmt.Errorf("mental: empty spark path")
+	}
+
 	childFile := os.NewFile(uintptr(childFD), "spark-link")
-	cmd := exec.Command(path)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd := exec.Command(parts[0], parts[1:]...)
+	cmd.Stdin = childIn
+	cmd.Stdout = childOut
+	cmd.Stderr = childErr
 	cmd.ExtraFiles = []*os.File{childFile}
 	cmd.Env = append(os.Environ(), "MENTAL_SPARK=3")
 
@@ -204,4 +234,44 @@ func Sparked[T any]() *SparkLink[T] {
 	}
 	// Don't set finalizer — the C library caches this and manages its lifetime
 	return &SparkLink[T]{ptr: ptr}
+}
+
+// shellSplitRe matches: "double quoted" | 'single quoted' | backslash-escaped\ chars | bare words
+var shellSplitRe = regexp.MustCompile(`"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|(\\.|\S)+`)
+
+// shellSplit splits a command string into tokens using shell-like rules:
+//   - Double quotes preserve spaces, backslash escapes inside
+//   - Single quotes preserve everything literally
+//   - Backslash outside quotes escapes the next character
+//   - Unquoted whitespace separates tokens
+func shellSplit(s string) []string {
+	matches := shellSplitRe.FindAllString(s, -1)
+	result := make([]string, 0, len(matches))
+	for _, m := range matches {
+		// Strip outer quotes and process escapes.
+		if len(m) >= 2 && m[0] == '"' && m[len(m)-1] == '"' {
+			m = m[1 : len(m)-1]
+			m = shellUnescape(m)
+		} else if len(m) >= 2 && m[0] == '\'' && m[len(m)-1] == '\'' {
+			m = m[1 : len(m)-1]
+		} else {
+			m = shellUnescape(m)
+		}
+		result = append(result, m)
+	}
+	return result
+}
+
+// shellUnescape processes backslash escapes: \x → x for any character.
+func shellUnescape(s string) string {
+	var b []byte
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++
+			b = append(b, s[i])
+		} else {
+			b = append(b, s[i])
+		}
+	}
+	return string(b)
 }

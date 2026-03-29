@@ -374,6 +374,52 @@ uint64_t mental_counter_reset(mental_counter ctr, int to_empty);
 void mental_counter_finalize(mental_counter ctr);
 
 /*
+ * State (Runtime Introspection)
+ *
+ * A snapshot of mental's current runtime state: which backend was
+ * selected, what devices are available, and which libraries/tools
+ * were found.
+ *
+ * mental_state_get() blocks until backend discovery is complete,
+ * guaranteeing the returned state reflects reality — not a guess.
+ * Libraries register themselves dynamically, so new backends and
+ * tools appear automatically without struct changes.
+ */
+
+typedef struct {
+    const char *name;       /* e.g. "glslang", "spirv-cross", "dxc", "pocl" */
+    const char *version;    /* e.g. "14.0.0", or NULL if unknown */
+    int         available;  /* 1 if loaded/found, 0 if not */
+} mental_library_info;
+
+typedef struct {
+    /* Active backend (determined by the fallback chain) */
+    mental_api_type       active_backend;
+    const char           *active_backend_name;
+
+    /* Devices */
+    int                   device_count;
+    mental_device        *devices;
+
+    /* Libraries (dynamic — not hardcoded) */
+    int                   library_count;
+    mental_library_info  *libraries;
+} mental_state;
+
+/* Snapshot the current runtime state.
+ * Blocks until backend discovery is complete.
+ * Caller must free with mental_state_free(). */
+mental_state* mental_state_get(void);
+
+/* Free a state snapshot returned by mental_state_get(). */
+void mental_state_free(mental_state *state);
+
+/* Register a library with the runtime.  Called internally by backends
+ * and tools during initialization.  name and version are copied.
+ * Thread-safe. */
+void mental_register_library(const char *name, const char *version, int available);
+
+/*
  * Spark (Pipe-Based Parent→Child IPC)
  *
  * A link is a bidirectional communication channel between a parent

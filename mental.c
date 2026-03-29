@@ -9,6 +9,12 @@
 #include <string.h>
 #include <stdio.h>
 
+/* Version macros from compiled-in transpilation libraries.
+ * These headers are in the include paths set by CMakeLists.txt:
+ *   external/glslang/ and external/spirv-cross/ */
+#include "build/include/glslang/build_info.h"
+#include "spirv_cross_c.h"
+
 #ifndef _WIN32
 #include <unistd.h>
 #define MENTAL_ACCESS access
@@ -117,6 +123,23 @@ static void mental_initialize(void) {
     }
 
     g_initialized = 1;
+
+    /* Register the selected backend as a library */
+    mental_register_library(selected_backend->name, NULL, 1);
+
+    /* Register compiled-in transpilation libraries with versions */
+    {
+        char glslang_ver[64];
+        snprintf(glslang_ver, sizeof(glslang_ver), "%d.%d.%d",
+                 GLSLANG_VERSION_MAJOR, GLSLANG_VERSION_MINOR, GLSLANG_VERSION_PATCH);
+        mental_register_library("glslang", glslang_ver, 1);
+
+        char spirv_cross_ver[64];
+        snprintf(spirv_cross_ver, sizeof(spirv_cross_ver), "%d.%d.%d",
+                 SPVC_C_API_VERSION_MAJOR, SPVC_C_API_VERSION_MINOR, SPVC_C_API_VERSION_PATCH);
+        mental_register_library("spirv-cross", spirv_cross_ver, 1);
+    }
+
     pthread_mutex_unlock(&g_init_lock);
 
     /* Auto-detect external tool paths (DXC, Naga) from common locations.
@@ -165,6 +188,100 @@ static void mental_initialize(void) {
             }
         }
     }
+
+    /* External tools (dxc, naga) are registered lazily — the Go layer
+     * may discover them later via ensureTools().  Don't register them
+     * here with a potentially stale available=0. */
+}
+
+/*
+ * Library Registry
+ *
+ * Backends and tools register themselves here during initialization.
+ * The registry is a simple dynamic array — no hardcoded library names.
+ */
+
+#define MAX_LIBRARIES 32
+static mental_library_info g_libraries[MAX_LIBRARIES];
+static int g_library_count = 0;
+static pthread_mutex_t g_library_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void mental_register_library(const char *name, const char *version, int available) {
+    pthread_mutex_lock(&g_library_lock);
+    if (g_library_count < MAX_LIBRARIES) {
+        mental_library_info *lib = &g_libraries[g_library_count++];
+        lib->name = strdup(name);
+        lib->version = version ? strdup(version) : NULL;
+        lib->available = available;
+    }
+    pthread_mutex_unlock(&g_library_lock);
+}
+
+/*
+ * State Snapshot
+ */
+
+mental_state* mental_state_get(void) {
+    /* Block until backend discovery is complete. */
+    if (!g_initialized) mental_initialize();
+
+    mental_state *s = calloc(1, sizeof(mental_state));
+    if (!s) return NULL;
+
+    /* Active backend */
+    if (g_device_count > 0 && g_devices && g_devices[0]) {
+        s->active_backend = g_devices[0]->api;
+        s->active_backend_name = mental_device_api_name(g_devices[0]);
+    } else {
+        s->active_backend = -1;
+        s->active_backend_name = "none";
+    }
+
+    /* Devices — copy the handle array (not the structs) */
+    s->device_count = g_device_count;
+    if (g_device_count > 0) {
+        s->devices = calloc(g_device_count, sizeof(mental_device));
+        for (int i = 0; i < g_device_count; i++)
+            s->devices[i] = g_devices[i];
+    }
+
+    /* Libraries — deep copy the registry + append tools checked at snapshot time */
+    pthread_mutex_lock(&g_library_lock);
+    int tool_count = 2; /* dxc, naga */
+    int total = g_library_count + tool_count;
+    s->library_count = total;
+    s->libraries = calloc(total, sizeof(mental_library_info));
+
+    for (int i = 0; i < g_library_count; i++) {
+        s->libraries[i].name = strdup(g_libraries[i].name);
+        s->libraries[i].version = g_libraries[i].version ? strdup(g_libraries[i].version) : NULL;
+        s->libraries[i].available = g_libraries[i].available;
+    }
+    pthread_mutex_unlock(&g_library_lock);
+
+    /* Tools are checked live — the Go layer may have configured them
+     * after mental_initialize() ran. */
+    int idx = g_library_count;
+    s->libraries[idx].name = strdup("dxc");
+    s->libraries[idx].version = NULL;
+    s->libraries[idx].available = mental_get_tool_path(MENTAL_TOOL_DXC) != NULL;
+    idx++;
+    s->libraries[idx].name = strdup("naga");
+    s->libraries[idx].version = NULL;
+    s->libraries[idx].available = mental_get_tool_path(MENTAL_TOOL_NAGA) != NULL;
+
+    return s;
+}
+
+void mental_state_free(mental_state *state) {
+    if (!state) return;
+    free(state->devices);
+    for (int i = 0; i < state->library_count; i++) {
+        free((void *)state->libraries[i].name);
+        free((void *)state->libraries[i].version);
+    }
+    free(state->libraries);
+    free(state);
 }
 
 /*

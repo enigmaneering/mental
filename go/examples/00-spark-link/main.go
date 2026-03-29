@@ -22,6 +22,12 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		fmt.Println("Input arguments: " + os.Args[1])
+	}
+
+	fmt.Println(mental.GetState())
+
 	// If we were sparked, run as the child.
 	if link := mental.Sparked[string](); link != nil {
 		child(link)
@@ -40,7 +46,8 @@ func parent() {
 		os.Exit(1)
 	}
 
-	link, err := mental.Spark[string](self)
+	fmt.Println("parent: sparking child")
+	link, err := mental.Spark[string](self + " \\\"Hello,\\ World!\\\"")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to spark child: %v\n", err)
 		os.Exit(1)

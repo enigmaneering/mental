@@ -14,24 +14,3 @@ package mental
 extern void mentalGoAtexitCallback(void);
 */
 import "C"
-import "io/fs"
-
-// embedFS combines ReadFileFS and ReadDirFS for tool binary extraction.
-type embedFS interface {
-	fs.ReadFileFS
-	ReadDir(name string) ([]fs.DirEntry, error)
-}
-
-// libFS is an embedded filesystem for tool binaries (DXC, Naga).
-// When building with -tags embed, this is populated via go:embed.
-// In dev builds it falls through to an empty FS.
-var libFS embedFS = emptyFS{}
-
-type emptyFS struct{}
-
-func (emptyFS) Open(name string) (fs.File, error)         { return nil, fs.ErrNotExist }
-func (emptyFS) ReadFile(name string) ([]byte, error)       { return nil, fs.ErrNotExist }
-func (emptyFS) ReadDir(name string) ([]fs.DirEntry, error) { return nil, fs.ErrNotExist }
-
-// Ensure emptyFS satisfies the embedFS interface.
-var _ embedFS = emptyFS{}

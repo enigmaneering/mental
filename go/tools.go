@@ -40,6 +40,10 @@ var tools = []toolSpec{
 
 var configureToolsOnce sync.Once
 
+// toolSources tracks where each tool was loaded from.
+// Populated by configureTools(), read by GetState().
+var toolSources = map[string]LibrarySource{}
+
 // ensureTools triggers lazy tool configuration on first call.
 // Safe to call from any goroutine, any number of times.
 func ensureTools() {
@@ -65,6 +69,7 @@ func configureTools() {
 		// 1. Prefer system-installed version.
 		if path, err := exec.LookPath(exeName); err == nil {
 			setToolPath(t.id, path)
+			toolSources[t.name] = SourceSystem
 			continue
 		}
 
@@ -109,6 +114,7 @@ func configureTools() {
 		}
 
 		setToolPath(t.id, exePath)
+		toolSources[t.name] = SourceEmbedded
 		tempDirs = append(tempDirs, tmpDir)
 	}
 
