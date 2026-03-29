@@ -1,5 +1,10 @@
 package mental
 
+/*
+#include "transpile.h"
+#include <stdlib.h>
+*/
+import "C"
 import (
 	"io/fs"
 	"os"
@@ -33,7 +38,15 @@ var tools = []toolSpec{
 	{toolNaga, "naga", nil},
 }
 
-// configureTools is called once during init after symbols are resolved.
+var configureToolsOnce sync.Once
+
+// ensureTools triggers lazy tool configuration on first call.
+// Safe to call from any goroutine, any number of times.
+func ensureTools() {
+	configureToolsOnce.Do(configureTools)
+}
+
+// configureTools locates external tools (DXC, Naga).
 // For each tool it checks: system PATH first, then extracts the embedded
 // binary (and any companion shared libraries) to a temporary directory as
 // a fallback. Extracted temp dirs are automatically cleaned up at process
@@ -148,6 +161,7 @@ func extractCompanionLibs(embedDir string, patterns []string, destDir string) bo
 
 // setToolPath calls mental_set_tool_path in the C library.
 func setToolPath(tool int, path string) {
-	cstr := append([]byte(path), 0) // null-terminated
-	call2(ft.setToolPath, uintptr(tool), uintptr(unsafe.Pointer(&cstr[0])))
+	cstr := C.CString(path)
+	defer C.free(unsafe.Pointer(cstr))
+	C.mental_set_tool_path(C.mental_tool(C.int(tool)), cstr)
 }

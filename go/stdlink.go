@@ -1,5 +1,9 @@
 package mental
 
+/*
+#include "mental.h"
+*/
+import "C"
 import "unsafe"
 
 // Stdlink returns the local end of the standard link channel.
@@ -12,14 +16,14 @@ import "unsafe"
 //
 // Returns -1 if the channel could not be created.
 func Stdlink() int {
-	return int(int32(call0(ft.stdlink)))
+	return int(C.mental_stdlink())
 }
 
 // StdlinkPeer returns the peer (far) end of the stdlink channel.
 // When sparking a child process, this fd is passed to the child as
 // its own stdlink.  Returns -1 if the channel is not available.
 func StdlinkPeer() int {
-	return int(int32(call0(ft.stdlinkPeer)))
+	return int(C.mental_stdlink_peer())
 }
 
 // StdlinkSend writes a length-prefixed record to the local stdlink fd.
@@ -30,7 +34,7 @@ func StdlinkSend(data []byte) error {
 	if len(data) > 0 {
 		p = unsafe.Pointer(&data[0])
 	}
-	rc := int32(call2(ft.stdlinkSend, uintptr(p), uintptr(len(data))))
+	rc := C.mental_stdlink_send(p, C.size_t(len(data)))
 	if rc < 0 {
 		return getLibError()
 	}
@@ -45,12 +49,12 @@ func StdlinkRecv(buf []byte) (n int, err error) {
 	if len(buf) == 0 {
 		return 0, nil
 	}
-	var outLen uint64
-	rc := int32(call3(ft.stdlinkRecv,
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(len(buf)),
-		uintptr(unsafe.Pointer(&outLen)),
-	))
+	var outLen C.size_t
+	rc := C.mental_stdlink_recv(
+		unsafe.Pointer(&buf[0]),
+		C.size_t(len(buf)),
+		&outLen,
+	)
 	if rc < 0 {
 		return 0, getLibError()
 	}

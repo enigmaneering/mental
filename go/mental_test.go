@@ -2,26 +2,20 @@ package mental
 
 import "testing"
 
-// skipIfNoLibrary checks if the mental library loaded successfully.
-// Tests that need the library skip gracefully in dev environments
-// where the embedded binary isn't populated.
+// skipIfNoLibrary is a no-op with cgo — the library is always statically linked.
+// Kept for compatibility with other test files.
 func skipIfNoLibrary(t *testing.T) {
 	t.Helper()
-	if libH == 0 {
-		t.Skip("mental library not loaded (no embedded binary in dev)")
-	}
 }
 
 func skipIfNoDevice(t *testing.T) {
 	t.Helper()
-	skipIfNoLibrary(t)
 	if DeviceCount() == 0 {
 		t.Skip("no GPU devices available")
 	}
 }
 
 func TestDeviceCount(t *testing.T) {
-	skipIfNoLibrary(t)
 	count := DeviceCount()
 	t.Logf("DeviceCount() = %d", count)
 	// Count may be 0 on headless CI — that's valid, not an error.
@@ -31,7 +25,9 @@ func TestDeviceCount(t *testing.T) {
 }
 
 func TestDeviceGet(t *testing.T) {
-	skipIfNoDevice(t)
+	if DeviceCount() == 0 {
+		t.Skip("no GPU devices available")
+	}
 	dev := DeviceGet(0)
 	if dev == 0 {
 		t.Fatal("DeviceGet(0) returned nil device")
@@ -107,7 +103,6 @@ func TestErrorString(t *testing.T) {
 }
 
 func TestGetErrorWithoutError(t *testing.T) {
-	skipIfNoLibrary(t)
 	// After successful operations, error should be Success.
 	DeviceCount() // trigger init
 	err := GetError()
@@ -117,7 +112,9 @@ func TestGetErrorWithoutError(t *testing.T) {
 }
 
 func TestCompileAndDispatch(t *testing.T) {
-	skipIfNoDevice(t)
+	if DeviceCount() == 0 {
+		t.Skip("no GPU devices available")
+	}
 
 	dev := DeviceGet(0)
 

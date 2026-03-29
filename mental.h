@@ -374,6 +374,57 @@ uint64_t mental_counter_reset(mental_counter ctr, int to_empty);
 void mental_counter_finalize(mental_counter ctr);
 
 /*
+ * Spark (Pipe-Based Parent→Child IPC)
+ *
+ * A link is a bidirectional communication channel between a parent
+ * and its sparked child, backed by an inherited pipe.
+ *
+ * Messages are length-prefixed on the wire:
+ *   [4 bytes: uint32 payload length, network byte order][payload]
+ *
+ * The parent calls mental_spark(path) to spawn a child.  The link
+ * is an inherited pipe — fd 42 on Unix (socketpair), pipe pair on
+ * Windows.  No shared memory, no named objects.
+ *
+ * The child calls mental_sparked() to retrieve its end of the link.
+ * Both sides can immediately Send/Recv.  When either side dies,
+ * the other detects it via EOF on the pipe.
+ *
+ * Each parent gets a unique link per child.  Each child sees exactly
+ * one parent link (singleton).  Children can spark their own children,
+ * forming a tree of links.
+ */
+
+/* Opaque link handle */
+typedef struct mental_link_t* mental_link;
+
+/* Wrap an existing file descriptor as a link.
+ * The fd must be a connected bidirectional channel (e.g., socketpair).
+ * The link takes ownership — mental_link_close will close the fd.
+ * Returns NULL on failure. */
+mental_link mental_link_wrap_fd(int fd);
+
+/* Was this process sparked?  Checks for an inherited pipe at fd 42
+ * (Unix) or MENTAL_SPARK_READ/WRITE env vars (Windows).
+ * Returns the inherited link, or NULL if not sparked.
+ * The result is cached — safe to call multiple times. */
+mental_link mental_sparked(void);
+
+/* Send a length-prefixed record over the link.
+ * Returns 0 on success, -1 on error. */
+int mental_link_send(mental_link link, const void *data, size_t len);
+
+/* Receive the next length-prefixed record from the link.
+ * Blocks efficiently in the kernel until data arrives.
+ * Writes up to buf_len bytes into buf, stores full record length
+ * in *out_len.  Returns 0 on success, -1 on error (including EOF
+ * when the peer process has died). */
+int mental_link_recv(mental_link link, void *buf, size_t buf_len, size_t *out_len);
+
+/* Close the link. */
+void mental_link_close(mental_link link);
+
+/*
  * Lifecycle Management
  *
  * Register callbacks for automatic cleanup at process exit.

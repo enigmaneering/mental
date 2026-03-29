@@ -1,34 +1,21 @@
 // Package mental provides Go bindings for the Mental GPU compute library.
 //
-// Mental is loaded dynamically at runtime with no cgo dependency.
-// The library is initialized automatically on package import via init().
-//
-// The search order for the shared library is:
-//  1. System library paths (standard dlopen / LoadLibrary)
-//  2. ./external/ directory relative to the working directory
-//  3. Embedded prebuilt library (if present at compile time in lib/)
+// Mental is statically linked via cgo. The library is initialized
+// automatically at link time -- no runtime loading is required.
 //
 // Cleanup of temporary files is automatic at process exit via atexit.
 // Use [Defer] to register additional cleanup callbacks.
-//
-// Assembly shims translate Go's calling convention to the platform C ABI
-// (SysV AMD64, AAPCS64, or Windows x64) for each supported target.
 package mental
 
+/*
+#include "mental.h"
+#include <stdlib.h>
+*/
+import "C"
 import (
 	"runtime"
 	"unsafe"
 )
-
-// unsafePointer is a helper to avoid repeated unsafe.Pointer casts.
-func unsafePointer(p interface{}) unsafe.Pointer {
-	switch v := p.(type) {
-	case *funcTable:
-		return unsafe.Pointer(v)
-	default:
-		panic("unsafePointer: unexpected type")
-	}
-}
 
 // APIType identifies the GPU backend in use.
 type APIType int32
@@ -93,50 +80,55 @@ type Viewport uintptr
 
 // DeviceCount returns the number of available GPU devices.
 func DeviceCount() int {
-	return int(call0(ft.deviceCount))
+	return int(C.mental_device_count())
 }
 
 // DeviceGet returns the device at the given index.
 func DeviceGet(index int) Device {
-	return Device(call1(ft.deviceGet, uintptr(index)))
+	return Device(unsafe.Pointer(C.mental_device_get(C.int(index))))
 }
 
 // Name returns the human-readable device name.
 func (d Device) Name() string {
-	p := call1(ft.deviceName, uintptr(d))
-	if p == 0 {
+	p := C.mental_device_name(C.mental_device(unsafe.Pointer(d)))
+	if p == nil {
 		return ""
 	}
-	return goStringFromPtr(p)
+	return C.GoString(p)
 }
 
 // API returns the backend API type for this device.
 func (d Device) API() APIType {
-	return APIType(call1(ft.deviceAPI, uintptr(d)))
+	return APIType(C.mental_device_api(C.mental_device(unsafe.Pointer(d))))
 }
 
 // APIName returns the backend API name as a string.
 func (d Device) APIName() string {
-	p := call1(ft.deviceAPIName, uintptr(d))
-	if p == 0 {
+	p := C.mental_device_api_name(C.mental_device(unsafe.Pointer(d)))
+	if p == nil {
 		return ""
 	}
-	return goStringFromPtr(p)
+	return C.GoString(p)
 }
 
 // Compile compiles shader source for the given device.
 // The shader language is auto-detected and transpiled as needed.
 // Returns the compiled kernel and any error from the C library.
 func Compile(dev Device, source string) (Kernel, error) {
+	ensureTools()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
 	src := unsafe.StringData(source)
-	k := Kernel(call3(ft.compile, uintptr(dev), uintptr(unsafe.Pointer(src)), uintptr(len(source))))
-	if k == 0 {
+	k := C.mental_compile(
+		C.mental_device(unsafe.Pointer(dev)),
+		(*C.char)(unsafe.Pointer(src)),
+		C.size_t(len(source)),
+	)
+	if k == nil {
 		return 0, getLibError()
 	}
-	return k, nil
+	return Kernel(unsafe.Pointer(k)), nil
 }
 
 // Dispatch executes a kernel with the given input and output references.
@@ -151,16 +143,22 @@ func Dispatch(kernel Kernel, inputs []uintptr, output uintptr, workSize int) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	var inputsPtr uintptr
+	var inputsPtr *C.mental_reference
 	if len(inputs) > 0 {
-		inputsPtr = uintptr(unsafe.Pointer(&inputs[0]))
+		inputsPtr = (*C.mental_reference)(unsafe.Pointer(&inputs[0]))
 	}
-	call5(ft.dispatch, uintptr(kernel), inputsPtr, uintptr(len(inputs)), output, uintptr(workSize))
+	C.mental_dispatch(
+		C.mental_kernel(unsafe.Pointer(kernel)),
+		inputsPtr,
+		C.int(len(inputs)),
+		C.mental_reference(unsafe.Pointer(output)),
+		C.int(workSize),
+	)
 }
 
 // Finalize frees the compiled kernel. Must be called explicitly.
 func (k Kernel) Finalize() {
-	call1(ft.kernelFinalize, uintptr(k))
+	C.mental_kernel_finalize(C.mental_kernel(unsafe.Pointer(k)))
 }
 
 // ViewportAttach attaches a reference to an OS surface for zero-copy presentation.
@@ -174,47 +172,46 @@ func ViewportAttach(ref uintptr, surface uintptr) (Viewport, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	v := Viewport(call2(ft.viewportAttach, ref, surface))
-	if v == 0 {
+	v := C.mental_viewport_attach(
+		C.mental_reference(unsafe.Pointer(ref)),
+		unsafe.Pointer(surface),
+	)
+	if v == nil {
 		return 0, getLibError()
 	}
-	return v, nil
+	return Viewport(unsafe.Pointer(v)), nil
 }
 
 // Present renders the attached buffer to the surface.
 func (v Viewport) Present() {
-	call1(ft.viewportPres, uintptr(v))
+	C.mental_viewport_present(C.mental_viewport(unsafe.Pointer(v)))
 }
 
 // Detach disconnects and cleans up the viewport.
 func (v Viewport) Detach() {
-	call1(ft.viewportDet, uintptr(v))
+	C.mental_viewport_detach(C.mental_viewport(unsafe.Pointer(v)))
 }
 
 // GetError returns the last error code from the C library (thread-local).
 func GetError() Error {
-	return Error(call0(ft.getError))
+	return Error(C.mental_get_error())
 }
 
 // GetErrorMessage returns the last error message from the C library (thread-local).
 func GetErrorMessage() string {
-	p := call0(ft.getErrorMsg)
-	if p == 0 {
+	p := C.mental_get_error_message()
+	if p == nil {
 		return ""
 	}
-	return goStringFromPtr(p)
+	return C.GoString(p)
 }
 
 func getLibError() error {
-	code := Error(call0(ft.getError))
+	code := Error(C.mental_get_error())
 	if code == Success {
 		return nil
 	}
-	p := call0(ft.getErrorMsg)
-	msg := ""
-	if p != 0 {
-		msg = goStringFromPtr(p)
-	}
+	msg := C.GoString(C.mental_get_error_message())
 	if msg != "" {
 		return &libError{code: code, msg: msg}
 	}
@@ -228,16 +225,3 @@ type libError struct {
 
 func (e *libError) Error() string { return e.msg }
 func (e *libError) Code() Error   { return e.code }
-
-// goStringFromPtr reads a null-terminated C string from the given address.
-func goStringFromPtr(p uintptr) string {
-	if p == 0 {
-		return ""
-	}
-	ptr := unsafe.Pointer(p)
-	var n int
-	for *(*byte)(unsafe.Add(ptr, n)) != 0 {
-		n++
-	}
-	return string(unsafe.Slice((*byte)(ptr), n))
-}

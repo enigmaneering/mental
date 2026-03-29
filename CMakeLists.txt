@@ -25,6 +25,7 @@ set(MENTAL_SOURCES
     monotonic.c
     reference.c
     stdlink.c
+    spark.c
     transpile.c
     transpile_other.c
 )
@@ -150,6 +151,16 @@ add_library(mental SHARED
 
 # Set output name for static library to avoid conflicts
 set_target_properties(mental-static PROPERTIES OUTPUT_NAME mental-static)
+
+# Shared library versioning (soname)
+# SOVERSION is the major version — bump on breaking ABI changes.
+# VERSION is the full version — bump on any release.
+# Produces: libmental.so.1.0.0, libmental.so.1 → libmental.so.1.0.0, libmental.so → libmental.so.1
+#           libmental.1.0.0.dylib, libmental.1.dylib → libmental.1.0.0.dylib (macOS)
+set_target_properties(mental PROPERTIES
+    VERSION   ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+)
 
 target_include_directories(mental-static PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}

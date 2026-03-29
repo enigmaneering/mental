@@ -71,6 +71,10 @@ add_executable(test_clone test_clone.c)
 target_link_libraries(test_clone mental-static)
 add_test(NAME Clone COMMAND test_clone)
 
+add_executable(test_spark test_spark.c)
+target_link_libraries(test_spark mental-static)
+add_test(NAME Spark COMMAND test_spark)
+
 add_executable(test_hlsl_debug test_hlsl_debug.c)
 target_link_libraries(test_hlsl_debug mental-static)
 

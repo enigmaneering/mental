@@ -1,5 +1,10 @@
 package mental
 
+/*
+#include "mental.h"
+#include <stdlib.h>
+*/
+import "C"
 import (
 	"fmt"
 	"runtime"
@@ -10,11 +15,11 @@ import (
 // UUID returns this process's unique identifier (32 lowercase hex chars).
 // Generated once on first call, stable for the process lifetime.
 func UUID() string {
-	p := call0(ft.uuid)
-	if p == 0 {
+	p := C.mental_uuid()
+	if p == nil {
 		return ""
 	}
-	return goStringFromPtr(p)
+	return C.GoString(p)
 }
 
 // Disclosable is the interface for custom disclosure credential types.
@@ -84,8 +89,10 @@ func ReferenceCreate[TData any, TDisclosure any](name string) *Reference[TData, 
 	if size == 0 {
 		size = 1 // zero-size types still get a region
 	}
-	cname := append([]byte(name), 0)
-	ptr := call2(ft.referenceCreate, uintptr(unsafe.Pointer(&cname[0])), uintptr(size))
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	cref := C.mental_reference_create(cname, C.size_t(size))
+	ptr := uintptr(unsafe.Pointer(cref))
 	if ptr == 0 {
 		return nil
 	}
@@ -100,9 +107,12 @@ func ReferenceOpen[TData any, TDisclosure any](peerUUID, name string) *Reference
 	if peerUUID == "" || name == "" {
 		return nil
 	}
-	cuuid := append([]byte(peerUUID), 0)
-	cname := append([]byte(name), 0)
-	ptr := call2(ft.referenceOpen, uintptr(unsafe.Pointer(&cuuid[0])), uintptr(unsafe.Pointer(&cname[0])))
+	cuuid := C.CString(peerUUID)
+	defer C.free(unsafe.Pointer(cuuid))
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	cref := C.mental_reference_open(cuuid, cname)
+	ptr := uintptr(unsafe.Pointer(cref))
 	if ptr == 0 {
 		return nil
 	}
@@ -124,23 +134,25 @@ func (r *Reference[TData, TDisclosure]) Handle() uintptr {
 // resolveCredential evaluates the credential provider (if set) and
 // refreshes the shm credential, then returns the credential bytes to
 // present for the access check.  Must be called under r.mu.
-func (r *Reference[TData, TDisclosure]) resolveCredential(explicit []TDisclosure) (uintptr, uintptr) {
+func (r *Reference[TData, TDisclosure]) resolveCredential(explicit []TDisclosure) (unsafe.Pointer, C.size_t) {
 	if r.credentialFn != nil {
 		cred := r.credentialFn()
 		b := discloseBytes(cred)
 		if len(b) > 0 {
-			call3(ft.referenceSetCredential, r.ptr,
-				uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
-			return uintptr(unsafe.Pointer(&b[0])), uintptr(len(b))
+			C.mental_reference_set_credential(
+				C.mental_reference(unsafe.Pointer(r.ptr)),
+				unsafe.Pointer(&b[0]), C.size_t(len(b)),
+			)
+			return unsafe.Pointer(&b[0]), C.size_t(len(b))
 		}
 	}
 	if len(explicit) > 0 {
 		b := discloseBytes(explicit[0])
 		if len(b) > 0 {
-			return uintptr(unsafe.Pointer(&b[0])), uintptr(len(b))
+			return unsafe.Pointer(&b[0]), C.size_t(len(b))
 		}
 	}
-	return 0, 0
+	return nil, 0
 }
 
 // Data returns a typed pointer to the mapped shared memory.
@@ -162,12 +174,15 @@ func (r *Reference[TData, TDisclosure]) Data(credential ...TDisclosure) *TData {
 	}
 	r.mu.Lock()
 	cp, cl := r.resolveCredential(credential)
-	p := call3(ft.referenceData, r.ptr, cp, cl)
+	p := C.mental_reference_data(
+		C.mental_reference(unsafe.Pointer(r.ptr)),
+		cp, cl,
+	)
 	r.mu.Unlock()
-	if p == 0 {
+	if p == nil {
 		return nil
 	}
-	return (*TData)(unsafe.Pointer(p))
+	return (*TData)(p)
 }
 
 // Size returns the size of the mapped region in bytes.
@@ -175,7 +190,7 @@ func (r *Reference[TData, TDisclosure]) Size() int {
 	if r == nil || r.ptr == 0 {
 		return 0
 	}
-	return int(call1(ft.referenceSize, r.ptr))
+	return int(C.mental_reference_size(C.mental_reference(unsafe.Pointer(r.ptr))))
 }
 
 // Bytes returns the mapped region as a byte slice.
@@ -189,13 +204,16 @@ func (r *Reference[TData, TDisclosure]) Bytes(credential ...TDisclosure) []byte 
 	}
 	r.mu.Lock()
 	cp, cl := r.resolveCredential(credential)
-	p := call3(ft.referenceData, r.ptr, cp, cl)
-	size := int(call1(ft.referenceSize, r.ptr))
+	p := C.mental_reference_data(
+		C.mental_reference(unsafe.Pointer(r.ptr)),
+		cp, cl,
+	)
+	size := int(C.mental_reference_size(C.mental_reference(unsafe.Pointer(r.ptr))))
 	r.mu.Unlock()
-	if p == 0 || size == 0 {
+	if p == nil || size == 0 {
 		return nil
 	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(p)), size)
+	return unsafe.Slice((*byte)(p), size)
 }
 
 // Writable reports whether write access is permitted under the current
@@ -206,7 +224,10 @@ func (r *Reference[TData, TDisclosure]) Writable(credential ...TDisclosure) bool
 	}
 	r.mu.Lock()
 	cp, cl := r.resolveCredential(credential)
-	result := call3(ft.referenceWritable, r.ptr, cp, cl)
+	result := C.mental_reference_writable(
+		C.mental_reference(unsafe.Pointer(r.ptr)),
+		cp, cl,
+	)
 	r.mu.Unlock()
 	return result != 0
 }
@@ -219,7 +240,7 @@ func (r *Reference[TData, TDisclosure]) IsOwner() bool {
 	if r == nil || r.ptr == 0 {
 		return false
 	}
-	return call1(ft.referenceIsOwner, r.ptr) != 0
+	return C.mental_reference_is_owner(C.mental_reference(unsafe.Pointer(r.ptr))) != 0
 }
 
 // ── GPU Pinning ───────────────────────────────────────────────────
@@ -236,7 +257,10 @@ func (r *Reference[TData, TDisclosure]) Pin(device Device) error {
 		return ErrInvalidReference
 	}
 	runtime.LockOSThread()
-	result := call2(ft.referencePin, r.ptr, uintptr(device))
+	result := C.mental_reference_pin(
+		C.mental_reference(unsafe.Pointer(r.ptr)),
+		C.mental_device(unsafe.Pointer(device)),
+	)
 	runtime.UnlockOSThread()
 	if int(result) != 0 {
 		return getLibError()
@@ -249,7 +273,7 @@ func (r *Reference[TData, TDisclosure]) IsPinned() bool {
 	if r == nil || r.ptr == 0 {
 		return false
 	}
-	return call1(ft.referenceIsPinned, r.ptr) != 0
+	return C.mental_reference_is_pinned(C.mental_reference(unsafe.Pointer(r.ptr))) != 0
 }
 
 // GetDevice returns the GPU device this reference is pinned to,
@@ -258,7 +282,7 @@ func (r *Reference[TData, TDisclosure]) GetDevice() Device {
 	if r == nil || r.ptr == 0 {
 		return 0
 	}
-	return Device(call1(ft.referenceDevice, r.ptr))
+	return Device(unsafe.Pointer(C.mental_reference_device(C.mental_reference(unsafe.Pointer(r.ptr)))))
 }
 
 // Write copies data into the reference.
@@ -270,8 +294,11 @@ func (r *Reference[TData, TDisclosure]) Write(data []byte) {
 		return
 	}
 	runtime.LockOSThread()
-	call3(ft.referenceWrite, r.ptr,
-		uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)))
+	C.mental_reference_write(
+		C.mental_reference(unsafe.Pointer(r.ptr)),
+		unsafe.Pointer(&data[0]),
+		C.size_t(len(data)),
+	)
 	runtime.UnlockOSThread()
 }
 
@@ -284,8 +311,11 @@ func (r *Reference[TData, TDisclosure]) Read(buf []byte) {
 		return
 	}
 	runtime.LockOSThread()
-	call3(ft.referenceRead, r.ptr,
-		uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	C.mental_reference_read(
+		C.mental_reference(unsafe.Pointer(r.ptr)),
+		unsafe.Pointer(&buf[0]),
+		C.size_t(len(buf)),
+	)
 	runtime.UnlockOSThread()
 }
 
@@ -328,16 +358,20 @@ func (r *Reference[TData, TDisclosure]) cloneInternal(device Device, credential 
 
 	seq := NextCount()
 	cloneName := fmt.Sprintf("%s-%d", r.name, seq)
-	cname := append([]byte(cloneName), 0)
+	cname := C.CString(cloneName)
+	defer C.free(unsafe.Pointer(cname))
 
 	r.mu.Lock()
 	cp, cl := r.resolveCredential(credential)
-	ptr := call5(ft.referenceClone, r.ptr,
-		uintptr(unsafe.Pointer(&cname[0])),
-		uintptr(device),
-		cp, cl)
+	cref := C.mental_reference_clone(
+		C.mental_reference(unsafe.Pointer(r.ptr)),
+		cname,
+		C.mental_device(unsafe.Pointer(device)),
+		cp, cl,
+	)
 	r.mu.Unlock()
 
+	ptr := uintptr(unsafe.Pointer(cref))
 	if ptr == 0 {
 		return nil
 	}
@@ -353,7 +387,7 @@ func (r *Reference[TData, TDisclosure]) GetDisclosure() Disclosure {
 	if r == nil || r.ptr == 0 {
 		return RelationallyOpen
 	}
-	return Disclosure(call1(ft.referenceGetDisclosure, r.ptr))
+	return Disclosure(C.mental_reference_get_disclosure(C.mental_reference(unsafe.Pointer(r.ptr))))
 }
 
 // SetDisclosure sets the disclosure mode.  Only the owner can change it;
@@ -362,7 +396,10 @@ func (r *Reference[TData, TDisclosure]) SetDisclosure(mode Disclosure) {
 	if r == nil || r.ptr == 0 {
 		return
 	}
-	call2(ft.referenceSetDisclosure, r.ptr, uintptr(mode))
+	C.mental_reference_set_disclosure(
+		C.mental_reference(unsafe.Pointer(r.ptr)),
+		C.mental_disclosure(mode),
+	)
 }
 
 // SetCredentialProvider sets a function that produces the credential
@@ -387,8 +424,10 @@ func (r *Reference[TData, TDisclosure]) SetCredentialProvider(fn func() TDisclos
 		cred := fn()
 		b := discloseBytes(cred)
 		if len(b) > 0 {
-			call3(ft.referenceSetCredential, r.ptr,
-				uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
+			C.mental_reference_set_credential(
+				C.mental_reference(unsafe.Pointer(r.ptr)),
+				unsafe.Pointer(&b[0]), C.size_t(len(b)),
+			)
 		}
 	}
 	r.mu.Unlock()
@@ -405,9 +444,15 @@ func (r *Reference[TData, TDisclosure]) SetCredential(cred TDisclosure) {
 	r.credentialFn = nil
 	b := discloseBytes(cred)
 	if len(b) == 0 {
-		call3(ft.referenceSetCredential, r.ptr, 0, 0)
+		C.mental_reference_set_credential(
+			C.mental_reference(unsafe.Pointer(r.ptr)),
+			nil, 0,
+		)
 	} else {
-		call3(ft.referenceSetCredential, r.ptr, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
+		C.mental_reference_set_credential(
+			C.mental_reference(unsafe.Pointer(r.ptr)),
+			unsafe.Pointer(&b[0]), C.size_t(len(b)),
+		)
 	}
 	r.mu.Unlock()
 }
@@ -419,7 +464,10 @@ func (r *Reference[TData, TDisclosure]) ClearCredential() {
 	}
 	r.mu.Lock()
 	r.credentialFn = nil
-	call3(ft.referenceSetCredential, r.ptr, 0, 0)
+	C.mental_reference_set_credential(
+		C.mental_reference(unsafe.Pointer(r.ptr)),
+		nil, 0,
+	)
 	r.mu.Unlock()
 }
 
@@ -433,7 +481,7 @@ func (r *Reference[TData, TDisclosure]) Close() {
 	if r != nil && r.ptr != 0 {
 		r.mu.Lock()
 		r.credentialFn = nil
-		call1(ft.referenceClose, r.ptr)
+		C.mental_reference_close(C.mental_reference(unsafe.Pointer(r.ptr)))
 		r.ptr = 0
 		runtime.SetFinalizer(r, nil)
 		r.mu.Unlock()

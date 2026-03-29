@@ -1,5 +1,11 @@
 package mental
 
+/*
+#include "mental.h"
+#include "transpile.h"
+#include <stdlib.h>
+*/
+import "C"
 import "unsafe"
 
 // Language identifies a shader language.
@@ -37,116 +43,135 @@ func DetectLanguage(source []byte) Language {
 	if len(source) == 0 {
 		return LangUnknown
 	}
-	return Language(call2(ft.detectLanguage, uintptr(unsafe.Pointer(&source[0])), uintptr(len(source))))
+	return Language(C.mental_detect_language(
+		(*C.char)(unsafe.Pointer(&source[0])),
+		C.size_t(len(source)),
+	))
 }
 
 // APIToLanguage returns the native shader language for the given backend API.
 func APIToLanguage(api APIType) Language {
-	return Language(call1(ft.apiToLanguage, uintptr(api)))
+	return Language(C.mental_api_to_language(C.mental_api_type(api)))
 }
 
 // GLSLToSPIRV compiles GLSL source to SPIR-V binary.
 func GLSLToSPIRV(source string) ([]byte, error) {
-	return compileToSPIRV(ft.glslToSpirv, source)
-}
-
-// HLSLToSPIRV compiles HLSL source to SPIR-V binary via DXC.
-// Requires DXC to be configured (auto-detected or via SetToolPath).
-func HLSLToSPIRV(source string) ([]byte, error) {
-	return compileToSPIRV(ft.hlslToSpirv, source)
-}
-
-// WGSLToSPIRV compiles WGSL source to SPIR-V binary via Naga.
-// Requires Naga to be configured (auto-detected or via SetToolPath).
-func WGSLToSPIRV(source string) ([]byte, error) {
-	return compileToSPIRV(ft.wgslToSpirv, source)
-}
-
-// compileToSPIRV is the shared implementation for *ToSPIRV functions.
-// C signature: unsigned char* fn(const char* source, size_t source_len,
-//
-//	size_t* out_len, char* error, size_t error_len)
-func compileToSPIRV(fn uintptr, source string) ([]byte, error) {
-	src := unsafe.StringData(source)
-	var outLen uintptr
-	var errBuf [1024]byte
-
-	result := call5(fn,
-		uintptr(unsafe.Pointer(src)),
-		uintptr(len(source)),
-		uintptr(unsafe.Pointer(&outLen)),
-		uintptr(unsafe.Pointer(&errBuf[0])),
-		uintptr(len(errBuf)))
-
-	if result == 0 {
-		msg := goStringFromPtr(uintptr(unsafe.Pointer(&errBuf[0])))
+	ensureTools()
+	csrc := C.CString(source)
+	defer C.free(unsafe.Pointer(csrc))
+	var outLen C.size_t
+	var errBuf [1024]C.char
+	result := C.mental_glsl_to_spirv(csrc, C.size_t(len(source)), &outLen, &errBuf[0], 1024)
+	if result == nil {
+		msg := C.GoString(&errBuf[0])
 		if msg == "" {
 			msg = "compilation failed"
 		}
 		return nil, &libError{code: ErrCompilationFailed, msg: msg}
 	}
+	spirv := C.GoBytes(unsafe.Pointer(result), C.int(outLen))
+	C.mental_transpile_free((*C.char)(unsafe.Pointer(result)))
+	return spirv, nil
+}
 
-	spirv := make([]byte, outLen)
-	copy(spirv, unsafe.Slice((*byte)(unsafe.Pointer(result)), outLen))
+// HLSLToSPIRV compiles HLSL source to SPIR-V binary via DXC.
+// Requires DXC to be configured (auto-detected or via SetToolPath).
+func HLSLToSPIRV(source string) ([]byte, error) {
+	ensureTools()
+	csrc := C.CString(source)
+	defer C.free(unsafe.Pointer(csrc))
+	var outLen C.size_t
+	var errBuf [1024]C.char
+	result := C.mental_hlsl_to_spirv(csrc, C.size_t(len(source)), &outLen, &errBuf[0], 1024)
+	if result == nil {
+		msg := C.GoString(&errBuf[0])
+		if msg == "" {
+			msg = "compilation failed"
+		}
+		return nil, &libError{code: ErrCompilationFailed, msg: msg}
+	}
+	spirv := C.GoBytes(unsafe.Pointer(result), C.int(outLen))
+	C.mental_transpile_free((*C.char)(unsafe.Pointer(result)))
+	return spirv, nil
+}
 
-	// Free the C-allocated result.
-	call1(ft.transpileFree, result)
-
+// WGSLToSPIRV compiles WGSL source to SPIR-V binary via Naga.
+// Requires Naga to be configured (auto-detected or via SetToolPath).
+func WGSLToSPIRV(source string) ([]byte, error) {
+	ensureTools()
+	csrc := C.CString(source)
+	defer C.free(unsafe.Pointer(csrc))
+	var outLen C.size_t
+	var errBuf [1024]C.char
+	result := C.mental_wgsl_to_spirv(csrc, C.size_t(len(source)), &outLen, &errBuf[0], 1024)
+	if result == nil {
+		msg := C.GoString(&errBuf[0])
+		if msg == "" {
+			msg = "compilation failed"
+		}
+		return nil, &libError{code: ErrCompilationFailed, msg: msg}
+	}
+	spirv := C.GoBytes(unsafe.Pointer(result), C.int(outLen))
+	C.mental_transpile_free((*C.char)(unsafe.Pointer(result)))
 	return spirv, nil
 }
 
 // SPIRVToGLSL transpiles SPIR-V binary to GLSL source.
 func SPIRVToGLSL(spirv []byte) (string, error) {
-	return transpileFromSPIRV(ft.spirvToGlsl, spirv)
+	return transpileFromSPIRV(spirv, func(src *C.uchar, slen C.size_t, outLen *C.size_t, errBuf *C.char, errLen C.size_t) *C.char {
+		return C.mental_spirv_to_glsl(src, slen, outLen, errBuf, errLen)
+	})
 }
 
 // SPIRVToHLSL transpiles SPIR-V binary to HLSL source.
 func SPIRVToHLSL(spirv []byte) (string, error) {
-	return transpileFromSPIRV(ft.spirvToHlsl, spirv)
+	return transpileFromSPIRV(spirv, func(src *C.uchar, slen C.size_t, outLen *C.size_t, errBuf *C.char, errLen C.size_t) *C.char {
+		return C.mental_spirv_to_hlsl(src, slen, outLen, errBuf, errLen)
+	})
 }
 
 // SPIRVToMSL transpiles SPIR-V binary to Metal Shading Language source.
 func SPIRVToMSL(spirv []byte) (string, error) {
-	return transpileFromSPIRV(ft.spirvToMsl, spirv)
+	return transpileFromSPIRV(spirv, func(src *C.uchar, slen C.size_t, outLen *C.size_t, errBuf *C.char, errLen C.size_t) *C.char {
+		return C.mental_spirv_to_msl(src, slen, outLen, errBuf, errLen)
+	})
 }
 
 // SPIRVToWGSL transpiles SPIR-V binary to WGSL source via Naga.
 // Requires Naga to be configured.
 func SPIRVToWGSL(spirv []byte) (string, error) {
-	return transpileFromSPIRV(ft.spirvToWgsl, spirv)
+	return transpileFromSPIRV(spirv, func(src *C.uchar, slen C.size_t, outLen *C.size_t, errBuf *C.char, errLen C.size_t) *C.char {
+		return C.mental_spirv_to_wgsl(src, slen, outLen, errBuf, errLen)
+	})
 }
 
 // transpileFromSPIRV is the shared implementation for SPIRVTo* functions.
-// C signature: char* fn(const unsigned char* spirv, size_t spirv_len,
-//
-//	size_t* out_len, char* error, size_t error_len)
-func transpileFromSPIRV(fn uintptr, spirv []byte) (string, error) {
+func transpileFromSPIRV(spirv []byte, fn func(*C.uchar, C.size_t, *C.size_t, *C.char, C.size_t) *C.char) (string, error) {
 	if len(spirv) == 0 {
 		return "", &libError{code: ErrCompilationFailed, msg: "empty SPIR-V input"}
 	}
 
-	var outLen uintptr
-	var errBuf [1024]byte
+	var outLen C.size_t
+	var errBuf [1024]C.char
 
-	result := call5(fn,
-		uintptr(unsafe.Pointer(&spirv[0])),
-		uintptr(len(spirv)),
-		uintptr(unsafe.Pointer(&outLen)),
-		uintptr(unsafe.Pointer(&errBuf[0])),
-		uintptr(len(errBuf)))
+	result := fn(
+		(*C.uchar)(unsafe.Pointer(&spirv[0])),
+		C.size_t(len(spirv)),
+		&outLen,
+		&errBuf[0],
+		1024,
+	)
 
-	if result == 0 {
-		msg := goStringFromPtr(uintptr(unsafe.Pointer(&errBuf[0])))
+	if result == nil {
+		msg := C.GoString(&errBuf[0])
 		if msg == "" {
 			msg = "transpilation failed"
 		}
 		return "", &libError{code: ErrCompilationFailed, msg: msg}
 	}
 
-	output := string(unsafe.Slice((*byte)(unsafe.Pointer(result)), outLen))
-
-	// Free the C-allocated result.
-	call1(ft.transpileFree, result)
+	output := C.GoStringN(result, C.int(outLen))
+	C.mental_transpile_free(result)
 
 	return output, nil
 }
@@ -160,9 +185,10 @@ func SetToolPath(tool int, path string) {
 // GetToolPath returns the configured path for an external tool.
 // Returns empty string if not configured.
 func GetToolPath(tool int) string {
-	p := call1(ft.getToolPath, uintptr(tool))
-	if p == 0 {
+	ensureTools()
+	p := C.mental_get_tool_path(C.mental_tool(tool))
+	if p == nil {
 		return ""
 	}
-	return goStringFromPtr(p)
+	return C.GoString(p)
 }

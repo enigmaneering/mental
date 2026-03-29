@@ -1,25 +1,35 @@
 package mental
 
+/*
+#include "mental.h"
+
+// Forward declaration — defined in cgo.go via //export.
+extern void mentalGoAtexitCallback(void);
+*/
+import "C"
 import (
 	"sync"
 	"unsafe"
 )
 
 // atexitSignalFd is the write end of the signal pipe (Unix fd / Windows HANDLE).
-// The atexit trampoline writes here to wake the cleanup goroutine.
+// The atexit callback writes here to wake the cleanup goroutine.
 var atexitSignalFd uintptr
 
 // atexitDoneFd is the read end of the done pipe.
-// The atexit trampoline blocks reading here until cleanup completes.
+// The atexit callback blocks reading here until cleanup completes.
 var atexitDoneFd uintptr
 
-// atexitBuf is a scratch byte used by the atexit trampoline for pipe I/O.
-var atexitBuf [1]byte
-
 var (
-	deferredMu  sync.Mutex
-	deferredFns []func(*sync.WaitGroup)
+	deferredMu    sync.Mutex
+	deferredFns   []func(*sync.WaitGroup)
+	lifecycleOnce sync.Once
 )
+
+// ensureLifecycle triggers lazy lifecycle setup on first call.
+func ensureLifecycle() {
+	lifecycleOnce.Do(setupLifecycle)
+}
 
 // Defer registers a function to be called during graceful process exit.
 // Functions are called in LIFO order (last registered, first called).
@@ -27,6 +37,7 @@ var (
 // coordinate parallel cleanup work. After all functions return, the
 // system waits on the WaitGroup before proceeding with final cleanup.
 func Defer(fn func(*sync.WaitGroup)) {
+	ensureLifecycle()
 	deferredMu.Lock()
 	deferredFns = append(deferredFns, fn)
 	deferredMu.Unlock()
@@ -47,12 +58,11 @@ func runDeferred() {
 }
 
 // setupLifecycle creates the atexit pipe pair, starts the cleanup goroutine,
-// and registers the assembly trampoline with mental_atexit in the C library.
+// and registers the Go callback with mental_atexit in the C library.
 func setupLifecycle() {
 	setupAtexitPipes() // platform-specific: creates pipes, starts goroutine
 
-	// Get the raw code address of the assembly trampoline.
-	fn := atexitTrampoline
-	addr := **(**uintptr)(unsafe.Pointer(&fn))
-	call1(ft.mentalAtexit, addr)
+	// Register the Go atexit callback with the C library.
+	// (*[0]byte) is Go's representation of a C function pointer.
+	C.mental_atexit((*[0]byte)(unsafe.Pointer(C.mentalGoAtexitCallback)))
 }

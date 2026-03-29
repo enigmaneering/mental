@@ -65,6 +65,18 @@ struct mental_reference_t {
 #endif
 };
 
+/* Spark link structure — a pipe-based bidirectional channel.
+ * Unix: single socketpair fd (bidirectional).
+ * Windows: separate read/write pipe handles. */
+struct mental_link_t {
+#ifdef _WIN32
+    HANDLE pipe_read;
+    HANDLE pipe_write;
+#else
+    int    pipe_fd;                      /* socketpair fd (bidirectional) */
+#endif
+};
+
 /* Kernel structure (compiled shader) */
 struct mental_kernel_t {
     mental_device device;

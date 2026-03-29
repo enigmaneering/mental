@@ -7,12 +7,6 @@ import (
 	"syscall"
 )
 
-// Windows-specific globals for the atexit trampoline.
-// The trampoline calls WriteFile/ReadFile through these resolved addresses.
-var writeFileAddr uintptr
-var readFileAddr uintptr
-var atexitWritten uint32
-
 func setupAtexitPipes() {
 	var sigR, sigW syscall.Handle
 	if err := syscall.CreatePipe(&sigR, &sigW, nil, 0); err != nil {
@@ -25,15 +19,8 @@ func setupAtexitPipes() {
 		return
 	}
 
-	atexitSignalFd = uintptr(sigW) // trampoline writes via WriteFile
-	atexitDoneFd = uintptr(doneR)  // trampoline reads via ReadFile
-
-	// Resolve kernel32 functions for the assembly trampoline.
-	k32, err := syscall.LoadLibrary("kernel32.dll")
-	if err == nil {
-		writeFileAddr, _ = syscall.GetProcAddress(k32, "WriteFile")
-		readFileAddr, _ = syscall.GetProcAddress(k32, "ReadFile")
-	}
+	atexitSignalFd = uintptr(sigW) // callback writes here
+	atexitDoneFd = uintptr(doneR)  // callback reads here
 
 	go func() {
 		runtime.LockOSThread()
