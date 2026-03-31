@@ -26,7 +26,8 @@ func main() {
 		fmt.Println("Input arguments: " + os.Args[1])
 	}
 
-	fmt.Println(mental.GetState())
+	state := mental.GetState()
+	fmt.Println(state)
 
 	// If we were sparked, run as the child.
 	if link := mental.Sparked[string](); link != nil {

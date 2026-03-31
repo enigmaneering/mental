@@ -41,7 +41,7 @@ static _Thread_local char g_last_error_message[512] = {0};
  * The runtime init loop (mental_initialize) tries them in order and picks
  * the first one that successfully initialises and reports devices. */
 static mental_backend** get_backend_priority(int* count) {
-    static mental_backend* backends[8];
+    static mental_backend* backends[10];
     *count = 0;
 
 #if defined(__APPLE__)
@@ -62,6 +62,11 @@ static mental_backend** get_backend_priority(int* count) {
 #ifdef MENTAL_HAS_VULKAN
     if (vulkan_backend) backends[(*count)++] = vulkan_backend;
 #endif
+#endif
+
+    /* WebGPU (cross-platform, runtime-loaded via wgpu-native) */
+#ifdef MENTAL_HAS_WEBGPU
+    if (webgpu_backend) backends[(*count)++] = webgpu_backend;
 #endif
 
     /* Universal fallbacks: OpenCL -> OpenGL 4.3+ -> PoCL (CPU-only last resort) */

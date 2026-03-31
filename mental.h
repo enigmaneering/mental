@@ -34,7 +34,8 @@ typedef enum {
     MENTAL_API_VULKAN,
     MENTAL_API_OPENCL,
     MENTAL_API_OPENGL,
-    MENTAL_API_POCL
+    MENTAL_API_POCL,
+    MENTAL_API_WEBGPU
 } mental_api_type;
 
 /* Error codes */
