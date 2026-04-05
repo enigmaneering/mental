@@ -391,6 +391,61 @@ static void opencl_kernel_destroy(void* kernel) {
     free(cl_kernel);
 }
 
+/* ── Pipe ────────────────────────────────────���─────────────────── */
+
+typedef struct {
+    cl_command_queue queue;
+} OpenCLPipe;
+
+static void* opencl_pipe_create(void* dev) {
+    OpenCLDevice* cl_dev = (OpenCLDevice*)dev;
+
+    OpenCLPipe* pipe = malloc(sizeof(OpenCLPipe));
+    if (!pipe) return NULL;
+    pipe->queue = cl_dev->queue;
+
+    return pipe;
+}
+
+static int opencl_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
+                            int input_count, void* output, int work_size) {
+    OpenCLPipe* pipe = (OpenCLPipe*)pipe_ptr;
+    OpenCLKernel* cl_kernel = (OpenCLKernel*)kernel;
+
+    /* Set kernel arguments */
+    for (int i = 0; i < input_count; i++) {
+        if (inputs[i]) {
+            OpenCLBuffer* input_buf = (OpenCLBuffer*)inputs[i];
+            clSetKernelArg(cl_kernel->kernel, i, sizeof(cl_mem), &input_buf->buffer);
+        }
+    }
+
+    OpenCLBuffer* output_buf = (OpenCLBuffer*)output;
+    clSetKernelArg(cl_kernel->kernel, input_count, sizeof(cl_mem), &output_buf->buffer);
+
+    /* Enqueue without waiting */
+    size_t global_work_size = work_size;
+    clEnqueueNDRangeKernel(pipe->queue,
+                           cl_kernel->kernel,
+                           1,
+                           NULL,
+                           &global_work_size,
+                           NULL,
+                           0, NULL, NULL);
+
+    return 0;
+}
+
+static int opencl_pipe_execute(void* pipe_ptr) {
+    OpenCLPipe* pipe = (OpenCLPipe*)pipe_ptr;
+    clFinish(pipe->queue);
+    return 0;
+}
+
+static void opencl_pipe_destroy(void* pipe_ptr) {
+    if (pipe_ptr) free(pipe_ptr);
+}
+
 /* Backend implementation */
 static mental_backend g_opencl_backend = {
     .name = "OpenCL",
@@ -411,6 +466,10 @@ static mental_backend g_opencl_backend = {
     .kernel_workgroup_size = opencl_kernel_workgroup_size,
     .kernel_dispatch = opencl_kernel_dispatch,
     .kernel_destroy = opencl_kernel_destroy,
+    .pipe_create = opencl_pipe_create,
+    .pipe_add = opencl_pipe_add,
+    .pipe_execute = opencl_pipe_execute,
+    .pipe_destroy = opencl_pipe_destroy,
     .viewport_attach = NULL,
     .viewport_present = NULL,
     .viewport_detach = NULL

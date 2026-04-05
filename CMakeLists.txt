@@ -468,6 +468,9 @@ if(BUILD_EXAMPLES)
 
     add_executable(04-example-state examples/04-state.c)
     target_link_libraries(04-example-state mental-static)
+
+    add_executable(05-example-pipe examples/05-pipe.c)
+    target_link_libraries(05-example-pipe mental-static)
 endif()
 
 # Tests (optional - enable with BUILD_TESTING)

@@ -319,37 +319,39 @@ func (r *Reference[TData, TDisclosure]) GetDevice() Device {
 }
 
 // Write copies data into the reference.
-// If pinned: writes to both GPU buffer and shared memory.
-// If not pinned: writes to shared memory only.
-// Size is clamped to the reference's capacity.
-func (r *Reference[TData, TDisclosure]) Write(data []byte) {
+// If pinned: writes to both local memory and GPU buffer.
+// If not pinned: writes to local memory only.
+// Returns the number of bytes actually written (clamped to capacity).
+func (r *Reference[TData, TDisclosure]) Write(data []byte) int {
 	if r == nil || r.ptr == 0 || len(data) == 0 {
-		return
+		return 0
 	}
 	runtime.LockOSThread()
-	C.mental_reference_write(
+	n := C.mental_reference_write(
 		C.mental_reference(unsafe.Pointer(r.ptr)),
 		unsafe.Pointer(&data[0]),
 		C.size_t(len(data)),
 	)
 	runtime.UnlockOSThread()
+	return int(n)
 }
 
 // Read copies data from the reference into a host buffer.
 // If pinned: reads from GPU buffer.
-// If not pinned: reads from shared memory.
-// Size is clamped to the reference's capacity.
-func (r *Reference[TData, TDisclosure]) Read(buf []byte) {
+// If not pinned: reads from local memory.
+// Returns the number of bytes actually read (clamped to capacity).
+func (r *Reference[TData, TDisclosure]) Read(buf []byte) int {
 	if r == nil || r.ptr == 0 || len(buf) == 0 {
-		return
+		return 0
 	}
 	runtime.LockOSThread()
-	C.mental_reference_read(
+	n := C.mental_reference_read(
 		C.mental_reference(unsafe.Pointer(r.ptr)),
 		unsafe.Pointer(&buf[0]),
 		C.size_t(len(buf)),
 	)
 	runtime.UnlockOSThread()
+	return int(n)
 }
 
 // ── Clone ─────────────────────────────────────────────────────────
@@ -427,6 +429,26 @@ func (dh *DisclosureHandle[TDisclosure]) SetCredential(cred TDisclosure) {
 			unsafe.Pointer(&b[0]), C.size_t(len(b)),
 		)
 	}
+}
+
+// RefreshCredential evaluates fn and sets the result as the current
+// credential.  Call this periodically to rotate credentials without
+// exposing the raw value in your code.
+//
+// Pass nil to clear the credential entirely.
+func (dh *DisclosureHandle[TDisclosure]) RefreshCredential(fn func() TDisclosure) {
+	if dh == nil || dh.ptr == 0 {
+		return
+	}
+	if fn == nil {
+		C.mental_disclosure_set_credential_provider(
+			C.mental_disclosure(unsafe.Pointer(dh.ptr)),
+			nil, nil,
+		)
+		return
+	}
+	cred := fn()
+	dh.SetCredential(cred)
 }
 
 // ClearCredential removes the credential.

@@ -781,6 +781,132 @@ static void webgpu_kernel_destroy(void* kernel) {
     free(k);
 }
 
+/* ── Pipe ──────────────────────────────────────────────────────── */
+
+typedef struct {
+    WebGPUDevice       *dev;
+    WGPUCommandEncoder  encoder;
+    int                 dispatch_count;
+} WebGPUPipe;
+
+static void* webgpu_pipe_create(void* device) {
+    WebGPUDevice* dev = (WebGPUDevice*)device;
+
+    WebGPUPipe* pipe = malloc(sizeof(WebGPUPipe));
+    if (!pipe) return NULL;
+    pipe->dev = dev;
+    pipe->dispatch_count = 0;
+
+    /* Create command encoder */
+    pipe->encoder = p_wgpuDeviceCreateCommandEncoder(dev->device, NULL);
+    if (!pipe->encoder) {
+        free(pipe);
+        return NULL;
+    }
+
+    return pipe;
+}
+
+static int webgpu_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
+                            int input_count, void* output, int work_size) {
+    WebGPUPipe* pipe = (WebGPUPipe*)pipe_ptr;
+    WebGPUKernel* k = (WebGPUKernel*)kernel;
+    WebGPUDevice* dev = pipe->dev;
+
+    /* Each dispatch gets its own compute pass to ensure storage buffer
+     * writes from one dispatch are visible to the next.  WebGPU does
+     * not guarantee visibility within a single pass. */
+    WGPUComputePassEncoder pass = p_wgpuCommandEncoderBeginComputePass(pipe->encoder, NULL);
+    if (!pass) return -1;
+
+    /* Build bind group entries */
+    int total_bindings = input_count + 1;
+    WGPUBindGroupEntry* entries = calloc(total_bindings, sizeof(WGPUBindGroupEntry));
+    if (!entries) {
+        p_wgpuComputePassEncoderEnd(pass);
+        p_wgpuComputePassEncoderRelease(pass);
+        return -1;
+    }
+
+    for (int i = 0; i < input_count; i++) {
+        WebGPUBuffer* in_buf = (WebGPUBuffer*)inputs[i];
+        entries[i] = (WGPUBindGroupEntry){
+            .nextInChain = NULL,
+            .binding = (uint32_t)i,
+            .buffer = in_buf->buffer,
+            .offset = 0,
+            .size = (uint64_t)in_buf->size,
+            .sampler = NULL,
+            .textureView = NULL,
+        };
+    }
+
+    WebGPUBuffer* out_buf = (WebGPUBuffer*)output;
+    entries[input_count] = (WGPUBindGroupEntry){
+        .nextInChain = NULL,
+        .binding = (uint32_t)input_count,
+        .buffer = out_buf->buffer,
+        .offset = 0,
+        .size = (uint64_t)out_buf->size,
+        .sampler = NULL,
+        .textureView = NULL,
+    };
+
+    WGPUBindGroupDescriptor bg_desc = {
+        .nextInChain = NULL,
+        .label = { .data = "pipe_bg", .length = 7 },
+        .layout = k->bind_layout,
+        .entryCount = (size_t)total_bindings,
+        .entries = entries,
+    };
+
+    WGPUBindGroup bind_group = p_wgpuDeviceCreateBindGroup(dev->device, &bg_desc);
+    free(entries);
+    if (!bind_group) {
+        p_wgpuComputePassEncoderEnd(pass);
+        p_wgpuComputePassEncoderRelease(pass);
+        return -1;
+    }
+
+    /* Set pipeline, bind group, and dispatch */
+    p_wgpuComputePassEncoderSetPipeline(pass, k->pipeline);
+    p_wgpuComputePassEncoderSetBindGroup(pass, 0, bind_group, 0, NULL);
+
+    uint32_t wg_size = (uint32_t)webgpu_kernel_workgroup_size(kernel);
+    uint32_t workgroup_count = ((uint32_t)work_size + wg_size - 1) / wg_size;
+    p_wgpuComputePassEncoderDispatchWorkgroups(pass, workgroup_count, 1, 1);
+
+    /* End this pass — the next add will create a fresh one, giving
+     * the WebGPU runtime an implicit barrier between passes. */
+    p_wgpuComputePassEncoderEnd(pass);
+    p_wgpuComputePassEncoderRelease(pass);
+    p_wgpuBindGroupRelease(bind_group);
+
+    pipe->dispatch_count++;
+    return 0;
+}
+
+static int webgpu_pipe_execute(void* pipe_ptr) {
+    WebGPUPipe* pipe = (WebGPUPipe*)pipe_ptr;
+
+    /* Finish encoding and submit */
+    WGPUCommandBuffer cmd = p_wgpuCommandEncoderFinish(pipe->encoder, NULL);
+    p_wgpuQueueSubmit(pipe->dev->queue, 1, &cmd);
+    p_wgpuCommandBufferRelease(cmd);
+
+    /* Poll until all GPU work completes */
+    p_wgpuDevicePoll(pipe->dev->device, 1, NULL);
+
+    return 0;
+}
+
+static void webgpu_pipe_destroy(void* pipe_ptr) {
+    if (!pipe_ptr) return;
+    WebGPUPipe* pipe = (WebGPUPipe*)pipe_ptr;
+    if (pipe->encoder) p_wgpuCommandEncoderRelease(pipe->encoder);
+    free(pipe);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Backend descriptor                                                */
 /* ------------------------------------------------------------------ */
@@ -804,6 +930,10 @@ static mental_backend g_webgpu_backend = {
     .kernel_workgroup_size = webgpu_kernel_workgroup_size,
     .kernel_dispatch = webgpu_kernel_dispatch,
     .kernel_destroy = webgpu_kernel_destroy,
+    .pipe_create = webgpu_pipe_create,
+    .pipe_add = webgpu_pipe_add,
+    .pipe_execute = webgpu_pipe_execute,
+    .pipe_destroy = webgpu_pipe_destroy,
     .viewport_attach = NULL,
     .viewport_present = NULL,
     .viewport_detach = NULL,

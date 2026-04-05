@@ -171,6 +171,36 @@ int mental_dispatch(mental_kernel kernel, mental_reference* inputs, int input_co
 void mental_kernel_finalize(mental_kernel kernel);
 
 /*
+ * Pipe (Chained Kernel Dispatch)
+ *
+ * A pipe records multiple kernel dispatches into a single GPU command
+ * buffer and submits them together.  Data stays on the GPU between
+ * stages — no CPU round-trips.
+ *
+ * A pipe is one-shot: after mental_pipe_execute(), no more dispatches
+ * can be added.  Create a new pipe for each batch.
+ *
+ * All kernels added to a pipe must be compiled for the same device
+ * that the pipe was created on.
+ *
+ * Usage:
+ *   mental_pipe pipe = mental_pipe_create(device);
+ *   mental_pipe_add(pipe, kernel_a, inputs, 2, intermediate, N);
+ *   mental_pipe_add(pipe, kernel_b, &intermediate, 1, output, N);
+ *   mental_pipe_execute(pipe);   // one GPU submission for both
+ *   mental_pipe_finalize(pipe);
+ */
+
+typedef struct mental_pipe_t* mental_pipe;
+
+mental_pipe mental_pipe_create(mental_device device);
+int mental_pipe_add(mental_pipe pipe, mental_kernel kernel,
+                     mental_reference *inputs, int input_count,
+                     mental_reference output, int work_size);
+int mental_pipe_execute(mental_pipe pipe);
+void mental_pipe_finalize(mental_pipe pipe);
+
+/*
  * Viewport (Surface Presentation)
  */
 

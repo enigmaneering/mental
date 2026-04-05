@@ -793,6 +793,153 @@ static void vulkan_viewport_detach(void* viewport_ptr) {
     delete viewport;
 }
 
+/* ── Pipe ──────────────────────────────────────────────────────── */
+
+typedef struct {
+    VulkanDevice* device_ctx;
+    VkCommandBuffer command_buffer;
+} VulkanPipe;
+
+static void* vulkan_pipe_create(void* dev) {
+    VulkanDevice* vk_dev = (VulkanDevice*)dev;
+
+    VulkanPipe* pipe = new VulkanPipe();
+    if (!pipe) return NULL;
+    pipe->device_ctx = vk_dev;
+
+    /* Allocate command buffer */
+    VkCommandBufferAllocateInfo alloc_info = {};
+    alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    alloc_info.commandPool = vk_dev->command_pool;
+    alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    alloc_info.commandBufferCount = 1;
+
+    if (vkAllocateCommandBuffers(vk_dev->device, &alloc_info, &pipe->command_buffer) != VK_SUCCESS) {
+        delete pipe;
+        return NULL;
+    }
+
+    /* Begin recording */
+    VkCommandBufferBeginInfo begin_info = {};
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+    if (vkBeginCommandBuffer(pipe->command_buffer, &begin_info) != VK_SUCCESS) {
+        vkFreeCommandBuffers(vk_dev->device, vk_dev->command_pool, 1, &pipe->command_buffer);
+        delete pipe;
+        return NULL;
+    }
+
+    return pipe;
+}
+
+static int vulkan_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
+                            int input_count, void* output, int work_size) {
+    VulkanPipe* pipe = (VulkanPipe*)pipe_ptr;
+    VulkanKernel* vk_kernel = (VulkanKernel*)kernel;
+    VulkanBuffer* output_buf = (VulkanBuffer*)output;
+    VulkanDevice* vk_dev = pipe->device_ctx;
+
+    /* Allocate descriptor set */
+    VkDescriptorSet descriptor_set;
+    VkDescriptorSetAllocateInfo alloc_info = {};
+    alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    alloc_info.descriptorPool = vk_kernel->descriptor_pool;
+    alloc_info.descriptorSetCount = 1;
+    alloc_info.pSetLayouts = &vk_kernel->descriptor_set_layout;
+
+    if (vkAllocateDescriptorSets(vk_dev->device, &alloc_info, &descriptor_set) != VK_SUCCESS) {
+        return -1;
+    }
+
+    /* Build buffer info and descriptor writes */
+    int total_buffers = input_count + 1;
+    std::vector<VkDescriptorBufferInfo> buffer_infos(total_buffers);
+    std::vector<VkWriteDescriptorSet> descriptor_writes(total_buffers);
+
+    for (int i = 0; i < input_count; i++) {
+        VulkanBuffer* input_buf = (VulkanBuffer*)inputs[i];
+        buffer_infos[i] = {};
+        buffer_infos[i].buffer = input_buf->buffer;
+        buffer_infos[i].offset = 0;
+        buffer_infos[i].range = input_buf->size;
+
+        descriptor_writes[i] = {};
+        descriptor_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptor_writes[i].dstSet = descriptor_set;
+        descriptor_writes[i].dstBinding = i;
+        descriptor_writes[i].dstArrayElement = 0;
+        descriptor_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        descriptor_writes[i].descriptorCount = 1;
+        descriptor_writes[i].pBufferInfo = &buffer_infos[i];
+    }
+
+    buffer_infos[input_count] = {};
+    buffer_infos[input_count].buffer = output_buf->buffer;
+    buffer_infos[input_count].offset = 0;
+    buffer_infos[input_count].range = output_buf->size;
+
+    descriptor_writes[input_count] = {};
+    descriptor_writes[input_count].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptor_writes[input_count].dstSet = descriptor_set;
+    descriptor_writes[input_count].dstBinding = input_count;
+    descriptor_writes[input_count].dstArrayElement = 0;
+    descriptor_writes[input_count].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptor_writes[input_count].descriptorCount = 1;
+    descriptor_writes[input_count].pBufferInfo = &buffer_infos[input_count];
+
+    vkUpdateDescriptorSets(vk_dev->device, (uint32_t)descriptor_writes.size(),
+                           descriptor_writes.data(), 0, nullptr);
+
+    /* Insert pipeline barrier between dispatches */
+    VkMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(pipe->command_buffer,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 1, &barrier, 0, nullptr, 0, nullptr);
+
+    /* Bind pipeline and descriptor set, then dispatch */
+    vkCmdBindPipeline(pipe->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_kernel->pipeline);
+    vkCmdBindDescriptorSets(pipe->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            vk_kernel->pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
+
+    uint32_t local_size = (uint32_t)vulkan_kernel_workgroup_size(kernel);
+    uint32_t num_groups = ((uint32_t)work_size + local_size - 1) / local_size;
+    vkCmdDispatch(pipe->command_buffer, num_groups, 1, 1);
+
+    return 0;
+}
+
+static int vulkan_pipe_execute(void* pipe_ptr) {
+    VulkanPipe* pipe = (VulkanPipe*)pipe_ptr;
+    VulkanDevice* vk_dev = pipe->device_ctx;
+
+    vkEndCommandBuffer(pipe->command_buffer);
+
+    VkSubmitInfo submit_info = {};
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &pipe->command_buffer;
+
+    if (vkQueueSubmit(vk_dev->queue, 1, &submit_info, VK_NULL_HANDLE) != VK_SUCCESS) {
+        return -1;
+    }
+
+    vkQueueWaitIdle(vk_dev->queue);
+    return 0;
+}
+
+static void vulkan_pipe_destroy(void* pipe_ptr) {
+    if (!pipe_ptr) return;
+    VulkanPipe* pipe = (VulkanPipe*)pipe_ptr;
+    vkFreeCommandBuffers(pipe->device_ctx->device, pipe->device_ctx->command_pool,
+                         1, &pipe->command_buffer);
+    delete pipe;
+}
+
 /* Backend implementation */
 static mental_backend g_vulkan_backend = {
     .name = "Vulkan",
@@ -813,6 +960,10 @@ static mental_backend g_vulkan_backend = {
     .kernel_workgroup_size = vulkan_kernel_workgroup_size,
     .kernel_dispatch = vulkan_kernel_dispatch,
     .kernel_destroy = vulkan_kernel_destroy,
+    .pipe_create = vulkan_pipe_create,
+    .pipe_add = vulkan_pipe_add,
+    .pipe_execute = vulkan_pipe_execute,
+    .pipe_destroy = vulkan_pipe_destroy,
     .viewport_attach = vulkan_viewport_attach,
     .viewport_present = vulkan_viewport_present,
     .viewport_detach = vulkan_viewport_detach

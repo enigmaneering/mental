@@ -723,6 +723,147 @@ static void d3d12_kernel_destroy(void* kernel) {
     delete (D3D12Kernel*)kernel;
 }
 
+/* ── Pipe ──────────────────────────────────────────────────────── */
+
+typedef struct {
+    D3D12Device* device;
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> command_list;
+} D3D12Pipe;
+
+static void* d3d12_pipe_create(void* dev) {
+    D3D12Device* d3d_dev = (D3D12Device*)dev;
+
+    D3D12Pipe* pipe = new D3D12Pipe();
+    pipe->device = d3d_dev;
+
+    /* Create a dedicated command allocator for the pipe */
+    HRESULT hr = d3d_dev->device->CreateCommandAllocator(
+        D3D12_COMMAND_LIST_TYPE_COMPUTE,
+        IID_PPV_ARGS(&pipe->allocator));
+    if (FAILED(hr)) {
+        delete pipe;
+        return NULL;
+    }
+
+    /* Create a dedicated command list */
+    hr = d3d_dev->device->CreateCommandList(
+        0, D3D12_COMMAND_LIST_TYPE_COMPUTE,
+        pipe->allocator.Get(), nullptr,
+        IID_PPV_ARGS(&pipe->command_list));
+    if (FAILED(hr)) {
+        delete pipe;
+        return NULL;
+    }
+
+    return pipe;
+}
+
+static int d3d12_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
+                           int input_count, void* output, int work_size) {
+    D3D12Pipe* pipe = (D3D12Pipe*)pipe_ptr;
+    D3D12Kernel* d3d_kernel = (D3D12Kernel*)kernel;
+    D3D12Buffer* output_buf = (D3D12Buffer*)output;
+
+    /* Set pipeline state and root signature */
+    pipe->command_list->SetPipelineState(d3d_kernel->pipeline.Get());
+    pipe->command_list->SetComputeRootSignature(d3d_kernel->root_signature.Get());
+
+    /* Bind descriptor heap */
+    ID3D12DescriptorHeap* heaps[] = { d3d_kernel->descriptor_heap.Get() };
+    pipe->command_list->SetDescriptorHeaps(1, heaps);
+
+    /* Create UAV and SRV views for all buffers */
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle = d3d_kernel->descriptor_heap->GetCPUDescriptorHandleForHeapStart();
+    UINT descriptor_size = pipe->device->device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    for (int i = 0; i < input_count; i++) {
+        D3D12Buffer* input_buf = (D3D12Buffer*)inputs[i];
+        UINT num_elements = (UINT)(input_buf->size / 4);
+
+        /* UAV at slot i */
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+        uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+        uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        uav_desc.Buffer.NumElements = num_elements;
+        uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE uav_handle = cpu_handle;
+        uav_handle.ptr += i * descriptor_size;
+        pipe->device->device->CreateUnorderedAccessView(input_buf->resource.Get(), nullptr, &uav_desc, uav_handle);
+
+        /* SRV at slot 16+i */
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+        srv_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+        srv_desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv_desc.Buffer.NumElements = num_elements;
+        srv_desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE srv_handle = cpu_handle;
+        srv_handle.ptr += (16 + i) * descriptor_size;
+        pipe->device->device->CreateShaderResourceView(input_buf->resource.Get(), &srv_desc, srv_handle);
+    }
+
+    /* UAV for output buffer */
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+    uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+    uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+    uav_desc.Buffer.NumElements = (UINT)(output_buf->size / 4);
+    uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE output_handle = cpu_handle;
+    output_handle.ptr += input_count * descriptor_size;
+    pipe->device->device->CreateUnorderedAccessView(output_buf->resource.Get(), nullptr, &uav_desc, output_handle);
+
+    /* Set descriptor table */
+    D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle = d3d_kernel->descriptor_heap->GetGPUDescriptorHandleForHeapStart();
+    pipe->command_list->SetComputeRootDescriptorTable(0, gpu_handle);
+
+    /* UAV barrier before dispatch — ensures writes from a previous
+     * dispatch in this pipe are visible.  Required when one stage's
+     * output feeds the next stage's input via the same UAV resource. */
+    D3D12_RESOURCE_BARRIER uav_barrier = {};
+    uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    uav_barrier.UAV.pResource = NULL; /* NULL = barrier on all UAVs */
+    pipe->command_list->ResourceBarrier(1, &uav_barrier);
+
+    /* Dispatch */
+    UINT thread_group_size = (UINT)d3d12_kernel_workgroup_size(kernel);
+    UINT num_groups = (work_size + thread_group_size - 1) / thread_group_size;
+    pipe->command_list->Dispatch(num_groups, 1, 1);
+
+    return 0;
+}
+
+static int d3d12_pipe_execute(void* pipe_ptr) {
+    D3D12Pipe* pipe = (D3D12Pipe*)pipe_ptr;
+    D3D12Device* dev = pipe->device;
+
+    /* Close the command list */
+    HRESULT hr = pipe->command_list->Close();
+    if (FAILED(hr)) return -1;
+
+    /* Execute */
+    ID3D12CommandList* cmd_lists[] = { pipe->command_list.Get() };
+    dev->queue->ExecuteCommandLists(1, cmd_lists);
+
+    /* Wait for GPU */
+    dev->fence_value++;
+    dev->queue->Signal(dev->fence.Get(), dev->fence_value);
+    if (dev->fence->GetCompletedValue() < dev->fence_value) {
+        dev->fence->SetEventOnCompletion(dev->fence_value, dev->fence_event);
+        WaitForSingleObject(dev->fence_event, INFINITE);
+    }
+
+    return 0;
+}
+
+static void d3d12_pipe_destroy(void* pipe_ptr) {
+    if (!pipe_ptr) return;
+    delete (D3D12Pipe*)pipe_ptr;
+}
+
 /* Viewport operations */
 static void* d3d12_viewport_attach(void* dev, void* buffer, void* surface, char* error, size_t error_len) {
     D3D12Device* d3d_dev = (D3D12Device*)dev;
@@ -913,6 +1054,10 @@ static mental_backend g_d3d12_backend = {
     .kernel_workgroup_size = d3d12_kernel_workgroup_size,
     .kernel_dispatch = d3d12_kernel_dispatch,
     .kernel_destroy = d3d12_kernel_destroy,
+    .pipe_create = d3d12_pipe_create,
+    .pipe_add = d3d12_pipe_add,
+    .pipe_execute = d3d12_pipe_execute,
+    .pipe_destroy = d3d12_pipe_destroy,
     .viewport_attach = d3d12_viewport_attach,
     .viewport_present = d3d12_viewport_present,
     .viewport_detach = d3d12_viewport_detach

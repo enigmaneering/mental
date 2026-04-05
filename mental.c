@@ -505,6 +505,188 @@ void mental_kernel_finalize(mental_kernel kernel) {
 }
 
 /*
+ * Pipe (Chained Kernel Dispatch)
+ */
+
+mental_pipe mental_pipe_create(mental_device device) {
+    if (!device) {
+        mental_set_error(MENTAL_ERROR_INVALID_DEVICE, "NULL device for pipe");
+        return NULL;
+    }
+
+    if (!device->backend->pipe_create) {
+        mental_set_error(MENTAL_ERROR_BACKEND_FAILED, "Backend does not support pipes");
+        return NULL;
+    }
+
+    mental_pipe pipe = calloc(1, sizeof(struct mental_pipe_t));
+    if (!pipe) {
+        mental_set_error(MENTAL_ERROR_ALLOCATION_FAILED, "Failed to allocate pipe");
+        return NULL;
+    }
+
+    pipe->device = device;
+    pipe->backend_pipe = device->backend->pipe_create(device->backend_device);
+    if (!pipe->backend_pipe) {
+        free(pipe);
+        mental_set_error(MENTAL_ERROR_BACKEND_FAILED, "Backend pipe creation failed");
+        return NULL;
+    }
+
+    pipe->valid = 1;
+    pipe->dispatch_count = 0;
+    pipe->executed = 0;
+    pthread_mutex_init(&pipe->lock, NULL);
+
+    return pipe;
+}
+
+int mental_pipe_add(mental_pipe pipe, mental_kernel kernel,
+                     mental_reference *inputs, int input_count,
+                     mental_reference output, int work_size) {
+    if (!pipe || !pipe->valid || !pipe->backend_pipe) {
+        mental_set_error(MENTAL_ERROR_BACKEND_FAILED, "Invalid pipe");
+        return -1;
+    }
+    if (pipe->executed) {
+        mental_set_error(MENTAL_ERROR_BACKEND_FAILED,
+                         "Pipe already executed — cannot add more dispatches");
+        return -1;
+    }
+    if (!kernel || !kernel->valid) {
+        mental_set_error(MENTAL_ERROR_INVALID_KERNEL, "Invalid kernel for pipe");
+        return -1;
+    }
+    if (kernel->device != pipe->device) {
+        mental_set_error(MENTAL_ERROR_INVALID_KERNEL,
+                         "Kernel device does not match pipe device");
+        return -1;
+    }
+    if (!output || !output->valid) {
+        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Invalid output reference");
+        return -1;
+    }
+    if (!output->backend_buffer) {
+        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Output not pinned");
+        return -1;
+    }
+
+    for (int i = 0; i < input_count; i++) {
+        if (inputs[i] && !inputs[i]->backend_buffer) {
+            mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Input reference is not pinned");
+            return -1;
+        }
+    }
+
+    /* Collect all unique references (inputs + output) for ordered locking.
+     * Same deadlock-prevention pattern as mental_dispatch. */
+    mental_reference lock_order[input_count + 1];
+    int lock_count = 0;
+
+    for (int i = 0; i < input_count; i++) {
+        if (inputs[i] && inputs[i]->valid) {
+            int dup = 0;
+            for (int j = 0; j < lock_count; j++) {
+                if (lock_order[j] == inputs[i]) { dup = 1; break; }
+            }
+            if (!dup) lock_order[lock_count++] = inputs[i];
+        }
+    }
+    if (output->valid) {
+        int dup = 0;
+        for (int j = 0; j < lock_count; j++) {
+            if (lock_order[j] == output) { dup = 1; break; }
+        }
+        if (!dup) lock_order[lock_count++] = output;
+    }
+
+    /* Sort by pointer address to prevent deadlock */
+    for (int i = 0; i < lock_count - 1; i++) {
+        for (int j = 0; j < lock_count - 1 - i; j++) {
+            if ((uintptr_t)lock_order[j] > (uintptr_t)lock_order[j + 1]) {
+                mental_reference tmp = lock_order[j];
+                lock_order[j] = lock_order[j + 1];
+                lock_order[j + 1] = tmp;
+            }
+        }
+    }
+
+    /* Lock kernel, then pipe, then references in sorted order */
+    pthread_mutex_lock(&kernel->lock);
+    pthread_mutex_lock(&pipe->lock);
+    for (int i = 0; i < lock_count; i++) {
+        pthread_mutex_lock(&lock_order[i]->lock);
+    }
+
+    /* Gather backend buffer handles under lock */
+    void **backend_inputs = NULL;
+    if (input_count > 0) {
+        backend_inputs = malloc(sizeof(void*) * input_count);
+        if (!backend_inputs) {
+            for (int i = lock_count - 1; i >= 0; i--)
+                pthread_mutex_unlock(&lock_order[i]->lock);
+            pthread_mutex_unlock(&pipe->lock);
+            pthread_mutex_unlock(&kernel->lock);
+            return -1;
+        }
+        for (int i = 0; i < input_count; i++) {
+            backend_inputs[i] = inputs[i] ? inputs[i]->backend_buffer : NULL;
+        }
+    }
+
+    int rc = pipe->device->backend->pipe_add(
+        pipe->backend_pipe,
+        kernel->backend_kernel,
+        backend_inputs,
+        input_count,
+        output->backend_buffer,
+        work_size
+    );
+    if (rc == 0) pipe->dispatch_count++;
+
+    /* Unlock in reverse order */
+    for (int i = lock_count - 1; i >= 0; i--) {
+        pthread_mutex_unlock(&lock_order[i]->lock);
+    }
+    pthread_mutex_unlock(&pipe->lock);
+    pthread_mutex_unlock(&kernel->lock);
+
+    if (backend_inputs) free(backend_inputs);
+    return rc;
+}
+
+int mental_pipe_execute(mental_pipe pipe) {
+    if (!pipe || !pipe->valid || !pipe->backend_pipe) {
+        mental_set_error(MENTAL_ERROR_BACKEND_FAILED, "Invalid pipe");
+        return -1;
+    }
+    if (pipe->dispatch_count == 0) {
+        return 0; /* nothing to execute */
+    }
+
+    pthread_mutex_lock(&pipe->lock);
+    int rc = pipe->device->backend->pipe_execute(pipe->backend_pipe);
+    pipe->executed = 1;
+    pthread_mutex_unlock(&pipe->lock);
+
+    return rc;
+}
+
+void mental_pipe_finalize(mental_pipe pipe) {
+    if (!pipe) return;
+
+    pthread_mutex_lock(&pipe->lock);
+    if (pipe->backend_pipe && pipe->device->backend->pipe_destroy) {
+        pipe->device->backend->pipe_destroy(pipe->backend_pipe);
+    }
+    pipe->valid = 0;
+    pthread_mutex_unlock(&pipe->lock);
+    pthread_mutex_destroy(&pipe->lock);
+
+    free(pipe);
+}
+
+/*
  * Viewport (Surface Presentation)
  */
 

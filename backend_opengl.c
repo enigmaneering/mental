@@ -624,6 +624,62 @@ static void opengl_kernel_destroy(void* kernel) {
 }
 
 
+/* ── Pipe ───��──────────────────────────────────────────────────── */
+
+typedef struct {
+    int dummy; /* OpenGL is immediate-mode; no extra state needed */
+} OpenGLPipe;
+
+static void* opengl_pipe_create(void* dev) {
+    (void)dev;
+
+    OpenGLPipe* pipe = malloc(sizeof(OpenGLPipe));
+    if (!pipe) return NULL;
+    pipe->dummy = 0;
+
+    return pipe;
+}
+
+static int opengl_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
+                            int input_count, void* output, int work_size) {
+    (void)pipe_ptr;
+    OpenGLKernel* gl_kernel = (OpenGLKernel*)kernel;
+
+    pglUseProgram(gl_kernel->program);
+
+    /* Bind input SSBOs */
+    for (int i = 0; i < input_count; i++) {
+        if (inputs[i]) {
+            OpenGLBuffer* buf = (OpenGLBuffer*)inputs[i];
+            pglBindBufferBase(GL_SHADER_STORAGE_BUFFER, (GLuint)i, buf->ssbo);
+        }
+    }
+
+    /* Bind output SSBO */
+    OpenGLBuffer* out_buf = (OpenGLBuffer*)output;
+    pglBindBufferBase(GL_SHADER_STORAGE_BUFFER, (GLuint)input_count, out_buf->ssbo);
+
+    /* Dispatch */
+    GLuint wg_size = (GLuint)opengl_kernel_workgroup_size(kernel);
+    GLuint groups = ((GLuint)work_size + wg_size - 1) / wg_size;
+    pglDispatchCompute(groups, 1, 1);
+
+    /* Barrier to ensure writes are visible to subsequent dispatches */
+    pglMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+    return 0;
+}
+
+static int opengl_pipe_execute(void* pipe_ptr) {
+    (void)pipe_ptr;
+    glFinish();
+    return 0;
+}
+
+static void opengl_pipe_destroy(void* pipe_ptr) {
+    if (pipe_ptr) free(pipe_ptr);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Backend descriptor                                                */
 /* ------------------------------------------------------------------ */
@@ -647,6 +703,10 @@ static mental_backend g_opengl_backend = {
     .kernel_workgroup_size = opengl_kernel_workgroup_size,
     .kernel_dispatch = opengl_kernel_dispatch,
     .kernel_destroy = opengl_kernel_destroy,
+    .pipe_create = opengl_pipe_create,
+    .pipe_add = opengl_pipe_add,
+    .pipe_execute = opengl_pipe_execute,
+    .pipe_destroy = opengl_pipe_destroy,
     .viewport_attach = NULL,
     .viewport_present = NULL,
     .viewport_detach = NULL

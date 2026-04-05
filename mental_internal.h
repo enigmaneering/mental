@@ -59,6 +59,16 @@ struct mental_kernel_t {
     int valid;
 };
 
+/* Pipe structure (chained kernel dispatch) */
+struct mental_pipe_t {
+    mental_device device;
+    void *backend_pipe;
+    pthread_mutex_t lock;
+    int valid;
+    int dispatch_count;
+    int executed;       /* 1 after execute — no more adds allowed */
+};
+
 /* Viewport structure */
 struct mental_viewport_t {
     mental_reference reference;
@@ -92,6 +102,14 @@ struct mental_backend_t {
     void (*kernel_dispatch)(void* kernel, void** inputs, int input_count, void* output, int work_size);
     void (*kernel_destroy)(void* kernel);
 
+    /* Pipe operations (chained dispatch) */
+    void* (*pipe_create)(void* dev);
+    int   (*pipe_add)(void* pipe, void* kernel, void** inputs,
+                       int input_count, void* output, int work_size);
+    int   (*pipe_execute)(void* pipe);
+    void  (*pipe_destroy)(void* pipe);
+
+    /* Viewport operations (optional) */
     void* (*viewport_attach)(void* dev, void* buffer, void* surface, char* error, size_t error_len);
     void (*viewport_present)(void* viewport);
     void (*viewport_detach)(void* viewport);

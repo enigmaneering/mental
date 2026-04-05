@@ -13,6 +13,7 @@ package mental
 */
 import "C"
 import (
+	"fmt"
 	"runtime"
 	"unsafe"
 )
@@ -121,10 +122,12 @@ func Compile(dev Device, source string) (Kernel, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	src := unsafe.StringData(source)
+	csrc := C.CString(source)
+	defer C.free(unsafe.Pointer(csrc))
+
 	k := C.mental_compile(
 		C.mental_device(unsafe.Pointer(dev)),
-		(*C.char)(unsafe.Pointer(src)),
+		csrc,
 		C.size_t(len(source)),
 	)
 	if k == nil {
@@ -231,3 +234,78 @@ type libError struct {
 
 func (e *libError) Error() string { return e.msg }
 func (e *libError) Code() Error   { return e.code }
+
+// Pipe is a chained kernel dispatch pipeline. Multiple dispatches are
+// recorded into a single GPU command buffer and submitted together —
+// data stays on the GPU between stages with no CPU round-trips.
+type Pipe uintptr
+
+// CreatePipe creates a new pipe on the given device. The pipe begins
+// recording dispatches immediately.
+func CreatePipe(dev Device) (Pipe, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	p := C.mental_pipe_create(C.mental_device(unsafe.Pointer(dev)))
+	if p == nil {
+		return 0, getLibError()
+	}
+	return Pipe(unsafe.Pointer(p)), nil
+}
+
+// Add records a kernel dispatch into the pipe. The output of one
+// dispatch can be the input of the next — data stays on GPU.
+//
+// Pass reference handles via [Reference.Handle]:
+//
+//	pipe.Add(kernel, []uintptr{a.Handle()}, b.Handle(), 1024)
+func (p Pipe) Add(kernel Kernel, inputs []uintptr, output uintptr, workSize int) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	var inputsPtr *C.mental_reference
+	if len(inputs) > 0 {
+		inputsPtr = (*C.mental_reference)(unsafe.Pointer(&inputs[0]))
+	}
+	rc := C.mental_pipe_add(
+		C.mental_pipe(unsafe.Pointer(p)),
+		C.mental_kernel(unsafe.Pointer(kernel)),
+		inputsPtr,
+		C.int(len(inputs)),
+		C.mental_reference(unsafe.Pointer(output)),
+		C.int(workSize),
+	)
+	if int(rc) != 0 {
+		return getLibError()
+	}
+	return nil
+}
+
+// Execute submits all recorded dispatches as one GPU submission.
+// Blocks until all dispatches complete.
+func (p Pipe) Execute() error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	rc := C.mental_pipe_execute(C.mental_pipe(unsafe.Pointer(p)))
+	if int(rc) != 0 {
+		return getLibError()
+	}
+	return nil
+}
+
+// Finalize frees the pipe. Must be called explicitly.
+func (p Pipe) Finalize() {
+	C.mental_pipe_finalize(C.mental_pipe(unsafe.Pointer(p)))
+}
+
+// Shutdown tears down the GPU backend, frees devices, runs atexit
+// callbacks, and clears the library registry.  Blocks until complete.
+// Returns an error if any cleanup step failed.
+func Shutdown() error {
+	rc := C.mental_shutdown()
+	if int(rc) != 0 {
+		return fmt.Errorf("mental: shutdown failed")
+	}
+	return nil
+}

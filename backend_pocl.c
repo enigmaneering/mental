@@ -428,6 +428,56 @@ static void pocl_kernel_destroy(void* kernel) {
     free(k);
 }
 
+/* ── Pipe ──────────────────────────────────────────────────────── */
+
+typedef struct {
+    cl_command_queue queue;
+} PoclPipe;
+
+static void* pocl_pipe_create(void* dev) {
+    PoclDevice* d = (PoclDevice*)dev;
+
+    PoclPipe* pipe = malloc(sizeof(PoclPipe));
+    if (!pipe) return NULL;
+    pipe->queue = d->queue;
+
+    return pipe;
+}
+
+static int pocl_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
+                          int input_count, void* output, int work_size) {
+    PoclPipe* pipe = (PoclPipe*)pipe_ptr;
+    PoclKernel* k = (PoclKernel*)kernel;
+
+    /* Set kernel arguments */
+    for (int i = 0; i < input_count; i++) {
+        if (inputs[i]) {
+            PoclBuffer* buf = (PoclBuffer*)inputs[i];
+            p_clSetKernelArg(k->kernel, i, sizeof(cl_mem), &buf->buffer);
+        }
+    }
+
+    PoclBuffer* out = (PoclBuffer*)output;
+    p_clSetKernelArg(k->kernel, input_count, sizeof(cl_mem), &out->buffer);
+
+    /* Enqueue without waiting */
+    size_t global_work_size = work_size;
+    p_clEnqueueNDRangeKernel(pipe->queue, k->kernel, 1, NULL,
+                              &global_work_size, NULL, 0, NULL, NULL);
+
+    return 0;
+}
+
+static int pocl_pipe_execute(void* pipe_ptr) {
+    PoclPipe* pipe = (PoclPipe*)pipe_ptr;
+    p_clFinish(pipe->queue);
+    return 0;
+}
+
+static void pocl_pipe_destroy(void* pipe_ptr) {
+    if (pipe_ptr) free(pipe_ptr);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Backend descriptor                                                */
 /* ------------------------------------------------------------------ */
@@ -451,6 +501,10 @@ static mental_backend g_pocl_backend = {
     .kernel_workgroup_size = pocl_kernel_workgroup_size,
     .kernel_dispatch = pocl_kernel_dispatch,
     .kernel_destroy = pocl_kernel_destroy,
+    .pipe_create = pocl_pipe_create,
+    .pipe_add = pocl_pipe_add,
+    .pipe_execute = pocl_pipe_execute,
+    .pipe_destroy = pocl_pipe_destroy,
     .viewport_attach = NULL,
     .viewport_present = NULL,
     .viewport_detach = NULL

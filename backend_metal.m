@@ -430,6 +430,67 @@ static void metal_viewport_detach(void* viewport_ptr) {
 }
 
 /* Backend implementation */
+/* ── Pipe ──────────────────────────────────────────────────────── */
+
+typedef struct {
+    id<MTLCommandQueue> queue;
+    id<MTLCommandBuffer> commandBuffer;
+} MetalPipe;
+
+static void* metal_pipe_create(void* dev) {
+    @autoreleasepool {
+        MetalDevice* metal_dev = (MetalDevice*)dev;
+        MetalPipe* pipe = malloc(sizeof(MetalPipe));
+        if (!pipe) return NULL;
+        pipe->queue = metal_dev->queue;
+        pipe->commandBuffer = [metal_dev->queue commandBuffer];
+        return pipe;
+    }
+}
+
+static int metal_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
+                            int input_count, void* output, int work_size) {
+    @autoreleasepool {
+        MetalPipe* pipe = (MetalPipe*)pipe_ptr;
+        MetalKernel* mk = (MetalKernel*)kernel;
+        MetalBuffer* out_buf = (MetalBuffer*)output;
+
+        id<MTLComputeCommandEncoder> encoder = [pipe->commandBuffer computeCommandEncoder];
+        [encoder setComputePipelineState:mk->pipeline];
+
+        for (int i = 0; i < input_count; i++) {
+            if (inputs[i]) {
+                MetalBuffer* in_buf = (MetalBuffer*)inputs[i];
+                [encoder setBuffer:in_buf->buffer offset:0 atIndex:i];
+            }
+        }
+        [encoder setBuffer:out_buf->buffer offset:0 atIndex:input_count];
+
+        MTLSize gridSize = MTLSizeMake(work_size, 1, 1);
+        NSUInteger threadGroupSize = mk->pipeline.maxTotalThreadsPerThreadgroup;
+        if (threadGroupSize > (NSUInteger)work_size) threadGroupSize = work_size;
+        MTLSize tgSize = MTLSizeMake(threadGroupSize, 1, 1);
+
+        [encoder dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+        [encoder endEncoding];
+
+        return 0;
+    }
+}
+
+static int metal_pipe_execute(void* pipe_ptr) {
+    @autoreleasepool {
+        MetalPipe* pipe = (MetalPipe*)pipe_ptr;
+        [pipe->commandBuffer commit];
+        [pipe->commandBuffer waitUntilCompleted];
+        return 0;
+    }
+}
+
+static void metal_pipe_destroy(void* pipe_ptr) {
+    if (pipe_ptr) free(pipe_ptr);
+}
+
 static mental_backend g_metal_backend = {
     .name = "Metal",
     .api = MENTAL_API_METAL,
@@ -449,6 +510,10 @@ static mental_backend g_metal_backend = {
     .kernel_workgroup_size = metal_kernel_workgroup_size,
     .kernel_dispatch = metal_kernel_dispatch,
     .kernel_destroy = metal_kernel_destroy,
+    .pipe_create = metal_pipe_create,
+    .pipe_add = metal_pipe_add,
+    .pipe_execute = metal_pipe_execute,
+    .pipe_destroy = metal_pipe_destroy,
     .viewport_attach = metal_viewport_attach,
     .viewport_present = metal_viewport_present,
     .viewport_detach = metal_viewport_detach
