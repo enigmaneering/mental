@@ -22,10 +22,7 @@ endif()
 # Source files
 set(MENTAL_SOURCES
     mental.c
-    monotonic.c
     reference.c
-    stdlink.c
-    spark.c
     transpile.c
     transpile_other.c
 )
@@ -453,6 +450,25 @@ install(TARGETS mental mental-static
 )
 
 install(FILES mental.h DESTINATION include)
+
+# Examples (optional)
+option(BUILD_EXAMPLES "Build examples" ON)
+if(BUILD_EXAMPLES)
+    add_executable(00-example-device-info examples/00-device-info.c)
+    target_link_libraries(00-example-device-info mental-static)
+
+    add_executable(01-example-reference examples/01-reference.c)
+    target_link_libraries(01-example-reference mental-static)
+
+    add_executable(02-example-gpu-compute examples/02-gpu-compute.c)
+    target_link_libraries(02-example-gpu-compute mental-static)
+
+    add_executable(03-example-clone-and-pin examples/03-clone-and-pin.c)
+    target_link_libraries(03-example-clone-and-pin mental-static)
+
+    add_executable(04-example-state examples/04-state.c)
+    target_link_libraries(04-example-state mental-static)
+endif()
 
 # Tests (optional - enable with BUILD_TESTING)
 option(BUILD_TESTING "Build test suite" ON)

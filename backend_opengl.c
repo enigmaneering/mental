@@ -581,6 +581,13 @@ static void* opengl_kernel_compile(void* dev, const char* source, size_t source_
     return kernel;
 }
 
+static int opengl_kernel_workgroup_size(void* kernel) {
+    (void)kernel;
+    /* Default workgroup size for OpenGL compute shaders.  Matches the
+     * layout(local_size_x = 256) declaration in transpiled GLSL. */
+    return 256;
+}
+
 static void opengl_kernel_dispatch(void* kernel, void** inputs, int input_count,
                                     void* output, int work_size) {
     OpenGLKernel* gl_kernel = (OpenGLKernel*)kernel;
@@ -600,7 +607,8 @@ static void opengl_kernel_dispatch(void* kernel, void** inputs, int input_count,
     pglBindBufferBase(GL_SHADER_STORAGE_BUFFER, (GLuint)input_count, out_buf->ssbo);
 
     /* Dispatch — single dimension, workgroup size handled in shader */
-    GLuint groups = ((GLuint)work_size + 255) / 256;
+    GLuint wg_size = (GLuint)opengl_kernel_workgroup_size(kernel);
+    GLuint groups = ((GLuint)work_size + wg_size - 1) / wg_size;
     pglDispatchCompute(groups, 1, 1);
 
     /* Ensure writes are visible before any subsequent buffer read */
@@ -636,6 +644,7 @@ static mental_backend g_opengl_backend = {
     .buffer_clone = opengl_buffer_clone,
     .buffer_destroy = opengl_buffer_destroy,
     .kernel_compile = opengl_kernel_compile,
+    .kernel_workgroup_size = opengl_kernel_workgroup_size,
     .kernel_dispatch = opengl_kernel_dispatch,
     .kernel_destroy = opengl_kernel_destroy,
     .viewport_attach = NULL,

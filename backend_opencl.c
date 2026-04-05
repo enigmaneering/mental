@@ -2,6 +2,8 @@
  * Mental - OpenCL Backend (Fallback for all platforms)
  */
 
+#ifdef MENTAL_HAS_OPENCL
+
 #ifdef __APPLE__
 #include <OpenCL/opencl.h>
 #else
@@ -346,6 +348,13 @@ static void* opencl_kernel_compile(void* dev, const char* source, size_t source_
     return cl_kernel;
 }
 
+static int opencl_kernel_workgroup_size(void* kernel) {
+    (void)kernel;
+    /* Return 0 to indicate the OpenCL runtime should choose the
+     * workgroup size (NULL local_work_size in clEnqueueNDRangeKernel). */
+    return 0;
+}
+
 static void opencl_kernel_dispatch(void* kernel, void** inputs, int input_count,
                                     void* output, int work_size) {
     OpenCLKernel* cl_kernel = (OpenCLKernel*)kernel;
@@ -399,6 +408,7 @@ static mental_backend g_opencl_backend = {
     .buffer_clone = opencl_buffer_clone,
     .buffer_destroy = opencl_buffer_destroy,
     .kernel_compile = opencl_kernel_compile,
+    .kernel_workgroup_size = opencl_kernel_workgroup_size,
     .kernel_dispatch = opencl_kernel_dispatch,
     .kernel_destroy = opencl_kernel_destroy,
     .viewport_attach = NULL,
@@ -407,3 +417,10 @@ static mental_backend g_opencl_backend = {
 };
 
 mental_backend* opencl_backend = &g_opencl_backend;
+
+#else
+/* OpenCL not available */
+#include "mental_internal.h"
+#include <stddef.h>
+mental_backend* opencl_backend = NULL;
+#endif /* MENTAL_HAS_OPENCL */

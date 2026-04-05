@@ -1,7 +1,7 @@
 /*
  * Mental - Internal Types and Backend Interface
  *
- * Internal header for backend implementations.
+ * Internal header for backend implementations and the reference system.
  * Not exposed in public API.
  */
 
@@ -24,91 +24,62 @@ struct mental_device_t {
     char name[256];
     mental_api_type api;
     mental_backend* backend;
-    void* backend_device;  /* Backend-specific device handle */
+    void* backend_device;
 };
 
-/*
- * Unified Reference structure.
- *
- * Every reference has shared-memory backing (named, UUID-scoped,
- * cross-process visible).  Optionally, it can be pinned to a GPU
- * device, adding a backend buffer for compute operations.
- *
- * Shared memory provides the cross-process data plane.
- * GPU pinning provides the compute plane.
- * Disclosure controls the access plane.
- */
+/* Reference structure (process-local) */
 struct mental_reference_t {
-    /* Shared memory (always present) */
-    void  *addr;       /* mmap'd / MapViewOfFile address (includes header) */
-    size_t total_size; /* total mapped size (header + user data) */
-    size_t user_size;  /* user-visible data size */
-    int    owner;      /* 1 = we created it, 0 = observer */
-    char   path[320];  /* shm path for cleanup */
+    void  *data;
+    size_t size;
 
-    /* GPU backing (optional — NULL if CPU-only) */
-    mental_device device;
-    void *backend_buffer;
-
-    /* Credential provider (owner only) — evaluated under spinlock */
+    mental_relationship mode;
+    uint8_t *credential;
+    size_t   credential_len;
     mental_credential_fn credential_fn;
     void                *credential_ctx;
 
-    /* Thread safety */
+    mental_device device;
+    void *backend_buffer;
+
     pthread_mutex_t lock;
     int valid;
-
-#ifdef _WIN32
-    HANDLE hMap;
-#else
-    int    fd;
-#endif
 };
 
-/* Spark link structure — a pipe-based bidirectional channel.
- * Unix: single socketpair fd (bidirectional).
- * Windows: separate read/write pipe handles. */
-struct mental_link_t {
-#ifdef _WIN32
-    HANDLE pipe_read;
-    HANDLE pipe_write;
-#else
-    int    pipe_fd;                      /* socketpair fd (bidirectional) */
-#endif
+/* Disclosure handle */
+struct mental_disclosure_t {
+    mental_reference ref;
 };
 
-/* Kernel structure (compiled shader) */
+/* Kernel structure */
 struct mental_kernel_t {
     mental_device device;
-    void* backend_kernel;  /* Backend-specific kernel handle */
+    void* backend_kernel;
+    int workgroup_size;     /* set by backend at compile time */
     pthread_mutex_t lock;
     int valid;
 };
 
-/* Viewport structure (surface presentation) */
+/* Viewport structure */
 struct mental_viewport_t {
-    mental_reference reference;  /* Reference to present */
-    void* backend_viewport;      /* Backend-specific viewport handle */
+    mental_reference reference;
+    void* backend_viewport;
     pthread_mutex_t lock;
     int valid;
 };
 
-/* Backend interface - each backend (Metal/D3D12/Vulkan/OpenCL) implements these */
+/* Backend interface */
 struct mental_backend_t {
     const char* name;
     mental_api_type api;
 
-    /* Backend initialization/cleanup */
     int (*init)(void);
     void (*shutdown)(void);
 
-    /* Device enumeration */
     int (*device_count)(void);
     int (*device_info)(int index, char* name, size_t name_len);
     void* (*device_create)(int index);
     void (*device_destroy)(void* dev);
 
-    /* Buffer operations */
     void* (*buffer_alloc)(void* dev, size_t bytes);
     void (*buffer_write)(void* buf, const void* data, size_t bytes);
     void (*buffer_read)(void* buf, void* data, size_t bytes);
@@ -116,18 +87,17 @@ struct mental_backend_t {
     void* (*buffer_clone)(void* dev, void* src_buf, size_t size);
     void (*buffer_destroy)(void* buf);
 
-    /* Kernel operations */
     void* (*kernel_compile)(void* dev, const char* source, size_t source_len, char* error, size_t error_len);
+    int (*kernel_workgroup_size)(void* kernel);
     void (*kernel_dispatch)(void* kernel, void** inputs, int input_count, void* output, int work_size);
     void (*kernel_destroy)(void* kernel);
 
-    /* Viewport operations (optional - may be NULL for backends without native presentation) */
     void* (*viewport_attach)(void* dev, void* buffer, void* surface, char* error, size_t error_len);
     void (*viewport_present)(void* viewport);
     void (*viewport_detach)(void* viewport);
 };
 
-/* Backend registry — each is only available when its SDK was found at build time */
+/* Backend registry */
 #ifdef MENTAL_HAS_METAL
 extern mental_backend* metal_backend;
 #endif
@@ -150,7 +120,7 @@ extern mental_backend* pocl_backend;
 extern mental_backend* webgpu_backend;
 #endif
 
-/* Error handling (thread-local) */
+/* Error handling */
 void mental_set_error(mental_error code, const char* message);
 
 /* Transpilation */

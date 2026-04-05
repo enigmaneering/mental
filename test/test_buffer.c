@@ -30,7 +30,7 @@ int main(void) {
     ASSERT_NO_ERROR();
 
     /* Test reference creation and pinning */
-    mental_reference ref = mental_reference_create("buf-data", 2048);
+    mental_reference ref = mental_reference_create(2048, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     ASSERT(ref != NULL, "Failed to create reference");
     ASSERT_NO_ERROR();
 
@@ -86,7 +86,7 @@ int main(void) {
     ASSERT(match, "Full buffer data incorrect");
 
     /* Test buffer clone (buffer now contains large_data) */
-    mental_reference clone = mental_reference_clone(ref, "buf-clone", dev, NULL, 0);
+    mental_reference clone = mental_reference_clone(ref, dev, NULL, 0);
     ASSERT(clone != NULL, "Failed to clone buffer");
     ASSERT_NO_ERROR();
 

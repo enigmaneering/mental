@@ -125,12 +125,12 @@ int main(void) {
     int count = 1024;
     size_t size = count * sizeof(float);
 
-    mental_reference input = mental_reference_create("integ-in0", size);
+    mental_reference input = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     ASSERT(input != NULL, "Failed to create input reference");
     mental_reference_pin(input, dev);
     ASSERT_NO_ERROR();
 
-    mental_reference output = mental_reference_create("integ-out", size);
+    mental_reference output = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     ASSERT(output != NULL, "Failed to create output reference");
     mental_reference_pin(output, dev);
     ASSERT_NO_ERROR();
@@ -178,7 +178,7 @@ int main(void) {
     /* Test 3: Clone and independent operations */
     printf("  Test 3: Clone and independent operations\n");
 
-    mental_reference clone = mental_reference_clone(input, "integ-clone", dev, NULL, 0);
+    mental_reference clone = mental_reference_clone(input, dev, NULL, 0);
     ASSERT(clone != NULL, "Clone failed");
 
     float orig_val = 100.0f;
@@ -204,7 +204,7 @@ int main(void) {
      * visibility — the fundamental contract of the reference system. */
     printf("  Test 4: Observability\n");
 
-    mental_reference shared_ref = mental_reference_create("integ-observe", sizeof(float));
+    mental_reference shared_ref = mental_reference_create(sizeof(float), MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     ASSERT(shared_ref != NULL, "Failed to create shared reference");
 
     /* Initialize to a known value before any threads start */
@@ -252,7 +252,7 @@ int main(void) {
     printf("  Test 5: Error recovery\n");
 
     /* Try to read from freed buffer (should error) */
-    mental_reference temp = mental_reference_create("integ-temp", 1024);
+    mental_reference temp = mental_reference_create(1024, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     ASSERT(temp != NULL, "Failed to create temp reference");
     mental_reference_pin(temp, dev);
     mental_reference_close(temp);

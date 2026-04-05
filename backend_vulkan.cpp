@@ -455,6 +455,13 @@ static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_
     return kernel;
 }
 
+static int vulkan_kernel_workgroup_size(void* kernel) {
+    (void)kernel;
+    /* Vulkan doesn't easily expose local_size_x from a compiled pipeline
+     * without SPIR-V reflection.  Return the default that shaders use. */
+    return 256;
+}
+
 static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
                                     void* output, int work_size) {
     if (!kernel) return;
@@ -543,7 +550,7 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
     /* work_size is the total number of invocations. The shader's
      * local_size_x defines the workgroup size (typically 256).
      * vkCmdDispatch takes the number of workgroups, not invocations. */
-    uint32_t local_size = 256;
+    uint32_t local_size = (uint32_t)vulkan_kernel_workgroup_size(kernel);
     uint32_t num_groups = ((uint32_t)work_size + local_size - 1) / local_size;
     vkCmdDispatch(command_buffer, num_groups, 1, 1);
     vkEndCommandBuffer(command_buffer);
@@ -803,6 +810,7 @@ static mental_backend g_vulkan_backend = {
     .buffer_clone = vulkan_buffer_clone,
     .buffer_destroy = vulkan_buffer_destroy,
     .kernel_compile = vulkan_kernel_compile,
+    .kernel_workgroup_size = vulkan_kernel_workgroup_size,
     .kernel_dispatch = vulkan_kernel_dispatch,
     .kernel_destroy = vulkan_kernel_destroy,
     .viewport_attach = vulkan_viewport_attach,

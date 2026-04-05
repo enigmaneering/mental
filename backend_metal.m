@@ -31,6 +31,7 @@ typedef struct {
 typedef struct {
     id<MTLComputePipelineState> pipeline;
     id<MTLDevice> device;
+    id<MTLCommandQueue> queue; /* reused from MetalDevice */
 } MetalKernel;
 
 /* Metal viewport wrapper */
@@ -249,6 +250,7 @@ static void* metal_kernel_compile(void* dev, const char* source, size_t source_l
 
         kernel->pipeline = pipeline;
         kernel->device = metal_dev->device;
+        kernel->queue = metal_dev->queue;
 
         return kernel;
     }
@@ -260,10 +262,8 @@ static void metal_kernel_dispatch(void* kernel, void** inputs, int input_count,
         MetalKernel* metal_kernel = (MetalKernel*)kernel;
         MetalBuffer* output_buf = (MetalBuffer*)output;
 
-        /* Create command buffer */
-        id<MTLDevice> device = metal_kernel->device;
-        id<MTLCommandQueue> queue = [device newCommandQueue];
-        id<MTLCommandBuffer> commandBuffer = [queue commandBuffer];
+        /* Create command buffer from the reusable queue */
+        id<MTLCommandBuffer> commandBuffer = [metal_kernel->queue commandBuffer];
         id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
 
         [encoder setComputePipelineState:metal_kernel->pipeline];
@@ -291,6 +291,12 @@ static void metal_kernel_dispatch(void* kernel, void** inputs, int input_count,
         [commandBuffer commit];
         [commandBuffer waitUntilCompleted];
     }
+}
+
+static int metal_kernel_workgroup_size(void* kernel) {
+    if (!kernel) return 256;
+    MetalKernel* mk = (MetalKernel*)kernel;
+    return (int)mk->pipeline.maxTotalThreadsPerThreadgroup;
 }
 
 static void metal_kernel_destroy(void* kernel) {
@@ -440,6 +446,7 @@ static mental_backend g_metal_backend = {
     .buffer_clone = metal_buffer_clone,
     .buffer_destroy = metal_buffer_destroy,
     .kernel_compile = metal_kernel_compile,
+    .kernel_workgroup_size = metal_kernel_workgroup_size,
     .kernel_dispatch = metal_kernel_dispatch,
     .kernel_destroy = metal_kernel_destroy,
     .viewport_attach = metal_viewport_attach,

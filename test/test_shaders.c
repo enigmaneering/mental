@@ -135,11 +135,11 @@ static int test_shader(const char* name, const char* shader_source, mental_devic
     snprintf(name_in1, sizeof(name_in1), "%s-in1", lower);
     snprintf(name_out, sizeof(name_out), "%s-out", lower);
 
-    mental_reference input0 = mental_reference_create(name_in0, size);
+    mental_reference input0 = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     mental_reference_pin(input0, dev);
-    mental_reference input1 = mental_reference_create(name_in1, size);
+    mental_reference input1 = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     mental_reference_pin(input1, dev);
-    mental_reference output = mental_reference_create(name_out, size);
+    mental_reference output = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     mental_reference_pin(output, dev);
 
     if (!input0 || !input1 || !output) {

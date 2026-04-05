@@ -80,8 +80,8 @@ mental_language mental_detect_language(const char* source, size_t source_len) {
         return MENTAL_LANG_GLSL;
     }
 
-    /* Default to GLSL for compute shaders */
-    return MENTAL_LANG_GLSL;
+    /* No patterns matched — return unknown rather than guessing */
+    return MENTAL_LANG_UNKNOWN;
 }
 
 mental_language mental_api_to_language(mental_api_type api) {

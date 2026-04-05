@@ -143,7 +143,7 @@ unsigned char* mental_hlsl_to_spirv(const char* source, size_t source_len,
     char out_path[1024];
     snprintf(out_path, sizeof(out_path), "%s/shader.spv", tmpdir);
     snprintf(cmd, sizeof(cmd),
-             "%s -spirv -T cs_6_0 -E main -Fo %s %s 2>&1",
+             "'%s' -spirv -T cs_6_0 -E main -Fo '%s' '%s' 2>&1",
              dxc, out_path, src_path);
 
     FILE* pipe = popen(cmd, "r");
@@ -213,7 +213,7 @@ unsigned char* mental_wgsl_to_spirv(const char* source, size_t source_len,
     char out_path[1024];
     snprintf(out_path, sizeof(out_path), "%s/shader.spv", tmpdir);
     snprintf(cmd, sizeof(cmd),
-             "%s %s %s 2>&1",
+             "'%s' '%s' '%s' 2>&1",
              naga, src_path, out_path);
 
     FILE* pipe = popen(cmd, "r");
@@ -286,7 +286,7 @@ char* mental_spirv_to_wgsl(const unsigned char* spirv, size_t spirv_len,
     char cmd[4096];
     char out_path[1024];
     snprintf(out_path, sizeof(out_path), "%s/shader.wgsl", tmpdir);
-    snprintf(cmd, sizeof(cmd), "%s %s %s 2>&1", naga, src_path, out_path);
+    snprintf(cmd, sizeof(cmd), "'%s' '%s' '%s' 2>&1", naga, src_path, out_path);
 
     FILE* pipe = popen(cmd, "r");
     if (!pipe) {

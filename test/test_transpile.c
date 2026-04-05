@@ -684,11 +684,11 @@ static int run_shader_on_device(const char* label, const char* source, size_t so
     size_t count = 64;
     size_t size = count * sizeof(float);
 
-    mental_reference in0 = mental_reference_create(n0, size);
+    mental_reference in0 = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     mental_reference_pin(in0, dev);
-    mental_reference in1 = mental_reference_create(n1, size);
+    mental_reference in1 = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     mental_reference_pin(in1, dev);
-    mental_reference out = mental_reference_create(n2, size);
+    mental_reference out = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     mental_reference_pin(out, dev);
 
     ASSERT(in0 && in1 && out, "buffer allocation");

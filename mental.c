@@ -5,6 +5,7 @@
 #include "mental.h"
 #include "mental_internal.h"
 #include "transpile.h"
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -262,11 +263,12 @@ mental_state* mental_state_get(void) {
         s->libraries[i].version = g_libraries[i].version ? strdup(g_libraries[i].version) : NULL;
         s->libraries[i].available = g_libraries[i].available;
     }
+    int lib_count = g_library_count;
     pthread_mutex_unlock(&g_library_lock);
 
     /* Tools are checked live — the Go layer may have configured them
      * after mental_initialize() ran. */
-    int idx = g_library_count;
+    int idx = lib_count;
     s->libraries[idx].name = strdup("dxc");
     s->libraries[idx].version = NULL;
     s->libraries[idx].available = mental_get_tool_path(MENTAL_TOOL_DXC) != NULL;
@@ -315,7 +317,7 @@ const char* mental_device_name(mental_device dev) {
 }
 
 mental_api_type mental_device_api(mental_device dev) {
-    if (!dev) return MENTAL_API_OPENCL;
+    if (!dev) return MENTAL_API_NONE;
     return dev->api;
 }
 
@@ -329,6 +331,7 @@ const char* mental_device_api_name(mental_device dev) {
         case MENTAL_API_OPENCL: return "OpenCL";
         case MENTAL_API_OPENGL: return "OpenGL";
         case MENTAL_API_POCL: return "PoCL";
+        case MENTAL_API_WEBGPU: return "WebGPU";
         default: return "Unknown";
     }
 }
@@ -381,46 +384,82 @@ mental_kernel mental_compile(mental_device dev, const char* source, size_t sourc
         return NULL;
     }
 
+    /* Query the backend for the compiled kernel's workgroup size */
+    if (dev->backend->kernel_workgroup_size) {
+        kernel->workgroup_size = dev->backend->kernel_workgroup_size(kernel->backend_kernel);
+    }
+    if (kernel->workgroup_size <= 0) {
+        kernel->workgroup_size = 256; /* fallback */
+    }
+
     return kernel;
 }
 
-void mental_dispatch(mental_kernel kernel, mental_reference* inputs, int input_count,
-                     mental_reference output, int work_size) {
+int mental_dispatch(mental_kernel kernel, mental_reference* inputs, int input_count,
+                    mental_reference output, int work_size) {
     if (!kernel || !kernel->valid) {
         mental_set_error(MENTAL_ERROR_INVALID_KERNEL, "Invalid kernel");
-        return;
+        return -1;
     }
 
     if (!output || !output->valid) {
         mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Invalid output reference");
-        return;
+        return -1;
     }
 
     /* All references must be pinned to a GPU device */
     if (!output->backend_buffer) {
         mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Output reference is not pinned to a GPU device");
-        return;
+        return -1;
     }
 
     for (int i = 0; i < input_count; i++) {
         if (inputs[i] && !inputs[i]->backend_buffer) {
             mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Input reference is not pinned to a GPU device");
-            return;
+            return -1;
+        }
+    }
+
+    /* Collect all unique references (inputs + output) for ordered locking */
+    mental_reference lock_order[input_count + 1];
+    int lock_count = 0;
+
+    for (int i = 0; i < input_count; i++) {
+        if (inputs[i] && inputs[i]->valid) {
+            /* Check for duplicates */
+            int dup = 0;
+            for (int j = 0; j < lock_count; j++) {
+                if (lock_order[j] == inputs[i]) { dup = 1; break; }
+            }
+            if (!dup) lock_order[lock_count++] = inputs[i];
+        }
+    }
+    if (output->valid) {
+        int dup = 0;
+        for (int j = 0; j < lock_count; j++) {
+            if (lock_order[j] == output) { dup = 1; break; }
+        }
+        if (!dup) lock_order[lock_count++] = output;
+    }
+
+    /* Sort by pointer address (bubble sort, N is small) to prevent deadlock */
+    for (int i = 0; i < lock_count - 1; i++) {
+        for (int j = 0; j < lock_count - 1 - i; j++) {
+            if ((uintptr_t)lock_order[j] > (uintptr_t)lock_order[j + 1]) {
+                mental_reference tmp = lock_order[j];
+                lock_order[j] = lock_order[j + 1];
+                lock_order[j + 1] = tmp;
+            }
         }
     }
 
     /* Lock kernel */
     pthread_mutex_lock(&kernel->lock);
 
-    /* Lock all input references */
-    for (int i = 0; i < input_count; i++) {
-        if (inputs[i] && inputs[i]->valid) {
-            pthread_mutex_lock(&inputs[i]->lock);
-        }
+    /* Lock references in sorted pointer order */
+    for (int i = 0; i < lock_count; i++) {
+        pthread_mutex_lock(&lock_order[i]->lock);
     }
-
-    /* Lock output reference */
-    pthread_mutex_lock(&output->lock);
 
     /* Gather backend buffer handles */
     void** backend_inputs = NULL;
@@ -442,26 +481,25 @@ void mental_dispatch(mental_kernel kernel, mental_reference* inputs, int input_c
 
     if (backend_inputs) free(backend_inputs);
 
-    /* Unlock all */
-    pthread_mutex_unlock(&output->lock);
-    for (int i = input_count - 1; i >= 0; i--) {
-        if (inputs[i] && inputs[i]->valid) {
-            pthread_mutex_unlock(&inputs[i]->lock);
-        }
+    /* Unlock references in reverse sorted order */
+    for (int i = lock_count - 1; i >= 0; i--) {
+        pthread_mutex_unlock(&lock_order[i]->lock);
     }
     pthread_mutex_unlock(&kernel->lock);
+
+    return 0;
 }
 
 void mental_kernel_finalize(mental_kernel kernel) {
     if (!kernel) return;
 
+    pthread_mutex_lock(&kernel->lock);
     if (kernel->valid) {
-        pthread_mutex_lock(&kernel->lock);
         kernel->device->backend->kernel_destroy(kernel->backend_kernel);
         kernel->valid = 0;
-        pthread_mutex_unlock(&kernel->lock);
-        pthread_mutex_destroy(&kernel->lock);
     }
+    pthread_mutex_unlock(&kernel->lock);
+    pthread_mutex_destroy(&kernel->lock);
 
     free(kernel);
 }
@@ -545,13 +583,13 @@ void mental_viewport_present(mental_viewport viewport) {
 void mental_viewport_detach(mental_viewport viewport) {
     if (!viewport) return;
 
+    pthread_mutex_lock(&viewport->lock);
     if (viewport->valid) {
-        pthread_mutex_lock(&viewport->lock);
         viewport->reference->device->backend->viewport_detach(viewport->backend_viewport);
         viewport->valid = 0;
-        pthread_mutex_unlock(&viewport->lock);
-        pthread_mutex_destroy(&viewport->lock);
     }
+    pthread_mutex_unlock(&viewport->lock);
+    pthread_mutex_destroy(&viewport->lock);
 
     free(viewport);
 }
@@ -583,6 +621,7 @@ const char* mental_get_error_message(void) {
 static void (*g_atexit_fns[MENTAL_MAX_ATEXIT])(void);
 static int g_atexit_count = 0;
 static int g_shutdown_registered = 0;
+static pthread_mutex_t g_atexit_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void mental_shutdown_handler(void) {
     /* Run atexit callbacks in LIFO order */
@@ -594,6 +633,7 @@ static void mental_shutdown_handler(void) {
 }
 
 void mental_atexit(void (*fn)(void)) {
+    pthread_mutex_lock(&g_atexit_lock);
     if (!g_shutdown_registered) {
         atexit(mental_shutdown_handler);
         g_shutdown_registered = 1;
@@ -601,4 +641,53 @@ void mental_atexit(void (*fn)(void)) {
     if (g_atexit_count < MENTAL_MAX_ATEXIT && fn) {
         g_atexit_fns[g_atexit_count++] = fn;
     }
+    pthread_mutex_unlock(&g_atexit_lock);
+}
+
+int mental_shutdown(void) {
+    /* Run atexit callbacks in LIFO order */
+    pthread_mutex_lock(&g_atexit_lock);
+    for (int i = g_atexit_count - 1; i >= 0; i--) {
+        if (g_atexit_fns[i]) {
+            g_atexit_fns[i]();
+        }
+    }
+    g_atexit_count = 0;
+    pthread_mutex_unlock(&g_atexit_lock);
+
+    /* Shut down the active backend and free device handles */
+    pthread_mutex_lock(&g_init_lock);
+    if (g_initialized && g_devices && g_device_count > 0) {
+        mental_backend *backend = g_devices[0]->backend;
+
+        for (int i = 0; i < g_device_count; i++) {
+            if (g_devices[i]) {
+                if (g_devices[i]->backend_device && backend->device_destroy) {
+                    backend->device_destroy(g_devices[i]->backend_device);
+                }
+                free(g_devices[i]);
+            }
+        }
+        free(g_devices);
+        g_devices = NULL;
+        g_device_count = 0;
+
+        if (backend->shutdown) {
+            backend->shutdown();
+        }
+
+        g_initialized = 0;
+    }
+    pthread_mutex_unlock(&g_init_lock);
+
+    /* Clear the library registry to prevent stale entries on re-init */
+    pthread_mutex_lock(&g_library_lock);
+    for (int i = 0; i < g_library_count; i++) {
+        if (g_libraries[i].name) free(g_libraries[i].name);
+        if (g_libraries[i].version) free(g_libraries[i].version);
+    }
+    g_library_count = 0;
+    pthread_mutex_unlock(&g_library_lock);
+
+    return 0;
 }

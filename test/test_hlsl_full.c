@@ -40,11 +40,11 @@ int main(void) {
     size_t count = 256;
     size_t size = count * sizeof(float);
 
-    mental_reference input0 = mental_reference_create("hlsl-full-in0", size);
+    mental_reference input0 = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     mental_reference_pin(input0, dev);
-    mental_reference input1 = mental_reference_create("hlsl-full-in1", size);
+    mental_reference input1 = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     mental_reference_pin(input1, dev);
-    mental_reference output = mental_reference_create("hlsl-full-out", size);
+    mental_reference output = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     mental_reference_pin(output, dev);
 
     if (!input0 || !input1 || !output) {

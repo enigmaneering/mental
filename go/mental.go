@@ -21,6 +21,7 @@ import (
 type APIType int32
 
 const (
+	APINone   APIType = -1
 	APIMetal  APIType = 0
 	APID3D12  APIType = 1
 	APIVulkan APIType = 2
@@ -137,10 +138,10 @@ func Compile(dev Device, source string) (Kernel, error) {
 //
 // Pass reference handles via [Reference.Handle]:
 //
-//	mental.Dispatch(kernel,
+//	err := mental.Dispatch(kernel,
 //	    []uintptr{input1.Handle(), input2.Handle()},
 //	    output.Handle(), 1024)
-func Dispatch(kernel Kernel, inputs []uintptr, output uintptr, workSize int) {
+func Dispatch(kernel Kernel, inputs []uintptr, output uintptr, workSize int) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -148,13 +149,17 @@ func Dispatch(kernel Kernel, inputs []uintptr, output uintptr, workSize int) {
 	if len(inputs) > 0 {
 		inputsPtr = (*C.mental_reference)(unsafe.Pointer(&inputs[0]))
 	}
-	C.mental_dispatch(
+	rc := C.mental_dispatch(
 		C.mental_kernel(unsafe.Pointer(kernel)),
 		inputsPtr,
 		C.int(len(inputs)),
 		C.mental_reference(unsafe.Pointer(output)),
 		C.int(workSize),
 	)
+	if rc != 0 {
+		return getLibError()
+	}
+	return nil
 }
 
 // Finalize frees the compiled kernel. Must be called explicitly.

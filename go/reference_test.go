@@ -35,7 +35,7 @@ func TestUUIDIdempotent(t *testing.T) {
 
 func TestReferenceCreateClose(t *testing.T) {
 	skipIfNoLibrary(t)
-	ref := ReferenceCreate[testData, struct{}]("go-test-lifecycle")
+	ref, _ := ReferenceCreate[testData, struct{}](RelationallyOpen)
 	if ref == nil || ref.Handle() == 0 {
 		t.Fatal("ReferenceCreate returned nil")
 	}
@@ -53,7 +53,7 @@ func TestReferenceCreateClose(t *testing.T) {
 
 func TestReferenceDataReadWrite(t *testing.T) {
 	skipIfNoLibrary(t)
-	ref := ReferenceCreate[testData, struct{}]("go-test-rw")
+	ref, _ := ReferenceCreate[testData, struct{}](RelationallyOpen)
 	if ref == nil || ref.Handle() == 0 {
 		t.Fatal("ReferenceCreate returned nil")
 	}
@@ -78,35 +78,12 @@ func TestReferenceDataReadWrite(t *testing.T) {
 	}
 }
 
-func TestReferenceSelfObserver(t *testing.T) {
-	skipIfNoLibrary(t)
-	ref := ReferenceCreate[testData, struct{}]("go-test-selfobs")
-	if ref == nil || ref.Handle() == 0 {
-		t.Fatal("ReferenceCreate returned nil")
-	}
-	defer ref.Close()
-
-	uuid := UUID()
-	obs := ReferenceOpen[testData, struct{}](uuid, "go-test-selfobs")
-	if obs == nil || obs.Handle() == 0 {
-		t.Fatal("ReferenceOpen returned nil")
-	}
-	defer obs.Close()
-
-	if obs.IsOwner() {
-		t.Error("observer should not be owner")
-	}
-	if obs.Size() != ref.Size() {
-		t.Errorf("observer Size() = %d, want %d", obs.Size(), ref.Size())
-	}
-}
-
 func TestReferenceObservability(t *testing.T) {
 	skipIfNoLibrary(t)
 
 	type slot struct{ Value float32 }
 
-	ref := ReferenceCreate[slot, struct{}]("go-test-observe")
+	ref, _ := ReferenceCreate[slot, struct{}](RelationallyOpen)
 	if ref == nil || ref.Handle() == 0 {
 		t.Fatal("ReferenceCreate returned nil")
 	}

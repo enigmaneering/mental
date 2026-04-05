@@ -222,39 +222,30 @@ static int load_wgpu_symbols(void) {
 }
 
 /* Try to load wgpu-native from a series of candidate paths */
+/* Shared search paths for wgpu-native library */
+static const char* g_wgpu_search_paths[] = {
+    "./external/wgpu/lib/" WGPU_LIB_NAME,
+    "../external/wgpu/lib/" WGPU_LIB_NAME,
+    "../../external/wgpu/lib/" WGPU_LIB_NAME,
+    "../../../external/wgpu/lib/" WGPU_LIB_NAME,
+    "../../../../external/wgpu/lib/" WGPU_LIB_NAME,
+    WGPU_LIB_NAME,
+};
+#define WGPU_SEARCH_PATH_COUNT (sizeof(g_wgpu_search_paths) / sizeof(g_wgpu_search_paths[0]))
+
 static int open_wgpu_library(void) {
-    const char* candidates[8];
-    int n = 0;
-
-    candidates[n++] = "./external/wgpu/lib/" WGPU_LIB_NAME;
-    candidates[n++] = "../external/wgpu/lib/" WGPU_LIB_NAME;
-    candidates[n++] = "../../external/wgpu/lib/" WGPU_LIB_NAME;
-    candidates[n++] = "../../../external/wgpu/lib/" WGPU_LIB_NAME;
-    candidates[n++] = "../../../../external/wgpu/lib/" WGPU_LIB_NAME;
-    candidates[n++] = WGPU_LIB_NAME;
-
-    for (int i = 0; i < n; i++) {
-        g_wgpu_lib = WGPU_DLOPEN(candidates[i]);
+    for (size_t i = 0; i < WGPU_SEARCH_PATH_COUNT; i++) {
+        g_wgpu_lib = WGPU_DLOPEN(g_wgpu_search_paths[i]);
         if (g_wgpu_lib && load_wgpu_symbols() == 0) return 0;
         if (g_wgpu_lib) { WGPU_DLCLOSE(g_wgpu_lib); g_wgpu_lib = NULL; }
     }
-
     return -1;
 }
 
-/* Probe-only: try to dlopen wgpu-native without loading symbols.
- * Returns the library handle on success (caller must close), NULL on failure. */
+/* Probe-only: try to dlopen wgpu-native without loading symbols. */
 static void* try_load_wgpu(void) {
-    const char* candidates[] = {
-        "./external/wgpu/lib/" WGPU_LIB_NAME,
-        "../external/wgpu/lib/" WGPU_LIB_NAME,
-        "../../external/wgpu/lib/" WGPU_LIB_NAME,
-        "../../../external/wgpu/lib/" WGPU_LIB_NAME,
-        "../../../../external/wgpu/lib/" WGPU_LIB_NAME,
-        WGPU_LIB_NAME,
-    };
-    for (int i = 0; i < 6; i++) {
-        void *lib = WGPU_DLOPEN(candidates[i]);
+    for (size_t i = 0; i < WGPU_SEARCH_PATH_COUNT; i++) {
+        void *lib = WGPU_DLOPEN(g_wgpu_search_paths[i]);
         if (lib) return lib;
     }
     return NULL;
@@ -707,6 +698,13 @@ static void* webgpu_kernel_compile(void* device, const char* source, size_t sour
     return k;
 }
 
+static int webgpu_kernel_workgroup_size(void* kernel) {
+    (void)kernel;
+    /* Default workgroup size for WebGPU compute shaders.  Matches the
+     * @workgroup_size(64) declaration in transpiled WGSL. */
+    return 64;
+}
+
 static void webgpu_kernel_dispatch(void* kernel, void** inputs, int input_count,
                                     void* output, int work_size) {
     WebGPUKernel *k = (WebGPUKernel*)kernel;
@@ -760,8 +758,9 @@ static void webgpu_kernel_dispatch(void* kernel, void** inputs, int input_count,
     p_wgpuComputePassEncoderSetPipeline(pass, k->pipeline);
     p_wgpuComputePassEncoderSetBindGroup(pass, 0, bind_group, 0, NULL);
 
-    /* Dispatch: work_size elements, using workgroup size of 64 */
-    uint32_t workgroup_count = ((uint32_t)work_size + 63) / 64;
+    /* Dispatch: work_size elements, using the backend's workgroup size */
+    uint32_t wg_size = (uint32_t)webgpu_kernel_workgroup_size(kernel);
+    uint32_t workgroup_count = ((uint32_t)work_size + wg_size - 1) / wg_size;
     p_wgpuComputePassEncoderDispatchWorkgroups(pass, workgroup_count, 1, 1);
 
     p_wgpuComputePassEncoderEnd(pass);
@@ -802,6 +801,7 @@ static mental_backend g_webgpu_backend = {
     .buffer_clone = webgpu_buffer_clone,
     .buffer_destroy = webgpu_buffer_destroy,
     .kernel_compile = webgpu_kernel_compile,
+    .kernel_workgroup_size = webgpu_kernel_workgroup_size,
     .kernel_dispatch = webgpu_kernel_dispatch,
     .kernel_destroy = webgpu_kernel_destroy,
     .viewport_attach = NULL,

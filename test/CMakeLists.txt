@@ -59,10 +59,6 @@ add_executable(test_paths_debug test_paths_debug.c)
 target_link_libraries(test_paths_debug mental-static)
 add_test(NAME PathDebug COMMAND test_paths_debug)
 
-add_executable(test_stdlink test_stdlink.c)
-target_link_libraries(test_stdlink mental-static)
-add_test(NAME Stdlink COMMAND test_stdlink)
-
 add_executable(test_reference test_reference.c)
 target_link_libraries(test_reference mental-static)
 add_test(NAME Reference COMMAND test_reference)
@@ -71,9 +67,10 @@ add_executable(test_clone test_clone.c)
 target_link_libraries(test_clone mental-static)
 add_test(NAME Clone COMMAND test_clone)
 
-add_executable(test_spark test_spark.c)
-target_link_libraries(test_spark mental-static)
-add_test(NAME Spark COMMAND test_spark)
+add_executable(test_failures test_failures.c)
+target_link_libraries(test_failures mental-static)
+add_test(NAME Failures COMMAND test_failures)
+
 
 add_executable(test_hlsl_debug test_hlsl_debug.c)
 target_link_libraries(test_hlsl_debug mental-static)

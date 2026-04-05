@@ -50,17 +50,17 @@ int main(void) {
     size_t count = 256;
     size_t size = count * sizeof(float);
 
-    mental_reference input0 = mental_reference_create("kernel-in0", size);
+    mental_reference input0 = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     ASSERT(input0 != NULL, "Failed to create input0 reference");
     mental_reference_pin(input0, dev);
     ASSERT_NO_ERROR();
 
-    mental_reference input1 = mental_reference_create("kernel-in1", size);
+    mental_reference input1 = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     ASSERT(input1 != NULL, "Failed to create input1 reference");
     mental_reference_pin(input1, dev);
     ASSERT_NO_ERROR();
 
-    mental_reference output = mental_reference_create("kernel-out", size);
+    mental_reference output = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     ASSERT(output != NULL, "Failed to create output reference");
     mental_reference_pin(output, dev);
     ASSERT_NO_ERROR();

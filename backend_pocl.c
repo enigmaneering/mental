@@ -395,6 +395,13 @@ static void* pocl_kernel_compile(void* dev, const char* source, size_t source_le
     return k;
 }
 
+static int pocl_kernel_workgroup_size(void* kernel) {
+    (void)kernel;
+    /* Return 0 to indicate the PoCL runtime should choose the
+     * workgroup size (NULL local_work_size in clEnqueueNDRangeKernel). */
+    return 0;
+}
+
 static void pocl_kernel_dispatch(void* kernel, void** inputs, int input_count,
                                   void* output, int work_size) {
     PoclKernel* k = (PoclKernel*)kernel;
@@ -441,6 +448,7 @@ static mental_backend g_pocl_backend = {
     .buffer_clone = pocl_buffer_clone,
     .buffer_destroy = pocl_buffer_destroy,
     .kernel_compile = pocl_kernel_compile,
+    .kernel_workgroup_size = pocl_kernel_workgroup_size,
     .kernel_dispatch = pocl_kernel_dispatch,
     .kernel_destroy = pocl_kernel_destroy,
     .viewport_attach = NULL,

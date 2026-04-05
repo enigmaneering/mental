@@ -82,7 +82,7 @@ int main(int argc, char** argv) {
         size_t height = 600;
         size_t size = width * height * 4; /* BGRA8 */
 
-        mental_reference ref = mental_reference_create("metal-window-buf", size);
+        mental_reference ref = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
         mental_reference_pin(ref, dev);
         ASSERT(ref != NULL, "Failed to allocate buffer");
         ASSERT_NO_ERROR();

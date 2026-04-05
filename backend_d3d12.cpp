@@ -619,6 +619,13 @@ static void* d3d12_kernel_compile(void* dev, const char* source, size_t source_l
     return kernel;
 }
 
+static int d3d12_kernel_workgroup_size(void* kernel) {
+    (void)kernel;
+    /* D3D12 default thread group size — matches the [numthreads(64,1,1)]
+     * declaration used in transpiled HLSL shaders. */
+    return 64;
+}
+
 static void d3d12_kernel_dispatch(void* kernel, void** inputs, int input_count,
                                    void* output, int work_size) {
     if (!kernel) return;
@@ -693,7 +700,7 @@ static void d3d12_kernel_dispatch(void* kernel, void** inputs, int input_count,
 
     /* Dispatch compute shader
      * Calculate thread groups: 64 threads per group (common default) */
-    UINT thread_group_size = 64;
+    UINT thread_group_size = (UINT)d3d12_kernel_workgroup_size(kernel);
     UINT num_groups = (work_size + thread_group_size - 1) / thread_group_size;
     d3d_dev->command_list->Dispatch(num_groups, 1, 1);
 
@@ -903,6 +910,7 @@ static mental_backend g_d3d12_backend = {
     .buffer_clone = d3d12_buffer_clone,
     .buffer_destroy = d3d12_buffer_destroy,
     .kernel_compile = d3d12_kernel_compile,
+    .kernel_workgroup_size = d3d12_kernel_workgroup_size,
     .kernel_dispatch = d3d12_kernel_dispatch,
     .kernel_destroy = d3d12_kernel_destroy,
     .viewport_attach = d3d12_viewport_attach,

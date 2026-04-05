@@ -31,7 +31,7 @@ int main(void) {
 
     /* Create buffer for viewport */
     size_t size = 1920 * 1080 * 4; /* RGBA8 1080p */
-    mental_reference ref = mental_reference_create("viewport-buf", size);
+    mental_reference ref = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     ASSERT(ref != NULL, "Failed to create reference");
     ASSERT_NO_ERROR();
 

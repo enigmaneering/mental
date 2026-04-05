@@ -71,11 +71,11 @@ int main(void) {
     size_t count = 4;  // Small test
     size_t size = count * sizeof(float);
 
-    mental_reference input0 = mental_reference_create("transpile-in0", size);
+    mental_reference input0 = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     mental_reference_pin(input0, dev);
-    mental_reference input1 = mental_reference_create("transpile-in1", size);
+    mental_reference input1 = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     mental_reference_pin(input1, dev);
-    mental_reference output = mental_reference_create("transpile-out", size);
+    mental_reference output = mental_reference_create(size, MENTAL_RELATIONALLY_OPEN, NULL, 0, NULL);
     mental_reference_pin(output, dev);
 
     float data0[] = {1.0f, 2.0f, 3.0f, 4.0f};
