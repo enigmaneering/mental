@@ -17,7 +17,10 @@
 #define popen _popen
 #define pclose _pclose
 #define rmdir _rmdir
-#define MENTAL_QUOTE "\""
+/* Windows _popen uses cmd.exe which mangles double-quoted arguments.
+ * Skip quoting on Windows — paths are normalized to forward slashes
+ * and spaces in tool/temp paths are rare on Windows. */
+#define MENTAL_QUOTE ""
 
 /* Windows mkdtemp: _mktemp generates name, _mkdir creates it. */
 static char* win_mkdtemp(char* tmpl) {
