@@ -13,8 +13,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ---- Run full test suite first — release is gated on this passing ----
+  test:
+    name: "Test Suite"
+    uses: ./.github/workflows/test-matrix.yml
+
   build:
     name: "${{ matrix.name }}"
+    needs: test
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
 
