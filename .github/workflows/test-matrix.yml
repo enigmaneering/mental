@@ -333,7 +333,8 @@ jobs:
             -DMENTAL_DISABLE_VULKAN=ON \
             -DMENTAL_DISABLE_OPENCL=ON \
             -DMENTAL_DISABLE_OPENGL=ON \
-            -DMENTAL_DISABLE_POCL=ON
+            -DMENTAL_DISABLE_POCL=ON \
+            -DMENTAL_DISABLE_WEBGPU=ON
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'

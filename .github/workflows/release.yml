@@ -18,9 +18,50 @@ jobs:
     name: "Test Suite"
     uses: ./.github/workflows/test-matrix.yml
 
+  # ---- Update version in CMakeLists.txt if needed, commit to main ----
+  version:
+    name: "Update Version"
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ github.token }}
+
+      - name: Check and update version
+        run: |
+          CURRENT=$(grep -oP 'project\(mental VERSION \K[0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt)
+          TARGET="${{ inputs.version }}"
+
+          echo "Current version: $CURRENT"
+          echo "Target version:  $TARGET"
+
+          if [ "$CURRENT" = "$TARGET" ]; then
+            echo "Version already correct — skipping commit"
+            echo "SKIPPED=true" >> $GITHUB_ENV
+          else
+            sed -i "s/project(mental VERSION $CURRENT/project(mental VERSION $TARGET/" CMakeLists.txt
+            echo "Updated CMakeLists.txt to version $TARGET"
+            echo "SKIPPED=false" >> $GITHUB_ENV
+          fi
+
+      - name: Commit version bump
+        if: env.SKIPPED == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CMakeLists.txt
+          git commit -m "Releasing v${{ inputs.version }}"
+          git push origin main
+
   build:
     name: "${{ matrix.name }}"
-    needs: test
+    needs: version
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
 
@@ -303,7 +344,8 @@ jobs:
             -DMENTAL_DISABLE_VULKAN=ON \
             -DMENTAL_DISABLE_OPENCL=ON \
             -DMENTAL_DISABLE_OPENGL=ON \
-            -DMENTAL_DISABLE_POCL=ON
+            -DMENTAL_DISABLE_POCL=ON \
+            -DMENTAL_DISABLE_WEBGPU=ON
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'

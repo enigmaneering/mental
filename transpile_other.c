@@ -17,6 +17,7 @@
 #define popen _popen
 #define pclose _pclose
 #define rmdir _rmdir
+#define MENTAL_QUOTE "\""
 
 /* Windows mkdtemp: _mktemp generates name, _mkdir creates it. */
 static char* win_mkdtemp(char* tmpl) {
@@ -27,6 +28,7 @@ static char* win_mkdtemp(char* tmpl) {
 #define mkdtemp(t) win_mkdtemp(t)
 #else
 #include <unistd.h>
+#define MENTAL_QUOTE "'"
 #endif
 
 /*
@@ -143,7 +145,9 @@ unsigned char* mental_hlsl_to_spirv(const char* source, size_t source_len,
     char out_path[1024];
     snprintf(out_path, sizeof(out_path), "%s/shader.spv", tmpdir);
     snprintf(cmd, sizeof(cmd),
-             "'%s' -spirv -T cs_6_0 -E main -Fo '%s' '%s' 2>&1",
+             MENTAL_QUOTE "%s" MENTAL_QUOTE " -spirv -T cs_6_0 -E main -Fo "
+             MENTAL_QUOTE "%s" MENTAL_QUOTE " "
+             MENTAL_QUOTE "%s" MENTAL_QUOTE " 2>&1",
              dxc, out_path, src_path);
 
     FILE* pipe = popen(cmd, "r");
@@ -213,7 +217,9 @@ unsigned char* mental_wgsl_to_spirv(const char* source, size_t source_len,
     char out_path[1024];
     snprintf(out_path, sizeof(out_path), "%s/shader.spv", tmpdir);
     snprintf(cmd, sizeof(cmd),
-             "'%s' '%s' '%s' 2>&1",
+             MENTAL_QUOTE "%s" MENTAL_QUOTE " "
+             MENTAL_QUOTE "%s" MENTAL_QUOTE " "
+             MENTAL_QUOTE "%s" MENTAL_QUOTE " 2>&1",
              naga, src_path, out_path);
 
     FILE* pipe = popen(cmd, "r");
@@ -286,7 +292,11 @@ char* mental_spirv_to_wgsl(const unsigned char* spirv, size_t spirv_len,
     char cmd[4096];
     char out_path[1024];
     snprintf(out_path, sizeof(out_path), "%s/shader.wgsl", tmpdir);
-    snprintf(cmd, sizeof(cmd), "'%s' '%s' '%s' 2>&1", naga, src_path, out_path);
+    snprintf(cmd, sizeof(cmd),
+             MENTAL_QUOTE "%s" MENTAL_QUOTE " "
+             MENTAL_QUOTE "%s" MENTAL_QUOTE " "
+             MENTAL_QUOTE "%s" MENTAL_QUOTE " 2>&1",
+             naga, src_path, out_path);
 
     FILE* pipe = popen(cmd, "r");
     if (!pipe) {
