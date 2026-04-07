@@ -113,13 +113,52 @@ jobs:
             install_vulkan: false
             needs_xvfb: false
 
+          # ============================================================
+          #  WebAssembly — Emscripten + WebGPU headers only.
+          #  No ctest (no browser in CI), but verifies the build compiles.
+          # ============================================================
+          - name: "WASM"
+            runner: ubuntu-latest
+            platform: wasm
+            packages: ""
+            install_vulkan: false
+            needs_xvfb: false
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ---- Emscripten (WASM only) ----
+      - name: Install Emscripten
+        if: matrix.platform == 'wasm'
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: "3.1.61"
+
       # ---- Fetch external dependencies from GitHub Releases ----
+      - name: Fetch external dependencies (WASM)
+        if: matrix.platform == 'wasm'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
+          echo "Downloading external dep headers for WASM build"
+          mkdir -p external/glslang external/spirv-cross external/wgpu/include
+
+          # Download linux-amd64 archives for headers
+          gh release download "$VERSION" --repo enigmaneering/redistributables \
+            --pattern "glslang-linux-amd64.tar.gz" --dir .
+          tar -xzf "glslang-linux-amd64.tar.gz"
+          cp -r glslang-linux-amd64/* external/glslang/
+
+          gh release download "$VERSION" --repo enigmaneering/redistributables \
+            --pattern "spirv-cross-linux-amd64.tar.gz" --dir .
+          tar -xzf "spirv-cross-linux-amd64.tar.gz"
+          cp -r spirv-cross-linux-amd64/* external/spirv-cross/
+
       - name: Fetch external dependencies (Unix)
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.platform != 'wasm'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -280,8 +319,21 @@ jobs:
 
       # ---- Configure ----
       - name: Configure (Unix)
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.platform != 'wasm'
         run: cmake -B build -DBUILD_TESTING=ON ${{ matrix.cmake_extra }}
+
+      - name: Configure (WASM)
+        if: matrix.platform == 'wasm'
+        run: |
+          emcmake cmake -B build \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DMENTAL_DISABLE_METAL=ON \
+            -DMENTAL_DISABLE_D3D12=ON \
+            -DMENTAL_DISABLE_VULKAN=ON \
+            -DMENTAL_DISABLE_OPENCL=ON \
+            -DMENTAL_DISABLE_OPENGL=ON \
+            -DMENTAL_DISABLE_POCL=ON
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
@@ -290,17 +342,28 @@ jobs:
 
       # ---- Build ----
       - name: Build (Unix)
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.platform != 'wasm'
         run: cmake --build build --parallel
+
+      - name: Build (WASM)
+        if: matrix.platform == 'wasm'
+        run: emmake cmake --build build --parallel
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: cmake --build build --parallel
 
+      # ---- Test (WASM — build-only, no ctest without a browser) ----
+      - name: Verify WASM build
+        if: matrix.platform == 'wasm'
+        run: |
+          echo "WASM build compiled successfully (no runtime tests — no browser in CI)"
+          ls -la build/libmental-static.a build/libmental.a 2>/dev/null || ls -la build/*.a 2>/dev/null || true
+
       # ---- Test (with virtual X server when OpenGL needs it) ----
       - name: Test
-        if: ${{ !matrix.needs_xvfb && runner.os != 'Windows' }}
+        if: ${{ !matrix.needs_xvfb && runner.os != 'Windows' && matrix.platform != 'wasm' }}
         working-directory: build
         run: ctest --output-on-failure --timeout 120
 
