@@ -32,6 +32,22 @@ static char* win_mkdtemp(char* tmpl) {
 #endif
 
 /*
+ * Normalize backslashes to forward slashes in-place.
+ * Windows paths with backslashes break in MSYS2/MinGW popen
+ * because the shell interprets \x as escape sequences.
+ * Windows APIs accept forward slashes just fine.
+ */
+#ifdef _WIN32
+static void normalize_path(char* path) {
+    for (; *path; path++) {
+        if (*path == '\\') *path = '/';
+    }
+}
+#else
+#define normalize_path(p) ((void)0)
+#endif
+
+/*
  * Portable temp directory prefix.
  * Windows: uses TEMP/TMP env var (e.g. C:\Users\...\AppData\Local\Temp)
  * Unix: /tmp
@@ -66,6 +82,7 @@ void mental_set_tool_path(mental_tool tool, const char* path) {
     if (path) {
         strncpy(dest, path, cap - 1);
         dest[cap - 1] = '\0';
+        normalize_path(dest);
     } else {
         dest[0] = '\0';
     }
@@ -127,6 +144,7 @@ unsigned char* mental_hlsl_to_spirv(const char* source, size_t source_len,
         if (error) strncpy(error, "Failed to create temporary directory", error_len - 1);
         return NULL;
     }
+    normalize_path(tmpdir);
 
     /* Write HLSL source to temp file */
     char src_path[1024];
@@ -199,6 +217,7 @@ unsigned char* mental_wgsl_to_spirv(const char* source, size_t source_len,
         if (error) strncpy(error, "Failed to create temporary directory", error_len - 1);
         return NULL;
     }
+    normalize_path(tmpdir);
 
     /* Write WGSL source to temp file */
     char src_path[1024];
@@ -277,6 +296,7 @@ char* mental_spirv_to_wgsl(const unsigned char* spirv, size_t spirv_len,
         if (error) strncpy(error, "Failed to create temporary directory", error_len - 1);
         return NULL;
     }
+    normalize_path(tmpdir);
 
     char src_path[1024];
     snprintf(src_path, sizeof(src_path), "%s/shader.spv", tmpdir);
