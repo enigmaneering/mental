@@ -1,0 +1,429 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.1.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: "${{ matrix.name }}"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # macOS
+          - name: "darwin-arm64"
+            runner: macos-14
+            platform: darwin-arm64
+            cmake_extra: ""
+            packages: ""
+            install_vulkan: false
+            archive_ext: tar.gz
+
+          - name: "darwin-amd64"
+            runner: macos-14
+            platform: darwin-amd64
+            cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=x86_64"
+            packages: ""
+            install_vulkan: false
+            archive_ext: tar.gz
+
+          # Windows
+          - name: "windows-amd64"
+            runner: windows-latest
+            platform: windows-amd64
+            cmake_extra: ""
+            packages: ""
+            install_vulkan: false
+            archive_ext: zip
+
+          - name: "windows-arm64"
+            runner: windows-11-arm
+            platform: windows-arm64
+            cmake_extra: ""
+            packages: ""
+            install_vulkan: false
+            archive_ext: zip
+
+          # Linux
+          - name: "linux-amd64"
+            runner: ubuntu-latest
+            platform: linux-amd64
+            cmake_extra: ""
+            packages: >-
+              libvulkan-dev mesa-vulkan-drivers
+              libopengl-dev libglx-dev libx11-dev
+            install_vulkan: false
+            archive_ext: tar.gz
+
+          - name: "linux-arm64"
+            runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            cmake_extra: ""
+            packages: >-
+              libvulkan-dev mesa-vulkan-drivers
+              libopengl-dev libglx-dev libx11-dev
+            install_vulkan: false
+            archive_ext: tar.gz
+
+          # WebAssembly
+          - name: "wasm"
+            runner: ubuntu-latest
+            platform: wasm
+            cmake_extra: ""
+            packages: ""
+            install_vulkan: false
+            archive_ext: tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---- Fetch external dependencies (Unix, native) ----
+      - name: Fetch external dependencies (Unix)
+        if: runner.os != 'Windows' && matrix.platform != 'wasm'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
+          echo "Downloading external deps $VERSION for ${{ matrix.platform }}"
+          mkdir -p external/glslang external/spirv-cross external/dxc external/naga/bin external/wgpu/include external/wgpu/lib
+
+          # glslang (required)
+          gh release download "$VERSION" --repo enigmaneering/redistributables \
+            --pattern "glslang-${{ matrix.platform }}.tar.gz" --dir .
+          tar -xzf "glslang-${{ matrix.platform }}.tar.gz"
+          cp -r "glslang-${{ matrix.platform }}"/* external/glslang/
+
+          # spirv-cross (required)
+          gh release download "$VERSION" --repo enigmaneering/redistributables \
+            --pattern "spirv-cross-${{ matrix.platform }}.tar.gz" --dir .
+          tar -xzf "spirv-cross-${{ matrix.platform }}.tar.gz"
+          cp -r "spirv-cross-${{ matrix.platform }}"/* external/spirv-cross/
+
+          # wgpu-native (optional — headers for WebGPU backend)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "wgpu-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "wgpu-${{ matrix.platform }}.tar.gz"
+            cp -r "wgpu-${{ matrix.platform }}"/* external/wgpu/ 2>/dev/null || true
+          fi
+
+          # dxc (optional)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "dxc-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "dxc-${{ matrix.platform }}.tar.gz"
+            cp -r "dxc-${{ matrix.platform }}"/* external/dxc/
+          fi
+
+          # naga (optional)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "naga-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "naga-${{ matrix.platform }}.tar.gz"
+            if [ -d "naga-${{ matrix.platform }}/bin" ]; then
+              cp -r "naga-${{ matrix.platform }}/bin"/* external/naga/bin/
+            else
+              cp -r "naga-${{ matrix.platform }}"/* external/naga/bin/
+            fi
+          fi
+
+          chmod +x external/dxc/bin/* external/naga/bin/* 2>/dev/null || true
+          if [ "$(uname)" = "Darwin" ]; then
+            xattr -d com.apple.quarantine external/dxc/bin/* external/dxc/lib/* external/naga/bin/* 2>/dev/null || true
+          fi
+
+      # ---- Fetch external dependencies (Windows) ----
+      - name: Fetch external dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
+          echo "Downloading external deps $VERSION for ${{ matrix.platform }}"
+          mkdir -p external/glslang external/spirv-cross external/dxc external/naga/bin external/wgpu/include external/wgpu/lib
+
+          # glslang (required)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "glslang-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "glslang-${{ matrix.platform }}.tar.gz"
+          else
+            gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "glslang-${{ matrix.platform }}.zip" --dir .
+            unzip -q "glslang-${{ matrix.platform }}.zip"
+          fi
+          cp -r "glslang-${{ matrix.platform }}"/* external/glslang/
+
+          # spirv-cross (required)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "spirv-cross-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "spirv-cross-${{ matrix.platform }}.tar.gz"
+          else
+            gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "spirv-cross-${{ matrix.platform }}.zip" --dir .
+            unzip -q "spirv-cross-${{ matrix.platform }}.zip"
+          fi
+          cp -r "spirv-cross-${{ matrix.platform }}"/* external/spirv-cross/
+
+          # wgpu-native (optional)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "wgpu-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "wgpu-${{ matrix.platform }}.tar.gz"
+            cp -r "wgpu-${{ matrix.platform }}"/* external/wgpu/ 2>/dev/null || true
+          elif gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "wgpu-${{ matrix.platform }}.zip" --dir . 2>/dev/null; then
+            unzip -q "wgpu-${{ matrix.platform }}.zip"
+            cp -r "wgpu-${{ matrix.platform }}"/* external/wgpu/ 2>/dev/null || true
+          fi
+
+          # dxc (optional)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "dxc-${{ matrix.platform }}.zip" --dir . 2>/dev/null; then
+            unzip -q "dxc-${{ matrix.platform }}.zip"
+            cp -r "dxc-${{ matrix.platform }}"/* external/dxc/
+          elif gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "dxc-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "dxc-${{ matrix.platform }}.tar.gz"
+            cp -r "dxc-${{ matrix.platform }}"/* external/dxc/
+          fi
+
+          # naga (optional)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "naga-${{ matrix.platform }}.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "naga-${{ matrix.platform }}.tar.gz"
+            if [ -d "naga-${{ matrix.platform }}/bin" ]; then
+              cp -r "naga-${{ matrix.platform }}/bin"/* external/naga/bin/
+            else
+              cp -r "naga-${{ matrix.platform }}"/* external/naga/bin/
+            fi
+          fi
+
+      # ---- Fetch external dependencies (WASM — build glslang/spirv-cross with Emscripten) ----
+      - name: Fetch external dependencies (WASM)
+        if: matrix.platform == 'wasm'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # For WASM we need glslang and spirv-cross compiled to WASM.
+          # Download the linux-amd64 source-compatible archives for headers,
+          # then Emscripten will compile the C/C++ sources directly.
+          VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
+          mkdir -p external/glslang external/spirv-cross external/wgpu/include
+
+          # glslang headers + static libs (we'll rebuild with emcc)
+          gh release download "$VERSION" --repo enigmaneering/redistributables \
+            --pattern "glslang-linux-amd64.tar.gz" --dir .
+          tar -xzf "glslang-linux-amd64.tar.gz"
+          # Copy headers only — the .a files are x86 and won't link with WASM
+          cp -r glslang-linux-amd64/include/* external/glslang/include/ 2>/dev/null || \
+          cp -r glslang-linux-amd64/* external/glslang/
+
+          # spirv-cross headers
+          gh release download "$VERSION" --repo enigmaneering/redistributables \
+            --pattern "spirv-cross-linux-amd64.tar.gz" --dir .
+          tar -xzf "spirv-cross-linux-amd64.tar.gz"
+          cp -r spirv-cross-linux-amd64/* external/spirv-cross/
+
+      # ---- Install Emscripten (WASM only) ----
+      - name: Install Emscripten
+        if: matrix.platform == 'wasm'
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: "3.1.61"
+
+      # ---- Linux packages ----
+      - name: Install packages (Linux)
+        if: runner.os == 'Linux' && matrix.packages != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+
+      # ---- MinGW (Windows) ----
+      - name: Set up MinGW (Windows amd64)
+        if: runner.os == 'Windows' && matrix.platform == 'windows-amd64'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            make
+
+      - name: Set up MinGW (Windows arm64)
+        if: runner.os == 'Windows' && matrix.platform == 'windows-arm64'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANGARM64
+          update: false
+          install: >-
+            mingw-w64-clang-aarch64-cc
+            mingw-w64-clang-aarch64-cmake
+            make
+
+      # ---- Configure ----
+      - name: Configure (macOS / Linux)
+        if: runner.os != 'Windows' && matrix.platform != 'wasm'
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=install \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            ${{ matrix.cmake_extra }}
+
+      - name: Configure (WASM)
+        if: matrix.platform == 'wasm'
+        run: |
+          emcmake cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=install \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_EXAMPLES=OFF \
+            -DMENTAL_DISABLE_METAL=ON \
+            -DMENTAL_DISABLE_D3D12=ON \
+            -DMENTAL_DISABLE_VULKAN=ON \
+            -DMENTAL_DISABLE_OPENCL=ON \
+            -DMENTAL_DISABLE_OPENGL=ON \
+            -DMENTAL_DISABLE_POCL=ON
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          cmake -B build \
+            -G "MSYS Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=install \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_EXAMPLES=OFF
+
+      # ---- Build ----
+      - name: Build (macOS / Linux)
+        if: runner.os != 'Windows' && matrix.platform != 'wasm'
+        run: cmake --build build --parallel
+
+      - name: Build (WASM)
+        if: matrix.platform == 'wasm'
+        run: emmake cmake --build build --parallel
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: cmake --build build --parallel
+
+      # ---- Install ----
+      - name: Install (Unix / WASM)
+        if: runner.os != 'Windows'
+        run: cmake --install build
+
+      - name: Install (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: cmake --install build
+
+      # ---- Package ----
+      - name: Package (tar.gz)
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        run: |
+          ARCHIVE="libmental-v${{ inputs.version }}-${{ matrix.platform }}"
+          mv install "$ARCHIVE"
+          tar -czf "${ARCHIVE}.tar.gz" "$ARCHIVE"
+          echo "ASSET=${ARCHIVE}.tar.gz" >> $GITHUB_ENV
+
+      - name: Package (zip)
+        if: matrix.archive_ext == 'zip'
+        shell: bash
+        run: |
+          ARCHIVE="libmental-v${{ inputs.version }}-${{ matrix.platform }}"
+          mv install "$ARCHIVE"
+          7z a "${ARCHIVE}.zip" "$ARCHIVE"
+          echo "ASSET=${ARCHIVE}.zip" >> $GITHUB_ENV
+
+      # ---- Upload artifact for release job ----
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: "libmental-${{ matrix.platform }}"
+          path: "${{ env.ASSET }}"
+          retention-days: 1
+
+  # ---- Create GitHub Release ----
+  release:
+    name: "Create Release"
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ inputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --title "libmental v${{ inputs.version }}" \
+            --notes "$(cat <<'EOF'
+          ## libmental v${{ inputs.version }}
+
+          Universal GPU compute library.
+
+          ### Platforms
+
+          | Archive | Backends |
+          |---------|----------|
+          | `darwin-arm64` | Metal, WebGPU, OpenCL, PoCL |
+          | `darwin-amd64` | Metal, WebGPU, OpenCL, PoCL |
+          | `linux-amd64` | Vulkan, WebGPU, OpenGL, OpenCL, PoCL |
+          | `linux-arm64` | Vulkan, WebGPU, OpenGL, OpenCL, PoCL |
+          | `windows-amd64` | D3D12, Vulkan, WebGPU, OpenGL, OpenCL, PoCL |
+          | `windows-arm64` | D3D12, Vulkan, WebGPU, OpenGL, OpenCL, PoCL |
+          | `wasm` | WebGPU (via browser API) |
+
+          ### Contents
+
+          Each archive contains:
+          - `include/mental.h` — public C API
+          - `lib/libmental-static.a` — static library (all backends + transpiler baked in)
+          - `lib/libmental.{dylib,so,dll}` — shared library
+
+          ### Usage
+
+          ```c
+          #include "mental.h"
+
+          int main(void) {
+              int n = mental_device_count();
+              mental_device dev = mental_device_get(0);
+              printf("%s (%s)\n", mental_device_name(dev), mental_device_api_name(dev));
+              return 0;
+          }
+          ```
+
+          Link: `cc -o app app.c -Iinclude -Llib -lmental-static -lc++ <platform-frameworks>`
+          EOF
+          )" \
+            artifacts/*
