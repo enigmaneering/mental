@@ -114,14 +114,13 @@ static int d3d11_device_count(void) {
     return (int)g_adapters.size();
 }
 
-static const char* d3d11_device_info(int index) {
-    if (index < 0 || index >= (int)g_adapters.size()) return "Unknown";
-    static char name[256];
+static int d3d11_device_info(int index, char* name, size_t name_len) {
+    if (index < 0 || index >= (int)g_adapters.size()) return -1;
     DXGI_ADAPTER_DESC1 desc;
     g_adapters[index]->GetDesc1(&desc);
-    wcstombs(name, desc.Description, sizeof(name) - 1);
-    name[sizeof(name) - 1] = '\0';
-    return name;
+    wcstombs(name, desc.Description, name_len - 1);
+    name[name_len - 1] = '\0';
+    return 0;
 }
 
 /* ── Device ──────────────────────────────────────────────────────── */
@@ -251,17 +250,18 @@ static void d3d11_buffer_read(void* buffer, void* data, size_t bytes) {
     buf->device->ctx->Unmap(buf->staging, 0);
 }
 
-static void* d3d11_buffer_resize(void* buffer, size_t new_size) {
-    D3D11Buffer* old_buf = (D3D11Buffer*)buffer;
+static void* d3d11_buffer_resize(void* dev, void* old_buf_ptr,
+                                  size_t old_size, size_t new_size) {
+    D3D11Buffer* old_buf = (D3D11Buffer*)old_buf_ptr;
 
     /* Read old data */
-    size_t copy_size = old_buf->size < new_size ? old_buf->size : new_size;
+    size_t copy_size = old_size < new_size ? old_size : new_size;
     void* tmp = malloc(copy_size);
     if (!tmp) return nullptr;
-    d3d11_buffer_read(buffer, tmp, copy_size);
+    d3d11_buffer_read(old_buf_ptr, tmp, copy_size);
 
     /* Allocate new buffer */
-    void* new_buf = d3d11_buffer_alloc(old_buf->device, new_size);
+    void* new_buf = d3d11_buffer_alloc(dev, new_size);
     if (!new_buf) { free(tmp); return nullptr; }
 
     /* Write old data to new buffer */
@@ -269,24 +269,18 @@ static void* d3d11_buffer_resize(void* buffer, size_t new_size) {
     free(tmp);
 
     /* Destroy old */
-    safe_release(old_buf->srv);
-    safe_release(old_buf->uav);
-    safe_release(old_buf->staging);
-    safe_release(old_buf->gpu_buffer);
-    delete old_buf;
+    d3d11_buffer_destroy(old_buf_ptr);
 
     return new_buf;
 }
 
-static void* d3d11_buffer_clone(void* buffer, void* dest_device) {
-    D3D11Buffer* src = (D3D11Buffer*)buffer;
-
-    void* tmp = malloc(src->size);
+static void* d3d11_buffer_clone(void* dev, void* src_buf, size_t size) {
+    void* tmp = malloc(size);
     if (!tmp) return nullptr;
-    d3d11_buffer_read(buffer, tmp, src->size);
+    d3d11_buffer_read(src_buf, tmp, size);
 
-    void* clone = d3d11_buffer_alloc(dest_device, src->size);
-    if (clone) d3d11_buffer_write(clone, tmp, src->size);
+    void* clone = d3d11_buffer_alloc(dev, size);
+    if (clone) d3d11_buffer_write(clone, tmp, size);
     free(tmp);
     return clone;
 }
@@ -311,22 +305,41 @@ static void* d3d11_kernel_compile(void* device, const char* source,
     /* Transpile to HLSL if needed (source may be GLSL, WGSL, etc.) */
     char* hlsl = nullptr;
     size_t hlsl_len = 0;
-    int lang = mental_detect_language(source, source_len);
+    int need_free_hlsl = 0;
+    mental_language lang = mental_detect_language(source, source_len);
 
     if (lang == MENTAL_LANG_HLSL) {
         /* Already HLSL — use directly */
         hlsl = (char*)source;
         hlsl_len = source_len;
     } else {
-        /* Transpile to HLSL via SPIR-V */
+        /* Transpile to SPIR-V first */
         size_t spirv_len = 0;
-        unsigned char* spirv = mental_compile_to_spirv(source, source_len,
-                                                        &spirv_len, error, error_len);
+        unsigned char* spirv = nullptr;
+
+        switch (lang) {
+        case MENTAL_LANG_GLSL:
+        case MENTAL_LANG_UNKNOWN:
+            spirv = mental_glsl_to_spirv(source, source_len, &spirv_len, error, error_len);
+            break;
+        case MENTAL_LANG_WGSL:
+            spirv = mental_wgsl_to_spirv(source, source_len, &spirv_len, error, error_len);
+            break;
+        case MENTAL_LANG_SPIRV:
+            spirv = (unsigned char*)source;
+            spirv_len = source_len;
+            break;
+        default:
+            if (error) snprintf(error, error_len, "Unsupported shader language for D3D11");
+            return nullptr;
+        }
         if (!spirv) return nullptr;
 
+        /* SPIR-V → HLSL */
         hlsl = mental_spirv_to_hlsl(spirv, spirv_len, &hlsl_len, error, error_len);
-        free(spirv);
+        if (spirv != (unsigned char*)source) free(spirv);
         if (!hlsl) return nullptr;
+        need_free_hlsl = 1;
     }
 
     /* Compile HLSL to DXBC using D3DCompile (Shader Model 5.0) */
@@ -335,7 +348,7 @@ static void* d3d11_kernel_compile(void* device, const char* source,
     HRESULT hr = D3DCompile(hlsl, hlsl_len, "mental_cs", nullptr, nullptr,
                             "main", "cs_5_0", 0, 0, &blob, &errors);
 
-    if (hlsl != source) free(hlsl);
+    if (need_free_hlsl) free(hlsl);
 
     if (FAILED(hr)) {
         if (error && errors) {

@@ -373,6 +373,7 @@ jobs:
       - name: Fetch deps (macOS native)
         if: matrix.test_native
         run: |
+          export PATH="/opt/homebrew/bin:$PATH"
           VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
           mkdir -p external/glslang external/spirv-cross external/dxc external/naga/bin
           gh release download "$VERSION" --repo enigmaneering/redistributables \
@@ -399,6 +400,7 @@ jobs:
       - name: Build & Test (macOS native)
         if: matrix.test_native
         run: |
+          export PATH="/opt/homebrew/bin:$PATH"
           cmake -B build -DBUILD_TESTING=ON -DBUILD_EXAMPLES=OFF
           cmake --build build --parallel
           cd build && ctest --output-on-failure --timeout 120
@@ -440,11 +442,14 @@ jobs:
           set -e
           cd /tmp/mental
           ln -sf /opt/mental-external external
-          export DISPLAY=:0
           cmake -B build -DBUILD_TESTING=ON -DBUILD_EXAMPLES=OFF
           cmake --build build --parallel
           cd build
-          ctest --output-on-failure --timeout 120
+          if command -v xvfb-run >/dev/null 2>&1; then
+            xvfb-run --auto-servernum ctest --output-on-failure --timeout 120
+          else
+            ctest --output-on-failure --timeout 120
+          fi
           VMSCRIPT
 
       - name: Copy source to VM (Windows)
@@ -461,6 +466,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          export PATH="/opt/homebrew/bin:$PATH"
           # Download deps on the Mac and push via prlctl shared folder
           VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
           TMPDIR=$(mktemp -d)
