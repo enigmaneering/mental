@@ -360,7 +360,11 @@ jobs:
           - name: "Linux ARM64 (bare)"
             vm: ci-linux-arm64-bare
 
-          - name: "Windows ARM64"
+          # Windows ARM64 — Parallels' virtual adapter is Feature Level 11_1,
+          # which can't run D3D12 cs_6_0 compute pipelines.  Disable D3D12
+          # so the fallback chain exercises the D3D11 backend (cs_5_0).
+          # Real D3D12 ARM64 testing is covered by the hosted windows-11-arm runner.
+          - name: "Windows ARM64 (D3D11)"
             vm: "Windows 11"
             windows: true
 
