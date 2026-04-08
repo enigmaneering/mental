@@ -73,9 +73,11 @@ if(PLATFORM_DARWIN)
         message(STATUS "Metal backend force-disabled")
     endif()
 elseif(PLATFORM_WINDOWS)
+    # DXGI is shared by D3D12 and D3D11 — find it once
+    find_library(DXGI_LIBRARY dxgi)
+
     if(NOT MENTAL_DISABLE_D3D12)
         find_library(D3D12_LIBRARY d3d12)
-        find_library(DXGI_LIBRARY dxgi)
         if(D3D12_LIBRARY AND DXGI_LIBRARY)
             list(APPEND MENTAL_CXX_SOURCES backend_d3d12.cpp)
             set(MENTAL_HAS_D3D12 ON)

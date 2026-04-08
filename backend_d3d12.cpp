@@ -82,42 +82,13 @@ static int d3d12_init(void) {
             continue;
         }
 
-        /* Check if D3D12 is supported AND compute pipelines work.
-         * Some virtual adapters (e.g. Parallels) expose D3D12 for rendering
-         * but fail on CreateComputePipelineState.  We probe this at init
-         * so the fallback chain can drop to D3D11 or another backend. */
-        {
-            ComPtr<ID3D12Device> test_dev;
-            if (FAILED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
-                                          IID_PPV_ARGS(&test_dev)))) {
-                continue;
-            }
-
-            /* Probe compute support with a minimal root signature + empty PSO */
-            D3D12_ROOT_SIGNATURE_DESC rs_desc = {};
-            rs_desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
-            ComPtr<ID3DBlob> rs_blob;
-            ComPtr<ID3DBlob> rs_err;
-            if (FAILED(D3D12SerializeRootSignature(&rs_desc, D3D_ROOT_SIGNATURE_VERSION_1,
-                                                    &rs_blob, &rs_err))) {
-                continue;
-            }
-            ComPtr<ID3D12RootSignature> root_sig;
-            if (FAILED(test_dev->CreateRootSignature(0, rs_blob->GetBufferPointer(),
-                                                      rs_blob->GetBufferSize(),
-                                                      IID_PPV_ARGS(&root_sig)))) {
-                continue;
-            }
-
-            /* Try to check SM 6.0 support via feature query */
-            D3D12_FEATURE_DATA_SHADER_MODEL sm = { D3D_SHADER_MODEL_6_0 };
-            HRESULT sm_hr = test_dev->CheckFeatureSupport(
-                D3D12_FEATURE_SHADER_MODEL, &sm, sizeof(sm));
-            if (FAILED(sm_hr) || sm.HighestShaderModel < D3D_SHADER_MODEL_6_0) {
-                /* Adapter doesn't support Shader Model 6.0 — can't run cs_6_0 */
-                continue;
-            }
-
+        /* Check if D3D12 is supported with Feature Level 12_0+.
+         * FL 12_0 guarantees Shader Model 6.0 and compute pipeline support.
+         * Virtual adapters (e.g. Parallels) often expose D3D12 at FL 11_x
+         * which supports rendering but not cs_6_0 compute pipelines.
+         * Requiring FL 12_0 lets the fallback chain drop to D3D11. */
+        if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0,
+                                         __uuidof(ID3D12Device), nullptr))) {
             g_adapters.push_back(adapter);
         }
     }
