@@ -416,7 +416,13 @@ jobs:
           /usr/local/bin/prlctl start "${{ matrix.vm }}" 2>&1 || true
           echo "Waiting for VM to boot..."
           for i in $(seq 1 30); do
-            IP=$(/usr/local/bin/prlctl exec "${{ matrix.vm }}" hostname -I 2>/dev/null | awk '{print $1}')
+            if [ "${{ matrix.windows }}" = "true" ]; then
+              IP=$(/usr/local/bin/prlctl exec "${{ matrix.vm }}" ipconfig 2>/dev/null | grep "IPv4 Address" | head -1 | sed 's/.*: //')
+            else
+              IP=$(/usr/local/bin/prlctl exec "${{ matrix.vm }}" hostname -I 2>/dev/null | awk '{print $1}')
+            fi
+            # Trim whitespace
+            IP=$(echo "$IP" | tr -d '[:space:]')
             if [ -n "$IP" ]; then
               echo "VM IP: $IP"
               echo "VM_IP=$IP" >> $GITHUB_ENV

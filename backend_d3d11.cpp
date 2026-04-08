@@ -155,6 +155,8 @@ static void d3d11_device_destroy(void* device) {
 
 /* ── Buffer ──────────────────────────────────────────────────────── */
 
+static void d3d11_buffer_destroy(void* buffer);  /* forward decl */
+
 static void* d3d11_buffer_alloc(void* device, size_t size) {
     D3D11Device* dev = (D3D11Device*)device;
 

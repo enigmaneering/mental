@@ -33,6 +33,12 @@ int g_device_count = 0;
 pthread_mutex_t g_init_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_initialized = 0;
 
+/* Library registry (backends, transpilers, tools) */
+#define MAX_LIBRARIES 32
+static mental_library_info g_libraries[MAX_LIBRARIES];
+static int g_library_count = 0;
+static pthread_mutex_t g_library_lock = PTHREAD_MUTEX_INITIALIZER;
+
 /* Thread-local error state */
 static _Thread_local mental_error g_last_error = MENTAL_SUCCESS;
 static _Thread_local char g_last_error_message[512] = {0};
@@ -107,9 +113,33 @@ static void mental_initialize(void) {
             if (count > 0) {
                 selected_backend = backends[i];
                 g_device_count = count;
+                /* Register as selected */
+                mental_register_library(backends[i]->name, "selected", 1);
+            } else {
+                /* Initialized but no devices */
+                mental_register_library(backends[i]->name, "no devices", 0);
+                backends[i]->shutdown();
+            }
+        } else {
+            /* Failed to initialize */
+            mental_register_library(backends[i]->name, "init failed", 0);
+        }
+        if (selected_backend) break;
+    }
+
+    /* Register remaining backends that weren't tried */
+    for (int i = 0; i < backend_count; i++) {
+        if (backends[i] == selected_backend) continue;
+        /* Check if already registered (was tried above) */
+        int already = 0;
+        for (int j = 0; j < g_library_count; j++) {
+            if (strcmp(g_libraries[j].name, backends[i]->name) == 0) {
+                already = 1;
                 break;
             }
-            backends[i]->shutdown();
+        }
+        if (!already) {
+            mental_register_library(backends[i]->name, "skipped", 0);
         }
     }
 
@@ -132,9 +162,6 @@ static void mental_initialize(void) {
     }
 
     g_initialized = 1;
-
-    /* Register the selected backend as a library */
-    mental_register_library(selected_backend->name, NULL, 1);
 
     /* Register compiled-in transpilation libraries with versions */
     {
@@ -209,11 +236,6 @@ static void mental_initialize(void) {
  * Backends and tools register themselves here during initialization.
  * The registry is a simple dynamic array — no hardcoded library names.
  */
-
-#define MAX_LIBRARIES 32
-static mental_library_info g_libraries[MAX_LIBRARIES];
-static int g_library_count = 0;
-static pthread_mutex_t g_library_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void mental_register_library(const char *name, const char *version, int available) {
     pthread_mutex_lock(&g_library_lock);
