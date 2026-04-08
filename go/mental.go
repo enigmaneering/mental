@@ -30,6 +30,7 @@ const (
 	APIOpenGL APIType = 4
 	APIPoCL   APIType = 5
 	APIWebGPU APIType = 6
+	APID3D11  APIType = 7
 )
 
 // Error codes returned by the C library.

@@ -137,6 +137,9 @@ extern mental_backend* pocl_backend;
 #ifdef MENTAL_HAS_WEBGPU
 extern mental_backend* webgpu_backend;
 #endif
+#ifdef MENTAL_HAS_D3D11
+extern mental_backend* d3d11_backend;
+#endif
 
 /* Error handling */
 void mental_set_error(mental_error code, const char* message);

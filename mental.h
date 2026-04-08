@@ -45,7 +45,8 @@ typedef enum {
     MENTAL_API_OPENCL,
     MENTAL_API_OPENGL,
     MENTAL_API_POCL,
-    MENTAL_API_WEBGPU
+    MENTAL_API_WEBGPU,
+    MENTAL_API_D3D11
 } mental_api_type;
 
 /* Error codes */

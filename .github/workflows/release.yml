@@ -13,7 +13,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # ---- Run full test suite first — release is gated on this passing ----
+  # ---- Run full test suite first — includes non-standard environments ----
+  # ---- (bare Linux, Vulkan variants, WASM) that release builds don't cover ----
   test:
     name: "Test Suite"
     uses: ./.github/workflows/test-matrix.yml
@@ -36,7 +37,7 @@ jobs:
       - name: Check and update version
         run: |
           CURRENT=$(grep -oP 'project\(mental VERSION \K[0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt)
-          TARGET="${{ inputs.version }}"
+          TARGET=$(echo "${{ inputs.version }}" | sed 's/^v//')
 
           echo "Current version: $CURRENT"
           echo "Target version:  $TARGET"

@@ -77,6 +77,9 @@ static mental_backend** get_backend_priority(int* count) {
 #ifdef MENTAL_HAS_OPENGL
     if (opengl_backend) backends[(*count)++] = opengl_backend;
 #endif
+#ifdef MENTAL_HAS_D3D11
+    if (d3d11_backend) backends[(*count)++] = d3d11_backend;
+#endif
 #ifdef MENTAL_HAS_POCL
     if (pocl_backend) backends[(*count)++] = pocl_backend;
 #endif
@@ -332,6 +335,7 @@ const char* mental_device_api_name(mental_device dev) {
         case MENTAL_API_OPENGL: return "OpenGL";
         case MENTAL_API_POCL: return "PoCL";
         case MENTAL_API_WEBGPU: return "WebGPU";
+        case MENTAL_API_D3D11: return "D3D11";
         default: return "Unknown";
     }
 }
