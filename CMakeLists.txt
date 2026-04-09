@@ -195,6 +195,7 @@ set_target_properties(mental PROPERTIES
 target_include_directories(mental-static PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${EXTERNAL_DIR}/glslang
+    ${EXTERNAL_DIR}/glslang/SPIRV
     ${EXTERNAL_DIR}/spirv-cross
     ${EXTERNAL_DIR}/dxc/include
 )
@@ -202,6 +203,7 @@ target_include_directories(mental-static PUBLIC
 target_include_directories(mental PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${EXTERNAL_DIR}/glslang
+    ${EXTERNAL_DIR}/glslang/SPIRV
     ${EXTERNAL_DIR}/spirv-cross
     ${EXTERNAL_DIR}/dxc/include
 )
