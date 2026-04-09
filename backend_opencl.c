@@ -471,14 +471,16 @@ static void* opencl_kernel_compile(void* dev, const char* source, size_t source_
         }
 
         /* Debug: print the generated OpenCL C so CI logs show what's being compiled */
-        fprintf(stderr, "=== Generated OpenCL C (%zu bytes) ===\n%s=== END ===\n", opencl_len, opencl_src);
+        printf("=== Generated OpenCL C (%zu bytes) ===\n%s=== END ===\n", opencl_len, opencl_src);
+        fflush(stdout);
 
         /* Pass NULL for lengths to let OpenCL auto-detect (null-terminated) */
         const char* src_ptr = opencl_src;
         program = p_clCreateProgramWithSource(cl_dev->context, 1,
                                                &src_ptr,
                                                NULL, &err);
-        fprintf(stderr, "clCreateProgramWithSource returned: %d\n", err);
+        printf("clCreateProgramWithSource returned: %d\n", err);
+        fflush(stdout);
         free(opencl_src);
     }
 
