@@ -89,9 +89,9 @@ mental_language mental_api_to_language(mental_api_type api) {
         case MENTAL_API_METAL: return MENTAL_LANG_MSL;
         case MENTAL_API_D3D12: return MENTAL_LANG_HLSL;
         case MENTAL_API_VULKAN: return MENTAL_LANG_SPIRV;
-        case MENTAL_API_OPENCL: return MENTAL_LANG_SPIRV; /* OpenCL 2.1+ ingests SPIR-V directly */
+        case MENTAL_API_OPENCL: return MENTAL_LANG_GLSL; /* Backend handles GLSL → OpenCL C transpilation */
         case MENTAL_API_OPENGL: return MENTAL_LANG_GLSL; /* OpenGL 4.3+ uses GLSL compute */
-        case MENTAL_API_POCL:   return MENTAL_LANG_SPIRV; /* PoCL supports SPIR-V via clCreateProgramWithIL */
+        case MENTAL_API_POCL:   return MENTAL_LANG_GLSL; /* Backend handles GLSL → OpenCL C transpilation */
         case MENTAL_API_WEBGPU: return MENTAL_LANG_WGSL;  /* WebGPU uses WGSL natively */
         default: return MENTAL_LANG_GLSL;
     }
