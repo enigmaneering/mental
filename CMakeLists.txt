@@ -399,6 +399,11 @@ target_link_libraries(sanity-check mental-static)
 if(NOT EMSCRIPTEN)
     target_link_libraries(sanity-check m)  # libm for fabsf
 endif()
+# On Windows/MinGW, statically link the C++ runtime so the binary
+# runs without needing libc++.dll or libstdc++.dll on the system PATH.
+if(WIN32 AND MINGW)
+    target_link_options(sanity-check PRIVATE -static-libgcc -static-libstdc++ -static)
+endif()
 install(TARGETS sanity-check RUNTIME DESTINATION bin)
 
 # Tests (optional - enable with BUILD_TESTING)

@@ -474,20 +474,27 @@ jobs:
         run: |
           USER="${{ matrix.user }}"
           if [ "${{ matrix.windows }}" = "true" ]; then
-            # Windows: SCP needs Windows paths, run via MSYS2 bash
+            # Windows: SCP needs Windows paths
             scp -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
               artifact/sanity-check.exe $USER@$VM_IP:C:/Temp/sanity-check.exe
+            # Run and redirect output to a file, then cat it back
+            # (native Windows executables may not stream stdout through MSYS2 SSH)
             ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
-              $USER@$VM_IP "C:/Temp/sanity-check.exe"
+              $USER@$VM_IP 'C:/Temp/sanity-check.exe > C:/Temp/sanity-output.txt 2>&1; RC=$?; cat C:/Temp/sanity-output.txt; rm -f C:/Temp/sanity-check.exe C:/Temp/sanity-output.txt; exit $RC'
           else
             # Linux: Unix paths work normally
             scp -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
               artifact/sanity-check $USER@$VM_IP:/tmp/sanity-check
             ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
-              $USER@$VM_IP "chmod +x /tmp/sanity-check; /tmp/sanity-check"
+              $USER@$VM_IP "chmod +x /tmp/sanity-check; /tmp/sanity-check; rm -f /tmp/sanity-check"
           fi
 
-      - name: Stop VM
+      - name: Stop and restore VM
         if: ${{ always() && !matrix.native }}
         run: |
           /usr/local/bin/prlctl stop "${{ matrix.vm }}" --kill 2>&1 || true
+          # Restore to the latest snapshot (golden state)
+          SNAP_ID=$(/usr/local/bin/prlctl snapshot-list "${{ matrix.vm }}" 2>&1 | grep '\*' | grep -oE '\{[^}]+\}' | tail -1)
+          if [ -n "$SNAP_ID" ]; then
+            /usr/local/bin/prlctl snapshot-switch "${{ matrix.vm }}" --id "$SNAP_ID" 2>&1 || true
+          fi
