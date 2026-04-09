@@ -300,10 +300,9 @@ static void* metal_kernel_compile(void* dev, const char* source, size_t source_l
 }
 
 static void metal_kernel_dispatch(void* kernel, void** inputs, int input_count,
-                                   void* output, int work_size) {
+                                   void** outputs, int output_count, int work_size) {
     @autoreleasepool {
         MetalKernel* metal_kernel = (MetalKernel*)kernel;
-        MetalBuffer* output_buf = (MetalBuffer*)output;
 
         /* Create command buffer from the reusable queue */
         id<MTLCommandBuffer> commandBuffer = [metal_kernel->queue commandBuffer];
@@ -319,8 +318,13 @@ static void metal_kernel_dispatch(void* kernel, void** inputs, int input_count,
             }
         }
 
-        /* Bind output buffer */
-        [encoder setBuffer:output_buf->buffer offset:0 atIndex:input_count];
+        /* Bind output buffers */
+        for (int i = 0; i < output_count; i++) {
+            if (outputs[i]) {
+                MetalBuffer* output_buf = (MetalBuffer*)outputs[i];
+                [encoder setBuffer:output_buf->buffer offset:0 atIndex:input_count + i];
+            }
+        }
 
         /* Dispatch */
         MTLSize gridSize = MTLSizeMake(work_size, 1, 1);
@@ -492,11 +496,11 @@ static void* metal_pipe_create(void* dev) {
 }
 
 static int metal_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
-                            int input_count, void* output, int work_size) {
+                            int input_count, void** outputs, int output_count,
+                            int work_size) {
     @autoreleasepool {
         MetalPipe* pipe = (MetalPipe*)pipe_ptr;
         MetalKernel* mk = (MetalKernel*)kernel;
-        MetalBuffer* out_buf = (MetalBuffer*)output;
 
         id<MTLComputeCommandEncoder> encoder = [pipe->commandBuffer computeCommandEncoder];
         [encoder setComputePipelineState:mk->pipeline];
@@ -507,7 +511,12 @@ static int metal_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
                 [encoder setBuffer:in_buf->buffer offset:0 atIndex:i];
             }
         }
-        [encoder setBuffer:out_buf->buffer offset:0 atIndex:input_count];
+        for (int i = 0; i < output_count; i++) {
+            if (outputs[i]) {
+                MetalBuffer* out_buf = (MetalBuffer*)outputs[i];
+                [encoder setBuffer:out_buf->buffer offset:0 atIndex:input_count + i];
+            }
+        }
 
         MTLSize gridSize = MTLSizeMake(work_size, 1, 1);
         NSUInteger threadGroupSize = mk->pipeline.maxTotalThreadsPerThreadgroup;

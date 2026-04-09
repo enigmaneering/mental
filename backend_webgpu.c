@@ -706,12 +706,12 @@ static int webgpu_kernel_workgroup_size(void* kernel) {
 }
 
 static void webgpu_kernel_dispatch(void* kernel, void** inputs, int input_count,
-                                    void* output, int work_size) {
+                                    void** outputs, int output_count, int work_size) {
     WebGPUKernel *k = (WebGPUKernel*)kernel;
     WebGPUDevice *dev = k->dev;
 
-    /* Build bind group entries: inputs at bindings 0..N-1, output at binding N */
-    int total_bindings = input_count + 1;
+    /* Build bind group entries: inputs at bindings 0..N-1, outputs at bindings N..N+M-1 */
+    int total_bindings = input_count + output_count;
     WGPUBindGroupEntry *entries = calloc(total_bindings, sizeof(WGPUBindGroupEntry));
     if (!entries) return;
 
@@ -728,16 +728,18 @@ static void webgpu_kernel_dispatch(void* kernel, void** inputs, int input_count,
         };
     }
 
-    WebGPUBuffer *out_buf = (WebGPUBuffer*)output;
-    entries[input_count] = (WGPUBindGroupEntry){
-        .nextInChain = NULL,
-        .binding = (uint32_t)input_count,
-        .buffer = out_buf->buffer,
-        .offset = 0,
-        .size = (uint64_t)out_buf->size,
-        .sampler = NULL,
-        .textureView = NULL,
-    };
+    for (int i = 0; i < output_count; i++) {
+        WebGPUBuffer *out_buf = (WebGPUBuffer*)outputs[i];
+        entries[input_count + i] = (WGPUBindGroupEntry){
+            .nextInChain = NULL,
+            .binding = (uint32_t)(input_count + i),
+            .buffer = out_buf->buffer,
+            .offset = 0,
+            .size = (uint64_t)out_buf->size,
+            .sampler = NULL,
+            .textureView = NULL,
+        };
+    }
 
     WGPUBindGroupDescriptor bg_desc = {
         .nextInChain = NULL,
@@ -808,7 +810,8 @@ static void* webgpu_pipe_create(void* device) {
 }
 
 static int webgpu_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
-                            int input_count, void* output, int work_size) {
+                            int input_count, void** outputs, int output_count,
+                            int work_size) {
     WebGPUPipe* pipe = (WebGPUPipe*)pipe_ptr;
     WebGPUKernel* k = (WebGPUKernel*)kernel;
     WebGPUDevice* dev = pipe->dev;
@@ -820,7 +823,7 @@ static int webgpu_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
     if (!pass) return -1;
 
     /* Build bind group entries */
-    int total_bindings = input_count + 1;
+    int total_bindings = input_count + output_count;
     WGPUBindGroupEntry* entries = calloc(total_bindings, sizeof(WGPUBindGroupEntry));
     if (!entries) {
         p_wgpuComputePassEncoderEnd(pass);
@@ -841,16 +844,18 @@ static int webgpu_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
         };
     }
 
-    WebGPUBuffer* out_buf = (WebGPUBuffer*)output;
-    entries[input_count] = (WGPUBindGroupEntry){
-        .nextInChain = NULL,
-        .binding = (uint32_t)input_count,
-        .buffer = out_buf->buffer,
-        .offset = 0,
-        .size = (uint64_t)out_buf->size,
-        .sampler = NULL,
-        .textureView = NULL,
-    };
+    for (int i = 0; i < output_count; i++) {
+        WebGPUBuffer* out_buf = (WebGPUBuffer*)outputs[i];
+        entries[input_count + i] = (WGPUBindGroupEntry){
+            .nextInChain = NULL,
+            .binding = (uint32_t)(input_count + i),
+            .buffer = out_buf->buffer,
+            .offset = 0,
+            .size = (uint64_t)out_buf->size,
+            .sampler = NULL,
+            .textureView = NULL,
+        };
+    }
 
     WGPUBindGroupDescriptor bg_desc = {
         .nextInChain = NULL,

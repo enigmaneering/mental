@@ -144,8 +144,8 @@ func Compile(dev Device, source string) (Kernel, error) {
 //
 //	err := mental.Dispatch(kernel,
 //	    []uintptr{input1.Handle(), input2.Handle()},
-//	    output.Handle(), 1024)
-func Dispatch(kernel Kernel, inputs []uintptr, output uintptr, workSize int) error {
+//	    []uintptr{output.Handle()}, 1024)
+func Dispatch(kernel Kernel, inputs []uintptr, outputs []uintptr, workSize int) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -153,11 +153,16 @@ func Dispatch(kernel Kernel, inputs []uintptr, output uintptr, workSize int) err
 	if len(inputs) > 0 {
 		inputsPtr = (*C.mental_reference)(unsafe.Pointer(&inputs[0]))
 	}
+	var outputsPtr *C.mental_reference
+	if len(outputs) > 0 {
+		outputsPtr = (*C.mental_reference)(unsafe.Pointer(&outputs[0]))
+	}
 	rc := C.mental_dispatch(
 		C.mental_kernel(unsafe.Pointer(kernel)),
 		inputsPtr,
 		C.int(len(inputs)),
-		C.mental_reference(unsafe.Pointer(output)),
+		outputsPtr,
+		C.int(len(outputs)),
 		C.int(workSize),
 	)
 	if rc != 0 {
@@ -259,8 +264,8 @@ func CreatePipe(dev Device) (Pipe, error) {
 //
 // Pass reference handles via [Reference.Handle]:
 //
-//	pipe.Add(kernel, []uintptr{a.Handle()}, b.Handle(), 1024)
-func (p Pipe) Add(kernel Kernel, inputs []uintptr, output uintptr, workSize int) error {
+//	pipe.Add(kernel, []uintptr{a.Handle()}, []uintptr{b.Handle()}, 1024)
+func (p Pipe) Add(kernel Kernel, inputs []uintptr, outputs []uintptr, workSize int) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -268,12 +273,17 @@ func (p Pipe) Add(kernel Kernel, inputs []uintptr, output uintptr, workSize int)
 	if len(inputs) > 0 {
 		inputsPtr = (*C.mental_reference)(unsafe.Pointer(&inputs[0]))
 	}
+	var outputsPtr *C.mental_reference
+	if len(outputs) > 0 {
+		outputsPtr = (*C.mental_reference)(unsafe.Pointer(&outputs[0]))
+	}
 	rc := C.mental_pipe_add(
 		C.mental_pipe(unsafe.Pointer(p)),
 		C.mental_kernel(unsafe.Pointer(kernel)),
 		inputsPtr,
 		C.int(len(inputs)),
-		C.mental_reference(unsafe.Pointer(output)),
+		outputsPtr,
+		C.int(len(outputs)),
 		C.int(workSize),
 	)
 	if int(rc) != 0 {

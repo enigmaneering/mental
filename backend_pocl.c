@@ -365,7 +365,7 @@ static void* pocl_kernel_compile(void* dev, const char* source, size_t source_le
                     (unsigned char)source[3] == 0x07);
 
     if (is_spirv) {
-        /* PoCL supports clCreateProgramWithIL for SPIR-V */
+        /* SPIR-V binary — try clCreateProgramWithIL */
         typedef cl_program (CL_API_CALL *pfn_clCreateProgramWithIL)(
             cl_context, const void*, size_t, cl_int*);
         pfn_clCreateProgramWithIL fn = NULL;
@@ -373,30 +373,33 @@ static void* pocl_kernel_compile(void* dev, const char* source, size_t source_le
         if (fn) {
             program = fn(d->context, source, source_len, &err);
         } else {
-            if (error) snprintf(error, error_len, "PoCL: clCreateProgramWithIL not available");
+            if (error) snprintf(error, error_len, "PoCL: clCreateProgramWithIL not available for SPIR-V input");
             return NULL;
         }
     } else {
-        /* Non-SPIR-V source: compile to SPIR-V first, then use IL path.
-         * PoCL can't compile GLSL — it only speaks OpenCL C or SPIR-V. */
+        /* Non-SPIR-V source (GLSL, etc.) — transpile to OpenCL C:
+         * GLSL → SPIR-V (glslang) → GLSL (spirv-cross) → OpenCL C */
         size_t spirv_len = 0;
         unsigned char* spirv = mental_glsl_to_spirv(source, source_len,
                                                      &spirv_len, error, error_len);
         if (!spirv) return NULL;
 
-        typedef cl_program (CL_API_CALL *pfn_clCreateProgramWithIL)(
-            cl_context, const void*, size_t, cl_int*);
-        pfn_clCreateProgramWithIL fn = NULL;
-        *(void**)(&fn) = (void*)POCL_DLSYM(g_pocl_lib, "clCreateProgramWithIL");
-        if (fn) {
-            program = fn(d->context, spirv, spirv_len, &err);
-        } else {
-            /* No IL support — can't handle GLSL at all */
-            if (error) snprintf(error, error_len, "PoCL: cannot compile non-OpenCL-C source (no SPIR-V support)");
-            free(spirv);
-            return NULL;
-        }
+        size_t glsl_out_len = 0;
+        char* glsl_out = mental_spirv_to_glsl(spirv, spirv_len,
+                                               &glsl_out_len, error, error_len);
         free(spirv);
+        if (!glsl_out) return NULL;
+
+        size_t opencl_len = 0;
+        char* opencl_src = mental_glsl_to_opencl_c(glsl_out, glsl_out_len,
+                                                    &opencl_len, error, error_len);
+        free(glsl_out);
+        if (!opencl_src) return NULL;
+
+        program = p_clCreateProgramWithSource(d->context, 1,
+                                               (const char**)&opencl_src,
+                                               &opencl_len, &err);
+        free(opencl_src);
     }
 
     if (err != CL_SUCCESS) {
@@ -447,7 +450,7 @@ static int pocl_kernel_workgroup_size(void* kernel) {
 }
 
 static void pocl_kernel_dispatch(void* kernel, void** inputs, int input_count,
-                                  void* output, int work_size) {
+                                  void** outputs, int output_count, int work_size) {
     PoclKernel* k = (PoclKernel*)kernel;
 
     for (int i = 0; i < input_count; i++) {
@@ -457,8 +460,10 @@ static void pocl_kernel_dispatch(void* kernel, void** inputs, int input_count,
         }
     }
 
-    PoclBuffer* out = (PoclBuffer*)output;
-    p_clSetKernelArg(k->kernel, input_count, sizeof(cl_mem), &out->buffer);
+    for (int i = 0; i < output_count; i++) {
+        PoclBuffer* out = (PoclBuffer*)outputs[i];
+        p_clSetKernelArg(k->kernel, input_count + i, sizeof(cl_mem), &out->buffer);
+    }
 
     size_t global_work_size = work_size;
     p_clEnqueueNDRangeKernel(k->queue, k->kernel, 1, NULL, &global_work_size, NULL, 0, NULL, NULL);
@@ -489,7 +494,8 @@ static void* pocl_pipe_create(void* dev) {
 }
 
 static int pocl_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
-                          int input_count, void* output, int work_size) {
+                          int input_count, void** outputs, int output_count,
+                          int work_size) {
     PoclPipe* pipe = (PoclPipe*)pipe_ptr;
     PoclKernel* k = (PoclKernel*)kernel;
 
@@ -501,8 +507,11 @@ static int pocl_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
         }
     }
 
-    PoclBuffer* out = (PoclBuffer*)output;
-    p_clSetKernelArg(k->kernel, input_count, sizeof(cl_mem), &out->buffer);
+    /* Set output arguments */
+    for (int i = 0; i < output_count; i++) {
+        PoclBuffer* out = (PoclBuffer*)outputs[i];
+        p_clSetKernelArg(k->kernel, input_count + i, sizeof(cl_mem), &out->buffer);
+    }
 
     /* Enqueue without waiting */
     size_t global_work_size = work_size;

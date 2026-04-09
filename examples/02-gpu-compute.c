@@ -79,7 +79,8 @@ int main(void) {
 
     /* Dispatch */
     mental_reference inputs[2] = {ref_a, ref_b};
-    mental_dispatch(kernel, inputs, 2, ref_c, N);
+    mental_reference outputs[1] = {ref_c};
+    mental_dispatch(kernel, inputs, 2, outputs, 1, N);
     printf("Dispatched.\n");
 
     /* Read back result */

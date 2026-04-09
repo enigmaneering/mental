@@ -99,7 +99,7 @@ int main(void) {
 
     /* Dispatch kernel */
     mental_reference inputs[] = { input0, input1 };
-    mental_dispatch(kernel, inputs, 2, output, count);
+    mental_dispatch(kernel, inputs, 2, (mental_reference[]){output}, 1, count);
     ASSERT_NO_ERROR();
 
     /* Read and verify results */

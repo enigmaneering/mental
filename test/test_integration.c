@@ -147,7 +147,7 @@ int main(void) {
     ASSERT(kernel != NULL, "Failed to compile kernel");
 
     mental_reference inputs[] = { input };
-    mental_dispatch(kernel, inputs, 1, output, count);
+    mental_dispatch(kernel, inputs, 1, (mental_reference[]){output}, 1, count);
 
     /* Read and verify results */
     float* output_data = malloc(size);

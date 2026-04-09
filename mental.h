@@ -167,8 +167,10 @@ mental_device mental_reference_device(mental_reference ref);
  */
 
 mental_kernel mental_compile(mental_device dev, const char* source, size_t source_len);
-int mental_dispatch(mental_kernel kernel, mental_reference* inputs, int input_count,
-                    mental_reference output, int work_size);
+int mental_dispatch(mental_kernel kernel,
+                    mental_reference* inputs, int input_count,
+                    mental_reference* outputs, int output_count,
+                    int work_size);
 void mental_kernel_finalize(mental_kernel kernel);
 
 /*
@@ -186,8 +188,8 @@ void mental_kernel_finalize(mental_kernel kernel);
  *
  * Usage:
  *   mental_pipe pipe = mental_pipe_create(device);
- *   mental_pipe_add(pipe, kernel_a, inputs, 2, intermediate, N);
- *   mental_pipe_add(pipe, kernel_b, &intermediate, 1, output, N);
+ *   mental_pipe_add(pipe, kernel_a, inputs, 2, &intermediate, 1, N);
+ *   mental_pipe_add(pipe, kernel_b, &intermediate, 1, &output, 1, N);
  *   mental_pipe_execute(pipe);   // one GPU submission for both
  *   mental_pipe_finalize(pipe);
  */
@@ -197,7 +199,8 @@ typedef struct mental_pipe_t* mental_pipe;
 mental_pipe mental_pipe_create(mental_device device);
 int mental_pipe_add(mental_pipe pipe, mental_kernel kernel,
                      mental_reference *inputs, int input_count,
-                     mental_reference output, int work_size);
+                     mental_reference *outputs, int output_count,
+                     int work_size);
 int mental_pipe_execute(mental_pipe pipe);
 void mental_pipe_finalize(mental_pipe pipe);
 

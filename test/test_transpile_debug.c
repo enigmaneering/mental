@@ -85,7 +85,7 @@ int main(void) {
     mental_reference_write(input1, data1, size);
 
     mental_reference inputs[] = {input0, input1};
-    mental_dispatch(kernel, inputs, 2, output, count);
+    mental_dispatch(kernel, inputs, 2, (mental_reference[]){output}, 1, count);
 
     float results[4] = {0};
     mental_reference_read(output, results, size);

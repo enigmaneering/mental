@@ -699,7 +699,7 @@ static int run_shader_on_device(const char* label, const char* source, size_t so
     mental_reference_write(in1, d1, size);
 
     mental_reference inputs[] = { in0, in1 };
-    mental_dispatch(kernel, inputs, 2, out, (int)count);
+    mental_dispatch(kernel, inputs, 2, (mental_reference[]){out}, 1, (int)count);
     ASSERT(mental_get_error() == MENTAL_SUCCESS, "dispatch succeeded");
 
     float results[64];

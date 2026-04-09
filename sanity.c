@@ -246,7 +246,8 @@ static void check_dispatch(mental_device dev, mental_kernel kernel) {
     mental_reference_pin(ref_c, dev);
 
     mental_reference inputs[2] = {ref_a, ref_b};
-    int rc = mental_dispatch(kernel, inputs, 2, ref_c, N);
+    mental_reference out_refs[1] = {ref_c};
+    int rc = mental_dispatch(kernel, inputs, 2, out_refs, 1, N);
     if (rc != 0) {
         fail("dispatch", mental_get_error_message());
         mental_reference_close(ref_a);
@@ -327,11 +328,13 @@ static void check_pipe(mental_device dev) {
 
     /* Stage 1: B = A + A (doubling) */
     mental_reference add_inputs[2] = {ref_a, ref_a};
-    mental_pipe_add(pipe, k_add, add_inputs, 2, ref_b, N);
+    mental_reference add_outputs[1] = {ref_b};
+    mental_pipe_add(pipe, k_add, add_inputs, 2, add_outputs, 1, N);
 
     /* Stage 2: C = B * 3 */
     mental_reference scale_inputs[1] = {ref_b};
-    mental_pipe_add(pipe, k_scale, scale_inputs, 1, ref_c, N);
+    mental_reference scale_outputs[1] = {ref_c};
+    mental_pipe_add(pipe, k_scale, scale_inputs, 1, scale_outputs, 1, N);
 
     if (mental_pipe_execute(pipe) != 0) {
         fail("pipe", mental_get_error_message());

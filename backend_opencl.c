@@ -436,35 +436,43 @@ static void* opencl_kernel_compile(void* dev, const char* source, size_t source_
                     (unsigned char)source[2] == 0x23 &&
                     (unsigned char)source[3] == 0x07);
 
-    /* If we have clCreateProgramWithIL (OpenCL 2.1+), always go through
-     * SPIR-V.  For non-SPIR-V sources (GLSL, HLSL, etc.), compile to
-     * SPIR-V first using the built-in transpiler.  This avoids feeding
-     * GLSL to clCreateProgramWithSource which expects OpenCL C. */
-    if (p_clCreateProgramWithIL) {
-        if (!is_spirv) {
-            /* Compile source to SPIR-V */
-            size_t spirv_len = 0;
-            unsigned char* spirv = mental_glsl_to_spirv(source, source_len,
-                                                         &spirv_len, error, error_len);
-            if (!spirv) return NULL;
-            program = p_clCreateProgramWithIL(cl_dev->context, spirv, spirv_len, &err);
-            free(spirv);
-        } else {
-            program = p_clCreateProgramWithIL(cl_dev->context, source, source_len, &err);
-        }
+    /* Strategy:
+     * 1. If source is already SPIR-V and we have clCreateProgramWithIL → use it
+     * 2. Otherwise, transpile GLSL → SPIR-V → GLSL (spirv-cross) → OpenCL C
+     *    and use clCreateProgramWithSource with the OpenCL C text.
+     *    This path works on any OpenCL implementation, no SPIR-V support needed. */
+    if (is_spirv && p_clCreateProgramWithIL) {
+        program = p_clCreateProgramWithIL(cl_dev->context, source, source_len, &err);
     } else if (is_spirv) {
-        if (error) snprintf(error, error_len, "SPIR-V input requires OpenCL 2.1+ (clCreateProgramWithIL not available on this ICD)");
+        if (error) snprintf(error, error_len, "SPIR-V input requires OpenCL 2.1+ (clCreateProgramWithIL not available)");
         return NULL;
     } else {
-        /* No clCreateProgramWithIL available — cannot compile GLSL on OpenCL.
-         * The source would need to be OpenCL C, which GLSL is not. */
-        if (error) snprintf(error, error_len, "OpenCL backend requires clCreateProgramWithIL (OpenCL 2.1+) to compile GLSL shaders. "
-                           "This OpenCL implementation does not support it.");
-        return NULL;
+        /* Transpile: GLSL → SPIR-V → GLSL (spirv-cross) → OpenCL C */
+        size_t spirv_len = 0;
+        unsigned char* spirv = mental_glsl_to_spirv(source, source_len,
+                                                     &spirv_len, error, error_len);
+        if (!spirv) return NULL;
+
+        size_t glsl_out_len = 0;
+        char* glsl_out = mental_spirv_to_glsl(spirv, spirv_len,
+                                               &glsl_out_len, error, error_len);
+        free(spirv);
+        if (!glsl_out) return NULL;
+
+        size_t opencl_len = 0;
+        char* opencl_src = mental_glsl_to_opencl_c(glsl_out, glsl_out_len,
+                                                    &opencl_len, error, error_len);
+        free(glsl_out);
+        if (!opencl_src) return NULL;
+
+        program = p_clCreateProgramWithSource(cl_dev->context, 1,
+                                               (const char**)&opencl_src,
+                                               &opencl_len, &err);
+        free(opencl_src);
     }
 
     if (!program || err != CL_SUCCESS) {
-        if (error) snprintf(error, error_len, "Failed to create OpenCL program via SPIR-V (err=%d)", err);
+        if (error) snprintf(error, error_len, "Failed to create OpenCL program (err=%d)", err);
         return NULL;
     }
 
@@ -527,7 +535,7 @@ static int opencl_kernel_workgroup_size(void* kernel) {
 }
 
 static void opencl_kernel_dispatch(void* kernel, void** inputs, int input_count,
-                                    void* output, int work_size) {
+                                    void** outputs, int output_count, int work_size) {
     OpenCLKernel* cl_kernel = (OpenCLKernel*)kernel;
 
     /* Set kernel arguments */
@@ -538,9 +546,11 @@ static void opencl_kernel_dispatch(void* kernel, void** inputs, int input_count,
         }
     }
 
-    /* Set output argument */
-    OpenCLBuffer* output_buf = (OpenCLBuffer*)output;
-    p_clSetKernelArg(cl_kernel->kernel, input_count, sizeof(cl_mem), &output_buf->buffer);
+    /* Set output arguments */
+    for (int i = 0; i < output_count; i++) {
+        OpenCLBuffer* output_buf = (OpenCLBuffer*)outputs[i];
+        p_clSetKernelArg(cl_kernel->kernel, input_count + i, sizeof(cl_mem), &output_buf->buffer);
+    }
 
     /* Execute */
     size_t global_work_size = work_size;
@@ -579,7 +589,8 @@ static void* opencl_pipe_create(void* dev) {
 }
 
 static int opencl_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
-                            int input_count, void* output, int work_size) {
+                            int input_count, void** outputs, int output_count,
+                            int work_size) {
     OpenCLPipe* pipe = (OpenCLPipe*)pipe_ptr;
     OpenCLKernel* cl_kernel = (OpenCLKernel*)kernel;
 
@@ -591,8 +602,11 @@ static int opencl_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
         }
     }
 
-    OpenCLBuffer* output_buf = (OpenCLBuffer*)output;
-    p_clSetKernelArg(cl_kernel->kernel, input_count, sizeof(cl_mem), &output_buf->buffer);
+    /* Set output arguments */
+    for (int i = 0; i < output_count; i++) {
+        OpenCLBuffer* output_buf = (OpenCLBuffer*)outputs[i];
+        p_clSetKernelArg(cl_kernel->kernel, input_count + i, sizeof(cl_mem), &output_buf->buffer);
+    }
 
     /* Enqueue without waiting */
     size_t global_work_size = work_size;

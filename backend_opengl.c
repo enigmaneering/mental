@@ -715,7 +715,7 @@ static int opengl_kernel_workgroup_size(void* kernel) {
 }
 
 static void opengl_kernel_dispatch(void* kernel, void** inputs, int input_count,
-                                    void* output, int work_size) {
+                                    void** outputs, int output_count, int work_size) {
     OpenGLKernel* gl_kernel = (OpenGLKernel*)kernel;
 
     pglUseProgram(gl_kernel->program);
@@ -728,9 +728,11 @@ static void opengl_kernel_dispatch(void* kernel, void** inputs, int input_count,
         }
     }
 
-    /* Bind output SSBO to the next binding point */
-    OpenGLBuffer* out_buf = (OpenGLBuffer*)output;
-    pglBindBufferBase(GL_SHADER_STORAGE_BUFFER, (GLuint)input_count, out_buf->ssbo);
+    /* Bind output SSBOs to binding points N..N+output_count-1 */
+    for (int i = 0; i < output_count; i++) {
+        OpenGLBuffer* out_buf = (OpenGLBuffer*)outputs[i];
+        pglBindBufferBase(GL_SHADER_STORAGE_BUFFER, (GLuint)(input_count + i), out_buf->ssbo);
+    }
 
     /* Dispatch — single dimension, workgroup size handled in shader */
     GLuint wg_size = (GLuint)opengl_kernel_workgroup_size(kernel);
@@ -767,7 +769,8 @@ static void* opengl_pipe_create(void* dev) {
 }
 
 static int opengl_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
-                            int input_count, void* output, int work_size) {
+                            int input_count, void** outputs, int output_count,
+                            int work_size) {
     (void)pipe_ptr;
     OpenGLKernel* gl_kernel = (OpenGLKernel*)kernel;
 
@@ -781,9 +784,11 @@ static int opengl_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
         }
     }
 
-    /* Bind output SSBO */
-    OpenGLBuffer* out_buf = (OpenGLBuffer*)output;
-    pglBindBufferBase(GL_SHADER_STORAGE_BUFFER, (GLuint)input_count, out_buf->ssbo);
+    /* Bind output SSBOs */
+    for (int i = 0; i < output_count; i++) {
+        OpenGLBuffer* out_buf = (OpenGLBuffer*)outputs[i];
+        pglBindBufferBase(GL_SHADER_STORAGE_BUFFER, (GLuint)(input_count + i), out_buf->ssbo);
+    }
 
     /* Dispatch */
     GLuint wg_size = (GLuint)opengl_kernel_workgroup_size(kernel);

@@ -401,38 +401,35 @@ mental_kernel mental_compile(mental_device dev, const char* source, size_t sourc
     return kernel;
 }
 
-int mental_dispatch(mental_kernel kernel, mental_reference* inputs, int input_count,
-                    mental_reference output, int work_size) {
+int mental_dispatch(mental_kernel kernel,
+                    mental_reference* inputs, int input_count,
+                    mental_reference* outputs, int output_count,
+                    int work_size) {
     if (!kernel || !kernel->valid) {
         mental_set_error(MENTAL_ERROR_INVALID_KERNEL, "Invalid kernel");
         return -1;
     }
 
-    if (!output || !output->valid) {
-        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Invalid output reference");
-        return -1;
-    }
-
-    /* All references must be pinned to a GPU device */
-    if (!output->backend_buffer) {
-        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Output reference is not pinned to a GPU device");
-        return -1;
-    }
-
+    /* Validate all references are pinned */
     for (int i = 0; i < input_count; i++) {
         if (inputs[i] && !inputs[i]->backend_buffer) {
             mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Input reference is not pinned to a GPU device");
             return -1;
         }
     }
+    for (int i = 0; i < output_count; i++) {
+        if (!outputs[i] || !outputs[i]->valid || !outputs[i]->backend_buffer) {
+            mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Output reference is not pinned to a GPU device");
+            return -1;
+        }
+    }
 
-    /* Collect all unique references (inputs + output) for ordered locking */
-    mental_reference lock_order[input_count + 1];
+    /* Collect all unique references (inputs + outputs) for ordered locking */
+    mental_reference lock_order[input_count + output_count];
     int lock_count = 0;
 
     for (int i = 0; i < input_count; i++) {
         if (inputs[i] && inputs[i]->valid) {
-            /* Check for duplicates */
             int dup = 0;
             for (int j = 0; j < lock_count; j++) {
                 if (lock_order[j] == inputs[i]) { dup = 1; break; }
@@ -440,15 +437,17 @@ int mental_dispatch(mental_kernel kernel, mental_reference* inputs, int input_co
             if (!dup) lock_order[lock_count++] = inputs[i];
         }
     }
-    if (output->valid) {
-        int dup = 0;
-        for (int j = 0; j < lock_count; j++) {
-            if (lock_order[j] == output) { dup = 1; break; }
+    for (int i = 0; i < output_count; i++) {
+        if (outputs[i]->valid) {
+            int dup = 0;
+            for (int j = 0; j < lock_count; j++) {
+                if (lock_order[j] == outputs[i]) { dup = 1; break; }
+            }
+            if (!dup) lock_order[lock_count++] = outputs[i];
         }
-        if (!dup) lock_order[lock_count++] = output;
     }
 
-    /* Sort by pointer address (bubble sort, N is small) to prevent deadlock */
+    /* Sort by pointer address to prevent deadlock */
     for (int i = 0; i < lock_count - 1; i++) {
         for (int j = 0; j < lock_count - 1 - i; j++) {
             if ((uintptr_t)lock_order[j] > (uintptr_t)lock_order[j + 1]) {
@@ -459,10 +458,8 @@ int mental_dispatch(mental_kernel kernel, mental_reference* inputs, int input_co
         }
     }
 
-    /* Lock kernel */
+    /* Lock kernel, then references in sorted order */
     pthread_mutex_lock(&kernel->lock);
-
-    /* Lock references in sorted pointer order */
     for (int i = 0; i < lock_count; i++) {
         pthread_mutex_lock(&lock_order[i]->lock);
     }
@@ -475,19 +472,23 @@ int mental_dispatch(mental_kernel kernel, mental_reference* inputs, int input_co
             backend_inputs[i] = inputs[i] ? inputs[i]->backend_buffer : NULL;
         }
     }
+    void** backend_outputs = malloc(sizeof(void*) * output_count);
+    for (int i = 0; i < output_count; i++) {
+        backend_outputs[i] = outputs[i]->backend_buffer;
+    }
 
     /* Dispatch */
     kernel->device->backend->kernel_dispatch(
         kernel->backend_kernel,
-        backend_inputs,
-        input_count,
-        output->backend_buffer,
+        backend_inputs, input_count,
+        backend_outputs, output_count,
         work_size
     );
 
     if (backend_inputs) free(backend_inputs);
+    free(backend_outputs);
 
-    /* Unlock references in reverse sorted order */
+    /* Unlock in reverse order */
     for (int i = lock_count - 1; i >= 0; i--) {
         pthread_mutex_unlock(&lock_order[i]->lock);
     }
@@ -549,7 +550,8 @@ mental_pipe mental_pipe_create(mental_device device) {
 
 int mental_pipe_add(mental_pipe pipe, mental_kernel kernel,
                      mental_reference *inputs, int input_count,
-                     mental_reference output, int work_size) {
+                     mental_reference *outputs, int output_count,
+                     int work_size) {
     if (!pipe || !pipe->valid || !pipe->backend_pipe) {
         mental_set_error(MENTAL_ERROR_BACKEND_FAILED, "Invalid pipe");
         return -1;
@@ -568,14 +570,6 @@ int mental_pipe_add(mental_pipe pipe, mental_kernel kernel,
                          "Kernel device does not match pipe device");
         return -1;
     }
-    if (!output || !output->valid) {
-        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Invalid output reference");
-        return -1;
-    }
-    if (!output->backend_buffer) {
-        mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Output not pinned");
-        return -1;
-    }
 
     for (int i = 0; i < input_count; i++) {
         if (inputs[i] && !inputs[i]->backend_buffer) {
@@ -583,10 +577,15 @@ int mental_pipe_add(mental_pipe pipe, mental_kernel kernel,
             return -1;
         }
     }
+    for (int i = 0; i < output_count; i++) {
+        if (!outputs[i] || !outputs[i]->valid || !outputs[i]->backend_buffer) {
+            mental_set_error(MENTAL_ERROR_INVALID_REFERENCE, "Output reference is not pinned");
+            return -1;
+        }
+    }
 
-    /* Collect all unique references (inputs + output) for ordered locking.
-     * Same deadlock-prevention pattern as mental_dispatch. */
-    mental_reference lock_order[input_count + 1];
+    /* Collect all unique references for ordered locking */
+    mental_reference lock_order[input_count + output_count];
     int lock_count = 0;
 
     for (int i = 0; i < input_count; i++) {
@@ -598,12 +597,14 @@ int mental_pipe_add(mental_pipe pipe, mental_kernel kernel,
             if (!dup) lock_order[lock_count++] = inputs[i];
         }
     }
-    if (output->valid) {
-        int dup = 0;
-        for (int j = 0; j < lock_count; j++) {
-            if (lock_order[j] == output) { dup = 1; break; }
+    for (int i = 0; i < output_count; i++) {
+        if (outputs[i]->valid) {
+            int dup = 0;
+            for (int j = 0; j < lock_count; j++) {
+                if (lock_order[j] == outputs[i]) { dup = 1; break; }
+            }
+            if (!dup) lock_order[lock_count++] = outputs[i];
         }
-        if (!dup) lock_order[lock_count++] = output;
     }
 
     /* Sort by pointer address to prevent deadlock */
@@ -639,13 +640,16 @@ int mental_pipe_add(mental_pipe pipe, mental_kernel kernel,
             backend_inputs[i] = inputs[i] ? inputs[i]->backend_buffer : NULL;
         }
     }
+    void **backend_outputs = malloc(sizeof(void*) * output_count);
+    for (int i = 0; i < output_count; i++) {
+        backend_outputs[i] = outputs[i]->backend_buffer;
+    }
 
     int rc = pipe->device->backend->pipe_add(
         pipe->backend_pipe,
         kernel->backend_kernel,
-        backend_inputs,
-        input_count,
-        output->backend_buffer,
+        backend_inputs, input_count,
+        backend_outputs, output_count,
         work_size
     );
     if (rc == 0) pipe->dispatch_count++;
@@ -658,6 +662,7 @@ int mental_pipe_add(mental_pipe pipe, mental_kernel kernel,
     pthread_mutex_unlock(&kernel->lock);
 
     if (backend_inputs) free(backend_inputs);
+    free(backend_outputs);
     return rc;
 }
 

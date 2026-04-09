@@ -99,13 +99,15 @@ struct mental_backend_t {
 
     void* (*kernel_compile)(void* dev, const char* source, size_t source_len, char* error, size_t error_len);
     int (*kernel_workgroup_size)(void* kernel);
-    void (*kernel_dispatch)(void* kernel, void** inputs, int input_count, void* output, int work_size);
+    void (*kernel_dispatch)(void* kernel, void** inputs, int input_count,
+                            void** outputs, int output_count, int work_size);
     void (*kernel_destroy)(void* kernel);
 
     /* Pipe operations (chained dispatch) */
     void* (*pipe_create)(void* dev);
     int   (*pipe_add)(void* pipe, void* kernel, void** inputs,
-                       int input_count, void* output, int work_size);
+                       int input_count, void** outputs, int output_count,
+                       int work_size);
     int   (*pipe_execute)(void* pipe);
     void  (*pipe_destroy)(void* pipe);
 

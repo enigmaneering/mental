@@ -90,7 +90,7 @@ void main() {
 
 	if err = mental.Dispatch(kernel,
 		[]uintptr{refA.Handle(), refB.Handle()},
-		refOut.Handle(), vectorSize); err != nil {
+		[]uintptr{refOut.Handle()}, vectorSize); err != nil {
 		fmt.Fprintf(os.Stderr, "dispatch failed: %v\n", err)
 		os.Exit(1)
 	}

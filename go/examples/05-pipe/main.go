@@ -122,9 +122,9 @@ void main() {
 	}
 	defer pipe.Finalize()
 
-	pipe.Add(kMultiply, []uintptr{refA.Handle()}, refB.Handle(), N)
-	pipe.Add(kAdd, []uintptr{refB.Handle()}, refC.Handle(), N)
-	pipe.Add(kScale, []uintptr{refC.Handle()}, refD.Handle(), N)
+	pipe.Add(kMultiply, []uintptr{refA.Handle()}, []uintptr{refB.Handle()}, N)
+	pipe.Add(kAdd, []uintptr{refB.Handle()}, []uintptr{refC.Handle()}, N)
+	pipe.Add(kScale, []uintptr{refC.Handle()}, []uintptr{refD.Handle()}, N)
 
 	fmt.Println("Pipe built: 3 dispatches queued.")
 

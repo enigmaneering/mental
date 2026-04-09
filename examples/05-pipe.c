@@ -104,13 +104,16 @@ int main(void) {
     }
 
     mental_reference inputs_1[1] = {ref_a};
-    mental_pipe_add(pipe, k_multiply, inputs_1, 1, ref_b, N);
+    mental_reference outputs_1[1] = {ref_b};
+    mental_pipe_add(pipe, k_multiply, inputs_1, 1, outputs_1, 1, N);
 
     mental_reference inputs_2[1] = {ref_b};
-    mental_pipe_add(pipe, k_add, inputs_2, 1, ref_c, N);
+    mental_reference outputs_2[1] = {ref_c};
+    mental_pipe_add(pipe, k_add, inputs_2, 1, outputs_2, 1, N);
 
     mental_reference inputs_3[1] = {ref_c};
-    mental_pipe_add(pipe, k_scale, inputs_3, 1, ref_d, N);
+    mental_reference outputs_3[1] = {ref_d};
+    mental_pipe_add(pipe, k_scale, inputs_3, 1, outputs_3, 1, N);
 
     printf("Pipe built: 3 dispatches queued.\n");
 

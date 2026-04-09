@@ -63,7 +63,7 @@ int main(void) {
 
     printf("Dispatching kernel...\n");
     mental_reference inputs[] = { input0, input1 };
-    mental_dispatch(kernel, inputs, 2, output, count);
+    mental_dispatch(kernel, inputs, 2, (mental_reference[]){output}, 1, count);
 
     if (mental_get_error() != MENTAL_SUCCESS) {
         printf("ERROR: Dispatch failed: %s\n", mental_get_error_message());

@@ -162,7 +162,7 @@ static int test_shader(const char* name, const char* shader_source, mental_devic
 
     /* Dispatch kernel */
     mental_reference inputs[] = { input0, input1 };
-    mental_dispatch(kernel, inputs, 2, output, count);
+    mental_dispatch(kernel, inputs, 2, (mental_reference[]){output}, 1, count);
 
     if (mental_get_error() != MENTAL_SUCCESS) {
         printf("    FAIL: Dispatch failed: %s\n", mental_get_error_message());

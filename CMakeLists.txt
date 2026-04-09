@@ -25,6 +25,7 @@ set(MENTAL_SOURCES
     reference.c
     transpile.c
     transpile_other.c
+    transpile_opencl.c
     sanity.c
     backend_opencl.c
     backend_opengl.c

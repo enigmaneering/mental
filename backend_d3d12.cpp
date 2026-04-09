@@ -715,12 +715,12 @@ static int d3d12_kernel_workgroup_size(void* kernel) {
 }
 
 static void d3d12_kernel_dispatch(void* kernel, void** inputs, int input_count,
-                                   void* output, int work_size) {
+                                   void** outputs, int output_count, int work_size) {
     if (!kernel) return;
 
     D3D12Kernel* d3d_kernel = (D3D12Kernel*)kernel;
-    D3D12Buffer* output_buf = (D3D12Buffer*)output;
-    D3D12Device* d3d_dev = output_buf->device;
+    D3D12Buffer* first_output = (D3D12Buffer*)outputs[0];
+    D3D12Device* d3d_dev = first_output->device;
 
     /* Reset command list */
     d3d_dev->allocator->Reset();
@@ -771,16 +771,19 @@ static void d3d12_kernel_dispatch(void* kernel, void** inputs, int input_count,
         d3d_dev->device->CreateShaderResourceView(input_buf->resource.Get(), &srv_desc, srv_handle);
     }
 
-    /* UAV for output buffer at slot input_count (register(u{input_count})) */
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
-    uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
-    uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    uav_desc.Buffer.NumElements = (UINT)(output_buf->size / 4);
-    uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+    /* UAV for output buffers at slots input_count..input_count+output_count-1 */
+    for (int o = 0; o < output_count; o++) {
+        D3D12Buffer* output_buf = (D3D12Buffer*)outputs[o];
+        D3D12_UNORDERED_ACCESS_VIEW_DESC out_uav_desc = {};
+        out_uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+        out_uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        out_uav_desc.Buffer.NumElements = (UINT)(output_buf->size / 4);
+        out_uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
 
-    D3D12_CPU_DESCRIPTOR_HANDLE output_handle = cpu_handle;
-    output_handle.ptr += input_count * descriptor_size;
-    d3d_dev->device->CreateUnorderedAccessView(output_buf->resource.Get(), nullptr, &uav_desc, output_handle);
+        D3D12_CPU_DESCRIPTOR_HANDLE output_handle = cpu_handle;
+        output_handle.ptr += (input_count + o) * descriptor_size;
+        d3d_dev->device->CreateUnorderedAccessView(output_buf->resource.Get(), nullptr, &out_uav_desc, output_handle);
+    }
 
     /* Set descriptor table */
     D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle = d3d_kernel->descriptor_heap->GetGPUDescriptorHandleForHeapStart();
@@ -848,10 +851,10 @@ static void* d3d12_pipe_create(void* dev) {
 }
 
 static int d3d12_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
-                           int input_count, void* output, int work_size) {
+                           int input_count, void** outputs, int output_count,
+                           int work_size) {
     D3D12Pipe* pipe = (D3D12Pipe*)pipe_ptr;
     D3D12Kernel* d3d_kernel = (D3D12Kernel*)kernel;
-    D3D12Buffer* output_buf = (D3D12Buffer*)output;
 
     /* Set pipeline state and root signature */
     pipe->command_list->SetPipelineState(d3d_kernel->pipeline.Get());
@@ -893,16 +896,19 @@ static int d3d12_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
         pipe->device->device->CreateShaderResourceView(input_buf->resource.Get(), &srv_desc, srv_handle);
     }
 
-    /* UAV for output buffer */
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
-    uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
-    uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    uav_desc.Buffer.NumElements = (UINT)(output_buf->size / 4);
-    uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+    /* UAV for output buffers at slots input_count..input_count+output_count-1 */
+    for (int o = 0; o < output_count; o++) {
+        D3D12Buffer* output_buf = (D3D12Buffer*)outputs[o];
+        D3D12_UNORDERED_ACCESS_VIEW_DESC out_uav_desc = {};
+        out_uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+        out_uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        out_uav_desc.Buffer.NumElements = (UINT)(output_buf->size / 4);
+        out_uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
 
-    D3D12_CPU_DESCRIPTOR_HANDLE output_handle = cpu_handle;
-    output_handle.ptr += input_count * descriptor_size;
-    pipe->device->device->CreateUnorderedAccessView(output_buf->resource.Get(), nullptr, &uav_desc, output_handle);
+        D3D12_CPU_DESCRIPTOR_HANDLE output_handle = cpu_handle;
+        output_handle.ptr += (input_count + o) * descriptor_size;
+        pipe->device->device->CreateUnorderedAccessView(output_buf->resource.Get(), nullptr, &out_uav_desc, output_handle);
+    }
 
     /* Set descriptor table */
     D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle = d3d_kernel->descriptor_heap->GetGPUDescriptorHandleForHeapStart();

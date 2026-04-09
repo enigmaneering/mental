@@ -50,6 +50,13 @@ char* mental_spirv_to_msl(const unsigned char* spirv, size_t spirv_len, size_t* 
 /* Transpile SPIRV to WGSL */
 char* mental_spirv_to_wgsl(const unsigned char* spirv, size_t spirv_len, size_t* out_len, char* error, size_t error_len);
 
+/* Transpile GLSL (from spirv-cross) to OpenCL C source code.
+ * Used by the OpenCL/PoCL backends when clCreateProgramWithIL isn't
+ * available or rejects Vulkan SPIR-V.
+ * Pipeline: GLSL → SPIR-V → GLSL (spirv-cross) → OpenCL C (this). */
+char* mental_glsl_to_opencl_c(const char* glsl_source, size_t glsl_len,
+                               size_t* out_len, char* error, size_t error_len);
+
 /* Free transpilation results */
 void mental_transpile_free(char* result);
 

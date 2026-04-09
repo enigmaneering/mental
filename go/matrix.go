@@ -150,25 +150,25 @@ func (m *Matrix[T]) Execute(a, b uintptr, out uintptr) error {
 	}
 
 	// Stage 1: Decompose A and B.
-	if err := pipe.Add(m.kDecompose, []uintptr{a}, m.digitsA, m.n); err != nil {
+	if err := pipe.Add(m.kDecompose, []uintptr{a}, []uintptr{m.digitsA}, m.n); err != nil {
 		pipe.Finalize()
 		return fmt.Errorf("mental: matrix decompose A: %w", err)
 	}
-	if err := pipe.Add(m.kDecompose, []uintptr{b}, m.digitsB, m.n); err != nil {
+	if err := pipe.Add(m.kDecompose, []uintptr{b}, []uintptr{m.digitsB}, m.n); err != nil {
 		pipe.Finalize()
 		return fmt.Errorf("mental: matrix decompose B: %w", err)
 	}
 
 	// Stage 2: Operate on each digit position.
 	for d := 0; d < m.p; d++ {
-		if err := pipe.Add(m.kOps[d], []uintptr{m.digitsA, m.digitsB}, m.results, m.n); err != nil {
+		if err := pipe.Add(m.kOps[d], []uintptr{m.digitsA, m.digitsB}, []uintptr{m.results}, m.n); err != nil {
 			pipe.Finalize()
 			return fmt.Errorf("mental: matrix operate[%d]: %w", d, err)
 		}
 	}
 
 	// Stage 3: Recompose.
-	if err := pipe.Add(m.kRecompose, []uintptr{m.results}, out, m.n); err != nil {
+	if err := pipe.Add(m.kRecompose, []uintptr{m.results}, []uintptr{out}, m.n); err != nil {
 		pipe.Finalize()
 		return fmt.Errorf("mental: matrix recompose: %w", err)
 	}

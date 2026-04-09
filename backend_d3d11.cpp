@@ -478,16 +478,16 @@ static int d3d11_kernel_workgroup_size(void* kernel) {
 }
 
 static void d3d11_kernel_dispatch(void* kernel, void** inputs,
-                                   int input_count, void* output,
-                                   int work_size) {
+                                   int input_count, void** outputs,
+                                   int output_count, int work_size) {
     D3D11Kernel* k = (D3D11Kernel*)kernel;
     D3D11Device* dev = k->device;
-    D3D11Buffer* out_buf = (D3D11Buffer*)output;
 
     dev->ctx->CSSetShader(k->shader, nullptr, 0);
 
-    /* Bind UAVs: inputs at slots 0..input_count-1, output at slot input_count */
-    int total_slots = input_count + 1;
+    /* Bind UAVs: inputs at slots 0..input_count-1,
+     * outputs at slots input_count..input_count+output_count-1 */
+    int total_slots = input_count + output_count;
     ID3D11UnorderedAccessView** uavs = (ID3D11UnorderedAccessView**)
         alloca(total_slots * sizeof(ID3D11UnorderedAccessView*));
 
@@ -495,7 +495,10 @@ static void d3d11_kernel_dispatch(void* kernel, void** inputs,
         D3D11Buffer* in_buf = (D3D11Buffer*)inputs[i];
         uavs[i] = in_buf ? in_buf->uav : nullptr;
     }
-    uavs[input_count] = out_buf->uav;
+    for (int o = 0; o < output_count; o++) {
+        D3D11Buffer* out_buf = (D3D11Buffer*)outputs[o];
+        uavs[input_count + o] = out_buf ? out_buf->uav : nullptr;
+    }
 
     dev->ctx->CSSetUnorderedAccessViews(0, total_slots, uavs, nullptr);
 
@@ -526,11 +529,12 @@ static void* d3d11_pipe_create(void* device) {
 }
 
 static int d3d11_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
-                           int input_count, void* output, int work_size) {
+                           int input_count, void** outputs, int output_count,
+                           int work_size) {
     /* D3D11 immediate context — dispatch runs now.
      * Sequential execution is guaranteed on the immediate context,
      * and UAV hazards are handled automatically by the runtime. */
-    d3d11_kernel_dispatch(kernel, inputs, input_count, output, work_size);
+    d3d11_kernel_dispatch(kernel, inputs, input_count, outputs, output_count, work_size);
     return 0;
 }
 
