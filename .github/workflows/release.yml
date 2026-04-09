@@ -261,32 +261,38 @@ jobs:
             fi
           fi
 
-      # ---- Fetch external dependencies (WASM — build glslang/spirv-cross with Emscripten) ----
+      # ---- Fetch external dependencies (WASM) ----
       - name: Fetch external dependencies (WASM)
         if: matrix.platform == 'wasm'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # For WASM we need glslang and spirv-cross compiled to WASM.
-          # Download the linux-amd64 source-compatible archives for headers,
-          # then Emscripten will compile the C/C++ sources directly.
           VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
-          mkdir -p external/glslang external/spirv-cross external/wgpu/include
+          mkdir -p external/glslang external/spirv-cross
 
-          # glslang headers + static libs (we'll rebuild with emcc)
-          gh release download "$VERSION" --repo enigmaneering/redistributables \
-            --pattern "glslang-linux-amd64.tar.gz" --dir .
-          tar -xzf "glslang-linux-amd64.tar.gz"
-          # Copy headers only — the .a files are x86 and won't link with WASM
-          cp -r glslang-linux-amd64/include/* external/glslang/include/ 2>/dev/null || \
-          cp -r glslang-linux-amd64/* external/glslang/
+          # Download WASM-compiled archives (fall back to linux-amd64 for headers only)
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "glslang-wasm.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "glslang-wasm.tar.gz"
+            cp -r glslang-wasm/* external/glslang/
+          else
+            gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "glslang-linux-amd64.tar.gz" --dir .
+            tar -xzf "glslang-linux-amd64.tar.gz"
+            cp -r glslang-linux-amd64/* external/glslang/
+          fi
 
-          # spirv-cross headers
-          gh release download "$VERSION" --repo enigmaneering/redistributables \
-            --pattern "spirv-cross-linux-amd64.tar.gz" --dir .
-          tar -xzf "spirv-cross-linux-amd64.tar.gz"
-          cp -r spirv-cross-linux-amd64/* external/spirv-cross/
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "spirv-cross-wasm.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "spirv-cross-wasm.tar.gz"
+            cp -r spirv-cross-wasm/* external/spirv-cross/
+          else
+            gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "spirv-cross-linux-amd64.tar.gz" --dir .
+            tar -xzf "spirv-cross-linux-amd64.tar.gz"
+            cp -r spirv-cross-linux-amd64/* external/spirv-cross/
+          fi
 
       # ---- Install Emscripten (WASM only) ----
       - name: Install Emscripten

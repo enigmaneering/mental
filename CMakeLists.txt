@@ -502,11 +502,12 @@ if(BUILD_EXAMPLES)
     target_link_libraries(05-example-pipe mental-static)
 endif()
 
-# Sanity check binary (always built — ships with the library)
+# Sanity check binary (ships with the library)
 add_executable(sanity-check sanity-check.c)
 target_link_libraries(sanity-check mental-static)
-target_link_libraries(sanity-check m)  # libm for fabsf
-
+if(NOT EMSCRIPTEN)
+    target_link_libraries(sanity-check m)  # libm for fabsf
+endif()
 install(TARGETS sanity-check RUNTIME DESTINATION bin)
 
 # Tests (optional - enable with BUILD_TESTING)

@@ -114,14 +114,31 @@ jobs:
         run: |
           VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
           mkdir -p external/glslang external/spirv-cross
-          gh release download "$VERSION" --repo enigmaneering/redistributables \
-            --pattern "glslang-linux-amd64.tar.gz" --dir .
-          tar -xzf "glslang-linux-amd64.tar.gz"
-          cp -r glslang-linux-amd64/* external/glslang/
-          gh release download "$VERSION" --repo enigmaneering/redistributables \
-            --pattern "spirv-cross-linux-amd64.tar.gz" --dir .
-          tar -xzf "spirv-cross-linux-amd64.tar.gz"
-          cp -r spirv-cross-linux-amd64/* external/spirv-cross/
+
+          # Try WASM-specific archives first, fall back to linux-amd64 for headers
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "glslang-wasm.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "glslang-wasm.tar.gz"
+            cp -r glslang-wasm/* external/glslang/
+          else
+            echo "WASM glslang not available, using linux-amd64 headers (link will fail for executables)"
+            gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "glslang-linux-amd64.tar.gz" --dir .
+            tar -xzf "glslang-linux-amd64.tar.gz"
+            cp -r glslang-linux-amd64/* external/glslang/
+          fi
+
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "spirv-cross-wasm.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "spirv-cross-wasm.tar.gz"
+            cp -r spirv-cross-wasm/* external/spirv-cross/
+          else
+            echo "WASM spirv-cross not available, using linux-amd64 headers"
+            gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "spirv-cross-linux-amd64.tar.gz" --dir .
+            tar -xzf "spirv-cross-linux-amd64.tar.gz"
+            cp -r spirv-cross-linux-amd64/* external/spirv-cross/
+          fi
 
       - name: Fetch external dependencies (Unix)
         if: runner.os != 'Windows' && matrix.platform != 'wasm'
