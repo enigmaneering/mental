@@ -71,6 +71,8 @@ jobs:
             packages: >-
               libvulkan-dev mesa-vulkan-drivers
               libopengl-dev libglx-dev libx11-dev
+              ocl-icd-opencl-dev opencl-headers
+              pocl-opencl-icd
               xvfb
             install_vulkan: false
             needs_xvfb: true
@@ -234,6 +236,10 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
             make
+            mingw-w64-x86_64-opencl-headers
+            mingw-w64-x86_64-opencl-icd
+            mingw-w64-x86_64-vulkan-headers
+            mingw-w64-x86_64-vulkan-loader
 
       - name: Set up MinGW (Windows arm64)
         if: runner.os == 'Windows' && matrix.platform == 'windows-arm64'
@@ -245,6 +251,10 @@ jobs:
             mingw-w64-clang-aarch64-cc
             mingw-w64-clang-aarch64-cmake
             make
+            mingw-w64-clang-aarch64-opencl-headers
+            mingw-w64-clang-aarch64-opencl-icd
+            mingw-w64-clang-aarch64-vulkan-headers
+            mingw-w64-clang-aarch64-vulkan-loader
 
       # ---- Configure ----
       - name: Configure (Unix)

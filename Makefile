@@ -1,14 +1,19 @@
 # Mental library build and test automation
 .PHONY: all build test clean rebuild
 
+# Detect MSYS2/MinGW and use the right generator
+ifdef MSYSTEM
+  CMAKE_GENERATOR := -G "MSYS Makefiles"
+endif
+
 # Default target: build and test
 all: build test
 
 # Build the library and tests
 build:
 	@echo "Building mental library..."
-	@mkdir -p build
-	@cd build && cmake .. && $(MAKE)
+	@cmake -B build $(CMAKE_GENERATOR)
+	@cmake --build build --parallel
 
 # Run tests
 test: build
