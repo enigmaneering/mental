@@ -473,18 +473,19 @@ jobs:
         if: ${{ !matrix.native }}
         run: |
           USER="${{ matrix.user }}"
-          BINARY="sanity-check"
           if [ "${{ matrix.windows }}" = "true" ]; then
-            BINARY="sanity-check.exe"
+            # Windows: SCP needs Windows paths, run via MSYS2 bash
+            scp -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
+              artifact/sanity-check.exe $USER@$VM_IP:C:/Temp/sanity-check.exe
+            ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
+              $USER@$VM_IP "C:/Temp/sanity-check.exe"
+          else
+            # Linux: Unix paths work normally
+            scp -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
+              artifact/sanity-check $USER@$VM_IP:/tmp/sanity-check
+            ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
+              $USER@$VM_IP "chmod +x /tmp/sanity-check; /tmp/sanity-check"
           fi
-
-          # Copy binary to VM
-          scp -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
-            artifact/$BINARY $USER@$VM_IP:/tmp/$BINARY
-
-          # Run it
-          ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
-            $USER@$VM_IP "chmod +x /tmp/$BINARY 2>/dev/null; /tmp/$BINARY"
 
       - name: Stop VM
         if: ${{ always() && !matrix.native }}
