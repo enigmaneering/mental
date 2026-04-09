@@ -146,6 +146,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ---- Verify architecture matches expectations ----
+      - name: Verify runner architecture
+        shell: bash
+        run: |
+          echo "Platform: ${{ matrix.platform }}"
+          echo "Runner: ${{ matrix.runner }}"
+          echo "RUNNER_ARCH: $RUNNER_ARCH"
+          echo "RUNNER_OS: $RUNNER_OS"
+          echo "uname -m: $(uname -m 2>/dev/null || echo N/A)"
+
+          if [[ "${{ matrix.platform }}" == "darwin-amd64" && "$RUNNER_ARCH" != "X64" ]]; then
+            echo "::error::Expected amd64 (X64) runner but got $RUNNER_ARCH"
+            exit 1
+          fi
+          if [[ "${{ matrix.platform }}" == "darwin-arm64" && "$RUNNER_ARCH" != "ARM64" ]]; then
+            echo "::error::Expected arm64 runner but got $RUNNER_ARCH"
+            exit 1
+          fi
+
       # ---- Emscripten (WASM only) ----
       - name: Install Emscripten
         if: matrix.platform == 'wasm'
