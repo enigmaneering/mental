@@ -310,3 +310,12 @@ func Shutdown() error {
 	}
 	return nil
 }
+
+// SanityCheck runs the built-in self-test suite.  Exercises device
+// enumeration, buffer operations, shader compilation, GPU dispatch,
+// and result verification.  Prints results to stdout.
+//
+// Returns 0 if all checks pass, non-zero on failure.
+func SanityCheck() int {
+	return int(C.mental_sanity_check())
+}

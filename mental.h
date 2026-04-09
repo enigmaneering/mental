@@ -248,6 +248,19 @@ void mental_register_library(const char *name, const char *version, int availabl
 void mental_atexit(void (*fn)(void));
 int mental_shutdown(void);
 
+/*
+ * Sanity Check (Built-in Self-Test)
+ *
+ * Exercises device enumeration, buffer operations, shader compilation,
+ * GPU dispatch, and result verification.  Prints results to stdout.
+ *
+ * Returns 0 if all checks pass, non-zero on failure.
+ * If no GPU devices are found, GPU checks are skipped and the function
+ * returns 0 (graceful degradation is correct behavior).
+ */
+
+int mental_sanity_check(void);
+
 #ifdef __cplusplus
 }
 #endif

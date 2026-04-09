@@ -6,8 +6,8 @@ ifdef MSYSTEM
   CMAKE_GENERATOR := -G "MSYS Makefiles"
 endif
 
-# Default target: build and test
-all: build test
+# Default target: build only
+all: build
 
 # Build the library and tests
 build:

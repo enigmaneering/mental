@@ -25,6 +25,7 @@ set(MENTAL_SOURCES
     reference.c
     transpile.c
     transpile_other.c
+    sanity.c
 )
 
 set(MENTAL_CXX_SOURCES
@@ -500,6 +501,13 @@ if(BUILD_EXAMPLES)
     add_executable(05-example-pipe examples/05-pipe.c)
     target_link_libraries(05-example-pipe mental-static)
 endif()
+
+# Sanity check binary (always built — ships with the library)
+add_executable(sanity-check sanity-check.c)
+target_link_libraries(sanity-check mental-static)
+target_link_libraries(sanity-check m)  # libm for fabsf
+
+install(TARGETS sanity-check RUNTIME DESTINATION bin)
 
 # Tests (optional - enable with BUILD_TESTING)
 option(BUILD_TESTING "Build test suite" ON)
