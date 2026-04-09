@@ -57,12 +57,15 @@ mental_language mental_detect_language(const char* source, size_t source_len) {
         return MENTAL_LANG_WGSL;
     }
 
-    /* MSL detection */
-    if (contains(source, source_len, "kernel void") ||
-        contains(source, source_len, "[[kernel]]") ||
-        contains(source, source_len, "device ") ||
-        contains(source, source_len, "threadgroup ")) {
-        return MENTAL_LANG_MSL;
+    /* MSL detection — avoid matching OpenCL C which also uses "kernel void".
+     * Check for "__kernel" first (OpenCL C) and skip MSL if found. */
+    if (!contains(source, source_len, "__kernel")) {
+        if (contains(source, source_len, "kernel void") ||
+            contains(source, source_len, "[[kernel]]") ||
+            contains(source, source_len, "device ") ||
+            contains(source, source_len, "threadgroup ")) {
+            return MENTAL_LANG_MSL;
+        }
     }
 
     /* HLSL detection */
