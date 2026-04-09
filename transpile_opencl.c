@@ -300,9 +300,22 @@ char* mental_glsl_to_opencl_c(const char* glsl_source, size_t glsl_len,
                     "uint ", "unsigned int ");
     if (current != body4) free(current);
 
-    /* Assemble the OpenCL C source */
+    /* Assemble the OpenCL C source with a GLSL compatibility shim.
+     * This bridges GLSL intrinsics that spirv-cross emits into their
+     * OpenCL C equivalents, so we don't need to enumerate every possible
+     * function — just define the shim and let the compiler resolve them. */
     pos += snprintf(output + pos, out_capacity - pos,
-                    "__kernel void mental_compute(%s)\n{\n%s}\n", args, final_body);
+        "/* GLSL compatibility shim */\n"
+        "inline unsigned int floatBitsToUint(float v) { return as_uint(v); }\n"
+        "inline float uintBitsToFloat(unsigned int v) { return as_float(v); }\n"
+        "inline int floatBitsToInt(float v) { return as_int(v); }\n"
+        "inline float intBitsToFloat(int v) { return as_float(v); }\n"
+        "inline float fract(float x) { return x - floor(x); }\n"
+        "inline float mod(float x, float y) { return x - y * floor(x / y); }\n"
+        "#define mix(a, b, t) ((a) + ((b) - (a)) * (t))\n"
+        "#define clamp(x, lo, hi) fmin(fmax((x), (lo)), (hi))\n"
+        "\n"
+        "__kernel void mental_compute(%s)\n{\n%s}\n", args, final_body);
 
     free(body4);
     free(final_body);
