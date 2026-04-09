@@ -3,10 +3,6 @@ name: Test Matrix
 on:
   workflow_dispatch:
   workflow_call:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
 
 # Cancel in-flight runs for the same ref
 concurrency:
@@ -15,10 +11,10 @@ concurrency:
 
 jobs:
   # ================================================================
-  #  Hosted runners — GitHub-provided, no real GPU
+  #  Build — hosted runners produce sanity-check binaries + run ctest
   # ================================================================
-  hosted:
-    name: "${{ matrix.name }}"
+  build:
+    name: "build: ${{ matrix.name }}"
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
 
@@ -26,13 +22,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS — Metal + OpenCL via Xcode
+          # macOS
           - name: "macOS arm64"
             runner: macos-14
             platform: darwin-arm64
             packages: ""
+            cmake_extra: ""
             install_vulkan: false
             needs_xvfb: false
+            artifact: sanity-check-darwin-arm64
 
           - name: "macOS amd64"
             runner: macos-14
@@ -41,14 +39,16 @@ jobs:
             packages: ""
             install_vulkan: false
             needs_xvfb: false
+            artifact: sanity-check-darwin-amd64
 
-          # Windows — D3D12 via Windows SDK
+          # Windows
           - name: "Windows amd64"
             runner: windows-latest
             platform: windows-amd64
             packages: ""
             install_vulkan: false
             needs_xvfb: false
+            artifact: sanity-check-windows-amd64
 
           - name: "Windows arm64"
             runner: windows-11-arm
@@ -56,16 +56,10 @@ jobs:
             packages: ""
             install_vulkan: false
             needs_xvfb: false
+            artifact: sanity-check-windows-arm64
 
-          - name: "Windows amd64 + Vulkan"
-            runner: windows-latest
-            platform: windows-amd64
-            packages: ""
-            install_vulkan: true
-            needs_xvfb: false
-
-          # Linux amd64 — Vulkan via lavapipe
-          - name: "Linux amd64 (Vulkan)"
+          # Linux
+          - name: "Linux amd64"
             runner: ubuntu-latest
             platform: linux-amd64
             packages: >-
@@ -76,14 +70,29 @@ jobs:
               xvfb
             install_vulkan: false
             needs_xvfb: true
+            artifact: sanity-check-linux-amd64
 
-          # WebAssembly — build-only verification
+          - name: "Linux arm64"
+            runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            packages: >-
+              libvulkan-dev mesa-vulkan-drivers
+              libopengl-dev libglx-dev libx11-dev
+              ocl-icd-opencl-dev opencl-headers
+              pocl-opencl-icd
+              xvfb
+            install_vulkan: false
+            needs_xvfb: true
+            artifact: sanity-check-linux-arm64
+
+          # WebAssembly (build-only)
           - name: "WASM"
             runner: ubuntu-latest
             platform: wasm
             packages: ""
             install_vulkan: false
             needs_xvfb: false
+            artifact: ""
 
     steps:
       - name: Checkout
@@ -104,7 +113,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
-          mkdir -p external/glslang external/spirv-cross external/wgpu/include
+          mkdir -p external/glslang external/spirv-cross
           gh release download "$VERSION" --repo enigmaneering/redistributables \
             --pattern "glslang-linux-amd64.tar.gz" --dir .
           tar -xzf "glslang-linux-amd64.tar.gz"
@@ -294,11 +303,11 @@ jobs:
         shell: msys2 {0}
         run: cmake --build build --parallel
 
-      # ---- Test ----
+      # ---- Test on hosted runner ----
       - name: Verify WASM build
         if: matrix.platform == 'wasm'
         run: |
-          echo "WASM build compiled successfully (no runtime tests — no browser in CI)"
+          echo "WASM build compiled successfully (no runtime tests)"
           ls -la build/libmental-static.a build/libmental.a 2>/dev/null || ls -la build/*.a 2>/dev/null || true
 
       - name: Test
@@ -318,6 +327,23 @@ jobs:
           cd build
           ctest --output-on-failure --timeout 120
 
+      # ---- Upload sanity-check binary for self-hosted runners ----
+      - name: Upload sanity-check (Unix)
+        if: matrix.artifact != '' && runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: build/sanity-check
+          retention-days: 1
+
+      - name: Upload sanity-check (Windows)
+        if: matrix.artifact != '' && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: build/sanity-check.exe
+          retention-days: 1
+
       # ---- Report ----
       - name: Report discovered backends
         if: always()
@@ -330,14 +356,14 @@ jobs:
 
   # ================================================================
   #  Galadriel — self-hosted ARM64 (M4 MacBook)
-  #  Tests each Linux backend tier in dedicated Parallels VMs.
-  #  VMs have deps pre-installed at /opt/mental-external.
-  #  Runs sequentially (one GPU, one VM at a time).
+  #  Downloads pre-built sanity-check binaries and runs them in VMs.
+  #  No build tools needed on the VMs — just the binary + GPU drivers.
   # ================================================================
   galadriel:
     name: "galadriel: ${{ matrix.name }}"
+    needs: build
     runs-on: [self-hosted, galadriel]
-    timeout-minutes: 30
+    timeout-minutes: 15
     concurrency: galadriel-vm
 
     strategy:
@@ -346,86 +372,68 @@ jobs:
       matrix:
         include:
           - name: "macOS arm64 (native)"
+            artifact: sanity-check-darwin-arm64
             vm: ""
-            test_native: true
+            native: true
 
           - name: "Linux ARM64 (full)"
+            artifact: sanity-check-linux-arm64
             vm: ci-linux-arm64-full
+            user: parallels
 
           - name: "Linux ARM64 (Vulkan)"
+            artifact: sanity-check-linux-arm64
             vm: ci-linux-arm64-vulkan
+            user: parallels
 
           - name: "Linux ARM64 (WebGPU)"
+            artifact: sanity-check-linux-arm64
             vm: ci-linux-arm64-webgpu
+            user: parallels
 
           - name: "Linux ARM64 (OpenCL)"
+            artifact: sanity-check-linux-arm64
             vm: ci-linux-arm64-opencl
+            user: parallels
 
           - name: "Linux ARM64 (OpenGL)"
+            artifact: sanity-check-linux-arm64
             vm: ci-linux-arm64-opengl
+            user: parallels
 
           - name: "Linux ARM64 (PoCL)"
+            artifact: sanity-check-linux-arm64
             vm: ci-linux-arm64-pocl
+            user: parallels
 
           - name: "Linux ARM64 (bare)"
+            artifact: sanity-check-linux-arm64
             vm: ci-linux-arm64-bare
+            user: parallels
 
-          # Windows ARM64 — Parallels' virtual adapter is Feature Level 11_1,
-          # which can't run D3D12 cs_6_0 compute pipelines.  Disable D3D12
-          # so the fallback chain exercises the D3D11 backend (cs_5_0).
-          # Real D3D12 ARM64 testing is covered by the hosted windows-11-arm runner.
           - name: "Windows ARM64 (D3D11)"
+            artifact: sanity-check-windows-arm64
             vm: "Windows 11"
+            user: rpetz
             windows: true
 
     steps:
-      # ---- Native macOS test (no VM) ----
-      - name: Checkout
-        if: matrix.test_native
-        uses: actions/checkout@v4
+      - name: Download sanity-check
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifact
 
-      - name: Fetch deps (macOS native)
-        if: matrix.test_native
+      # ---- Native macOS (no VM) ----
+      - name: Run sanity check (native)
+        if: matrix.native
         run: |
-          export PATH="/opt/homebrew/bin:$PATH"
-          VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
-          mkdir -p external/glslang external/spirv-cross external/dxc external/naga/bin
-          gh release download "$VERSION" --repo enigmaneering/redistributables \
-            --pattern "glslang-darwin-arm64.tar.gz" --dir .
-          tar -xzf "glslang-darwin-arm64.tar.gz"
-          cp -r glslang-darwin-arm64/* external/glslang/
-          gh release download "$VERSION" --repo enigmaneering/redistributables \
-            --pattern "spirv-cross-darwin-arm64.tar.gz" --dir .
-          tar -xzf "spirv-cross-darwin-arm64.tar.gz"
-          cp -r spirv-cross-darwin-arm64/* external/spirv-cross/
-          for dep in dxc naga; do
-            if gh release download "$VERSION" --repo enigmaneering/redistributables \
-                --pattern "${dep}-darwin-arm64.tar.gz" --dir . 2>/dev/null; then
-              tar -xzf "${dep}-darwin-arm64.tar.gz"
-              cp -r "${dep}-darwin-arm64"/* external/${dep}/ 2>/dev/null || \
-              cp -r "${dep}-darwin-arm64"/* external/${dep}/bin/ 2>/dev/null || true
-            fi
-          done
-          chmod +x external/dxc/bin/* external/naga/bin/* 2>/dev/null || true
-          xattr -d com.apple.quarantine external/dxc/bin/* external/dxc/lib/* external/naga/bin/* 2>/dev/null || true
-        env:
-          GH_TOKEN: ${{ github.token }}
+          chmod +x artifact/sanity-check
+          artifact/sanity-check
 
-      - name: Build & Test (macOS native)
-        if: matrix.test_native
-        run: |
-          export PATH="/opt/homebrew/bin:$PATH"
-          cmake -B build -DBUILD_TESTING=ON -DBUILD_EXAMPLES=OFF
-          cmake --build build --parallel
-          cd build && ctest --output-on-failure --timeout 120
-
-      # ---- VM-based tests (Linux + Windows) ----
-      - name: Checkout (for VM tests)
-        if: ${{ !matrix.test_native }}
-        uses: actions/checkout@v4
-
+      # ---- VM-based tests ----
       - name: Start VM
-        if: ${{ !matrix.test_native }}
+        if: ${{ !matrix.native }}
         run: |
           /usr/local/bin/prlctl start "${{ matrix.vm }}" 2>&1 || true
           echo "Waiting for VM to boot..."
@@ -435,7 +443,6 @@ jobs:
             else
               IP=$(/usr/local/bin/prlctl exec "${{ matrix.vm }}" hostname -I 2>/dev/null | awk '{print $1}')
             fi
-            # Trim whitespace
             IP=$(echo "$IP" | tr -d '[:space:]')
             if [ -n "$IP" ]; then
               echo "VM IP: $IP"
@@ -449,109 +456,24 @@ jobs:
             exit 1
           fi
 
-      - name: Copy source to VM (Linux)
-        if: ${{ !matrix.test_native && !matrix.windows }}
+      - name: Run sanity check (VM)
+        if: ${{ !matrix.native }}
         run: |
-          ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no parallels@$VM_IP "rm -rf /tmp/mental && mkdir -p /tmp/mental"
-          rsync -az --delete -e "ssh -o StrictHostKeyChecking=no" . parallels@$VM_IP:/tmp/mental/
-
-      - name: Build & Test (Linux VM)
-        if: ${{ !matrix.test_native && !matrix.windows }}
-        run: |
-          ssh parallels@$VM_IP bash << 'VMSCRIPT'
-          set -e
-          cd /tmp/mental
-          ln -sf /opt/mental-external external
-          cmake -B build -DBUILD_TESTING=ON -DBUILD_EXAMPLES=OFF
-          cmake --build build --parallel
-          cd build
-          if command -v xvfb-run >/dev/null 2>&1; then
-            xvfb-run --auto-servernum ctest --output-on-failure --timeout 120
-          else
-            ctest --output-on-failure --timeout 120
-          fi
-          VMSCRIPT
-
-      - name: Copy source to VM (Windows)
-        if: ${{ matrix.windows }}
-        run: |
-          # Windows MSYS2 SSH shell — use prlctl exec to set up, then rsync source
-          /usr/local/bin/prlctl exec "${{ matrix.vm }}" cmd /c "if exist C:\Temp\mental rmdir /s /q C:\Temp\mental"
-          /usr/local/bin/prlctl exec "${{ matrix.vm }}" cmd /c "mkdir C:\Temp\mental"
-          rsync -az --delete -e "ssh -o StrictHostKeyChecking=no" . rpetz@$VM_IP:/tmp/mental/ 2>/dev/null || \
-          /usr/local/bin/prlctl exec "${{ matrix.vm }}" bash -lc "rm -rf /tmp/mental && mkdir -p /tmp/mental"
-
-      - name: Fetch deps & Build & Test (Windows VM)
-        if: ${{ matrix.windows }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          export PATH="/opt/homebrew/bin:$PATH"
-          # Download deps on the Mac and push via prlctl shared folder
-          VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
-          TMPDIR=$(mktemp -d)
-          PLATFORM="windows-arm64"
-          mkdir -p $TMPDIR/external/glslang $TMPDIR/external/spirv-cross $TMPDIR/external/dxc $TMPDIR/external/naga/bin
-
-          gh release download "$VERSION" --repo enigmaneering/redistributables \
-            --pattern "glslang-${PLATFORM}.tar.gz" --dir $TMPDIR
-          tar -xzf "$TMPDIR/glslang-${PLATFORM}.tar.gz" -C $TMPDIR
-          cp -r "$TMPDIR/glslang-${PLATFORM}"/* $TMPDIR/external/glslang/
-
-          gh release download "$VERSION" --repo enigmaneering/redistributables \
-            --pattern "spirv-cross-${PLATFORM}.tar.gz" --dir $TMPDIR
-          tar -xzf "$TMPDIR/spirv-cross-${PLATFORM}.tar.gz" -C $TMPDIR
-          cp -r "$TMPDIR/spirv-cross-${PLATFORM}"/* $TMPDIR/external/spirv-cross/
-
-          if gh release download "$VERSION" --repo enigmaneering/redistributables \
-              --pattern "dxc-${PLATFORM}.zip" --dir $TMPDIR 2>/dev/null; then
-            cd $TMPDIR && unzip -qo "dxc-${PLATFORM}.zip" && cd -
-            cp -r "$TMPDIR/dxc-${PLATFORM}"/* $TMPDIR/external/dxc/
+          USER="${{ matrix.user }}"
+          BINARY="sanity-check"
+          if [ "${{ matrix.windows }}" = "true" ]; then
+            BINARY="sanity-check.exe"
           fi
 
-          if gh release download "$VERSION" --repo enigmaneering/redistributables \
-              --pattern "naga-${PLATFORM}.tar.gz" --dir $TMPDIR 2>/dev/null; then
-            tar -xzf "$TMPDIR/naga-${PLATFORM}.tar.gz" -C $TMPDIR
-            if [ -d "$TMPDIR/naga-${PLATFORM}/bin" ]; then
-              cp -r "$TMPDIR/naga-${PLATFORM}/bin"/* $TMPDIR/external/naga/bin/
-            else
-              cp -r "$TMPDIR/naga-${PLATFORM}"/* $TMPDIR/external/naga/bin/
-            fi
-          fi
+          # Copy binary to VM
+          scp -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
+            artifact/$BINARY $USER@$VM_IP:/tmp/$BINARY
 
-          # rsync source + external to the VM's workspace
-          rsync -az --delete -e "ssh -o StrictHostKeyChecking=no" \
-            $GITHUB_WORKSPACE/ rpetz@$VM_IP:/tmp/mental/ 2>/dev/null || true
-          rsync -az -e "ssh -o StrictHostKeyChecking=no" \
-            $TMPDIR/external/ rpetz@$VM_IP:/tmp/mental/external/ 2>/dev/null || true
-          rm -rf $TMPDIR
-
-          # Build and test inside the VM
-          ssh rpetz@$VM_IP bash << 'VMSCRIPT'
-          set -e
-          cd /tmp/mental
-          cmake -B build -G "MSYS Makefiles" -DBUILD_TESTING=ON -DBUILD_EXAMPLES=OFF
-          cmake --build build --parallel
-          cd build
-          ctest --output-on-failure --timeout 120
-          VMSCRIPT
+          # Run it
+          ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
+            $USER@$VM_IP "chmod +x /tmp/$BINARY 2>/dev/null; /tmp/$BINARY"
 
       - name: Stop VM
-        if: ${{ always() && !matrix.test_native }}
+        if: ${{ always() && !matrix.native }}
         run: |
           /usr/local/bin/prlctl stop "${{ matrix.vm }}" --kill 2>&1 || true
-
-      # ---- Report ----
-      - name: Report discovered backends
-        if: always()
-        shell: bash
-        run: |
-          if [ -f build/CMakeCache.txt ]; then
-            echo "### Backend Discovery (native)" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -E "MENTAL_HAS_" build/CMakeCache.txt >> $GITHUB_STEP_SUMMARY || true
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### VM Test" >> $GITHUB_STEP_SUMMARY
-            echo "Tested in VM: ${{ matrix.vm }}" >> $GITHUB_STEP_SUMMARY
-          fi
