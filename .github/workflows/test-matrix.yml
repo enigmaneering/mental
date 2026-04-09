@@ -376,19 +376,19 @@ jobs:
       - name: Test
         if: ${{ !matrix.needs_xvfb && runner.os != 'Windows' && matrix.platform != 'wasm' }}
         working-directory: build
-        run: ctest --output-on-failure --timeout 120
+        run: ctest --output-on-failure --timeout 30
 
       - name: Test (with Xvfb)
         if: ${{ matrix.needs_xvfb }}
         working-directory: build
-        run: xvfb-run --auto-servernum ctest --output-on-failure --timeout 120
+        run: xvfb-run --auto-servernum ctest --output-on-failure --timeout 30
 
       - name: Test (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: |
           cd build
-          ctest --output-on-failure --timeout 120
+          ctest --output-on-failure --timeout 30
 
       # ---- Run sanity check to verify fallback behavior ----
       - name: Sanity check
