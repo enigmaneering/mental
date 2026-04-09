@@ -10,11 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ================================================================
-  #  Build — hosted runners produce sanity-check binaries + run ctest
-  # ================================================================
   build:
-    name: "build: ${{ matrix.name }}"
+    name: "${{ matrix.name }}"
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
 
@@ -22,73 +19,121 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS
+          # ============================================================
+          #  macOS — Metal + OpenCL (always present via frameworks)
+          # ============================================================
           - name: "macOS arm64"
             runner: macos-14
             platform: darwin-arm64
-            packages: ""
-            cmake_extra: ""
-            install_vulkan: false
-            needs_xvfb: false
             artifact: sanity-check-darwin-arm64
 
           - name: "macOS amd64"
-            runner: macos-14
+            runner: macos-15-intel
             platform: darwin-amd64
-            cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=x86_64"
-            packages: ""
-            install_vulkan: false
-            needs_xvfb: false
             artifact: sanity-check-darwin-amd64
 
-          # Windows
+          # ============================================================
+          #  Windows — D3D12 + D3D11 (always present via Windows SDK)
+          # ============================================================
           - name: "Windows amd64"
             runner: windows-latest
             platform: windows-amd64
-            packages: ""
-            install_vulkan: false
-            needs_xvfb: false
             artifact: sanity-check-windows-amd64
 
           - name: "Windows arm64"
             runner: windows-11-arm
             platform: windows-arm64
-            packages: ""
-            install_vulkan: false
-            needs_xvfb: false
             artifact: sanity-check-windows-arm64
 
-          # Linux
-          - name: "Linux amd64"
+          # ============================================================
+          #  Linux — full stack (Vulkan + OpenCL + PoCL + X11)
+          # ============================================================
+          - name: "Linux amd64 (full)"
             runner: ubuntu-latest
             platform: linux-amd64
             packages: >-
               xvfb opencl-headers
               libvulkan1 libvulkan-dev mesa-vulkan-drivers
+              ocl-icd-opencl-dev pocl-opencl-icd
               libx11-dev
-            install_vulkan: false
             needs_xvfb: true
             artifact: sanity-check-linux-amd64
 
-          - name: "Linux arm64"
+          - name: "Linux arm64 (full)"
             runner: ubuntu-24.04-arm
             platform: linux-arm64
             packages: >-
               xvfb opencl-headers
               libvulkan1 libvulkan-dev mesa-vulkan-drivers
+              ocl-icd-opencl-dev pocl-opencl-icd
               libx11-dev
-            install_vulkan: false
             needs_xvfb: true
             artifact: sanity-check-linux-arm64
 
-          # WebAssembly (build-only)
+          # ============================================================
+          #  Linux — fallback tiers (stress test the fallback chain)
+          # ============================================================
+
+          # Vulkan only — no OpenCL, no PoCL
+          - name: "Linux amd64 (Vulkan only)"
+            runner: ubuntu-latest
+            platform: linux-amd64
+            packages: >-
+              xvfb
+              libvulkan1 libvulkan-dev mesa-vulkan-drivers
+              libx11-dev
+            needs_xvfb: true
+
+          - name: "Linux arm64 (Vulkan only)"
+            runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            packages: >-
+              xvfb
+              libvulkan1 libvulkan-dev mesa-vulkan-drivers
+              libx11-dev
+            needs_xvfb: true
+
+          # OpenCL only — no Vulkan
+          - name: "Linux amd64 (OpenCL only)"
+            runner: ubuntu-latest
+            platform: linux-amd64
+            packages: >-
+              xvfb opencl-headers
+              ocl-icd-opencl-dev pocl-opencl-icd
+
+          # PoCL only — CPU compute, last GPU-capable resort
+          - name: "Linux amd64 (PoCL only)"
+            runner: ubuntu-latest
+            platform: linux-amd64
+            packages: >-
+              opencl-headers
+              pocl-opencl-icd
+
+          - name: "Linux arm64 (PoCL only)"
+            runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            packages: >-
+              opencl-headers
+              pocl-opencl-icd
+
+          # Bare — nothing installed, tests graceful "no devices" error
+          - name: "Linux amd64 (bare)"
+            runner: ubuntu-latest
+            platform: linux-amd64
+            packages: ""
+
+          - name: "Linux arm64 (bare)"
+            runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            packages: ""
+
+          # ============================================================
+          #  WebAssembly — build-only verification
+          # ============================================================
           - name: "WASM"
             runner: ubuntu-latest
             platform: wasm
             packages: ""
-            install_vulkan: false
-            needs_xvfb: false
-            artifact: ""
 
     steps:
       - name: Checkout
@@ -111,13 +156,11 @@ jobs:
           VERSION=$(gh release view --repo enigmaneering/redistributables --json tagName -q .tagName)
           mkdir -p external/glslang external/spirv-cross
 
-          # Try WASM-specific archives first, fall back to linux-amd64 for headers
           if gh release download "$VERSION" --repo enigmaneering/redistributables \
               --pattern "glslang-wasm.tar.gz" --dir . 2>/dev/null; then
             tar -xzf "glslang-wasm.tar.gz"
             cp -r glslang-wasm/* external/glslang/
           else
-            echo "WASM glslang not available, using linux-amd64 headers (link will fail for executables)"
             gh release download "$VERSION" --repo enigmaneering/redistributables \
               --pattern "glslang-linux-amd64.tar.gz" --dir .
             tar -xzf "glslang-linux-amd64.tar.gz"
@@ -129,7 +172,6 @@ jobs:
             tar -xzf "spirv-cross-wasm.tar.gz"
             cp -r spirv-cross-wasm/* external/spirv-cross/
           else
-            echo "WASM spirv-cross not available, using linux-amd64 headers"
             gh release download "$VERSION" --repo enigmaneering/redistributables \
               --pattern "spirv-cross-linux-amd64.tar.gz" --dir .
             tar -xzf "spirv-cross-linux-amd64.tar.gz"
@@ -234,20 +276,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.packages }}
 
-      - name: Install Vulkan SDK (Windows)
-        if: matrix.install_vulkan
-        shell: pwsh
-        run: |
-          $json = (Invoke-WebRequest -Uri 'https://vulkan.lunarg.com/sdk/latest/windows.json').Content | ConvertFrom-Json
-          $ver = $json.windows
-          $url = "https://sdk.lunarg.com/sdk/download/$ver/windows/vulkan_sdk.exe"
-          Invoke-WebRequest -Uri $url -OutFile VulkanSDK.exe
-          .\VulkanSDK.exe --accept-licenses --default-answer --confirm-command install copy_only=1
-          $sdk = "C:\VulkanSDK\$ver"
-          echo "VULKAN_SDK=$sdk" >> $env:GITHUB_ENV
-          echo "$sdk\Bin" >> $env:GITHUB_PATH
-          Remove-Item VulkanSDK.exe
-
       - name: Set up MinGW (Windows amd64)
         if: runner.os == 'Windows' && matrix.platform == 'windows-amd64'
         uses: msys2/setup-msys2@v2
@@ -290,10 +318,6 @@ jobs:
             -DBUILD_TESTING=OFF \
             -DBUILD_EXAMPLES=OFF \
             -DMENTAL_DISABLE_METAL=ON \
-            -DMENTAL_DISABLE_D3D12=ON \
-            -DMENTAL_DISABLE_VULKAN=ON \
-            -DMENTAL_DISABLE_OPENCL=ON \
-            -DMENTAL_DISABLE_OPENGL=ON \
             -DMENTAL_DISABLE_POCL=ON \
             -DMENTAL_DISABLE_WEBGPU=ON
 
@@ -316,7 +340,7 @@ jobs:
         shell: msys2 {0}
         run: cmake --build build --parallel
 
-      # ---- Test on hosted runner ----
+      # ---- Test ----
       - name: Verify WASM build
         if: matrix.platform == 'wasm'
         run: |
@@ -340,14 +364,26 @@ jobs:
           cd build
           ctest --output-on-failure --timeout 120
 
-      # ---- Upload sanity-check binary for self-hosted runners ----
+      # ---- Run sanity check to verify fallback behavior ----
+      - name: Sanity check
+        if: matrix.platform != 'wasm'
+        working-directory: build
+        shell: bash
+        run: |
+          if [ -f sanity-check ]; then
+            ./sanity-check
+          elif [ -f sanity-check.exe ]; then
+            ./sanity-check.exe
+          fi
+
+      # ---- Upload sanity-check for manual testing on other machines ----
       - name: Upload sanity-check (Unix)
         if: matrix.artifact != '' && runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: build/sanity-check
-          retention-days: 1
+          retention-days: 7
 
       - name: Upload sanity-check (Windows)
         if: matrix.artifact != '' && runner.os == 'Windows'
@@ -355,7 +391,7 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: build/sanity-check.exe
-          retention-days: 1
+          retention-days: 7
 
       # ---- Report ----
       - name: Report discovered backends
@@ -366,151 +402,3 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           grep -E "MENTAL_HAS_" build/CMakeCache.txt >> $GITHUB_STEP_SUMMARY || echo "No backends discovered" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-
-  # ================================================================
-  #  Galadriel — self-hosted ARM64 (M4 MacBook)
-  #  Downloads pre-built sanity-check binaries and runs them in VMs.
-  #  No build tools needed on the VMs — just the binary + GPU drivers.
-  # ================================================================
-  galadriel:
-    name: "galadriel: ${{ matrix.name }}"
-    needs: build
-    runs-on: [self-hosted, galadriel]
-    timeout-minutes: 15
-    concurrency: galadriel-vm
-
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        include:
-          - name: "macOS arm64 (native)"
-            artifact: sanity-check-darwin-arm64
-            vm: ""
-            native: true
-
-          - name: "Linux ARM64 (full)"
-            artifact: sanity-check-linux-arm64
-            vm: ci-linux-arm64-full
-            user: parallels
-
-          - name: "Linux ARM64 (Vulkan)"
-            artifact: sanity-check-linux-arm64
-            vm: ci-linux-arm64-vulkan
-            user: parallels
-
-          - name: "Linux ARM64 (WebGPU)"
-            artifact: sanity-check-linux-arm64
-            vm: ci-linux-arm64-webgpu
-            user: parallels
-
-          - name: "Linux ARM64 (OpenCL)"
-            artifact: sanity-check-linux-arm64
-            vm: ci-linux-arm64-opencl
-            user: parallels
-
-          - name: "Linux ARM64 (OpenGL)"
-            artifact: sanity-check-linux-arm64
-            vm: ci-linux-arm64-opengl
-            user: parallels
-
-          - name: "Linux ARM64 (PoCL)"
-            artifact: sanity-check-linux-arm64
-            vm: ci-linux-arm64-pocl
-            user: parallels
-
-          - name: "Linux ARM64 (bare)"
-            artifact: sanity-check-linux-arm64
-            vm: ci-linux-arm64-bare
-            user: parallels
-
-          - name: "Windows ARM64 (D3D11)"
-            artifact: sanity-check-windows-arm64
-            vm: "Windows 11"
-            user: rpetz
-            windows: true
-
-    steps:
-      - name: Download sanity-check
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: artifact
-
-      # ---- Native macOS (no VM) ----
-      - name: Run sanity check (native)
-        if: matrix.native
-        run: |
-          chmod +x artifact/sanity-check
-          artifact/sanity-check
-
-      # ---- VM-based tests ----
-      - name: Start VM
-        if: ${{ !matrix.native }}
-        run: |
-          /usr/local/bin/prlctl start "${{ matrix.vm }}" 2>&1 || true
-          echo "Waiting for VM to boot..."
-          for i in $(seq 1 30); do
-            if [ "${{ matrix.windows }}" = "true" ]; then
-              IP=$(/usr/local/bin/prlctl exec "${{ matrix.vm }}" ipconfig 2>/dev/null | grep "IPv4 Address" | head -1 | sed 's/.*: //')
-            else
-              IP=$(/usr/local/bin/prlctl exec "${{ matrix.vm }}" hostname -I 2>/dev/null | awk '{print $1}')
-            fi
-            IP=$(echo "$IP" | tr -d '[:space:]')
-            if [ -n "$IP" ]; then
-              echo "VM IP: $IP"
-              echo "VM_IP=$IP" >> $GITHUB_ENV
-              break
-            fi
-            sleep 3
-          done
-          if [ -z "$IP" ]; then
-            echo "::error::VM did not get an IP within 90s"
-            exit 1
-          fi
-
-      - name: Run sanity check (VM)
-        if: ${{ !matrix.native }}
-        run: |
-          USER="${{ matrix.user }}"
-          if [ "${{ matrix.windows }}" = "true" ]; then
-            # Windows: SCP needs Windows paths
-            scp -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
-              artifact/sanity-check.exe $USER@$VM_IP:C:/Temp/sanity-check.exe
-            ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
-              $USER@$VM_IP bash << 'WINSCRIPT'
-          echo "=== sanity-check on Windows ARM64 ==="
-          echo "Binary: $(ls -la C:/Temp/sanity-check.exe 2>&1)"
-          echo "Running..."
-          C:/Temp/sanity-check.exe 2>&1
-          RC=$?
-          echo "=== Exit code: $RC ==="
-          rm -f C:/Temp/sanity-check.exe
-          exit $RC
-          WINSCRIPT
-          else
-            # Linux: Unix paths work normally
-            scp -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
-              artifact/sanity-check $USER@$VM_IP:/tmp/sanity-check
-            ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
-              $USER@$VM_IP bash << 'LINSCRIPT'
-          echo "=== sanity-check on $(uname -m) ==="
-          chmod +x /tmp/sanity-check
-          echo "Running..."
-          /tmp/sanity-check 2>&1
-          RC=$?
-          echo "=== Exit code: $RC ==="
-          rm -f /tmp/sanity-check
-          exit $RC
-          LINSCRIPT
-          fi
-
-      - name: Stop and restore VM
-        if: ${{ always() && !matrix.native }}
-        run: |
-          /usr/local/bin/prlctl stop "${{ matrix.vm }}" --kill 2>&1 || true
-          # Restore to the latest snapshot (golden state)
-          SNAP_ID=$(/usr/local/bin/prlctl snapshot-list "${{ matrix.vm }}" 2>&1 | grep '\*' | grep -oE '\{[^}]+\}' | tail -1)
-          if [ -n "$SNAP_ID" ]; then
-            /usr/local/bin/prlctl snapshot-switch "${{ matrix.vm }}" --id "$SNAP_ID" 2>&1 || true
-          fi
