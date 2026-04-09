@@ -477,16 +477,32 @@ jobs:
             # Windows: SCP needs Windows paths
             scp -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
               artifact/sanity-check.exe $USER@$VM_IP:C:/Temp/sanity-check.exe
-            # Run and redirect output to a file, then cat it back
-            # (native Windows executables may not stream stdout through MSYS2 SSH)
             ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
-              $USER@$VM_IP 'C:/Temp/sanity-check.exe > C:/Temp/sanity-output.txt 2>&1; RC=$?; cat C:/Temp/sanity-output.txt; rm -f C:/Temp/sanity-check.exe C:/Temp/sanity-output.txt; exit $RC'
+              $USER@$VM_IP bash << 'WINSCRIPT'
+          echo "=== sanity-check on Windows ARM64 ==="
+          echo "Binary: $(ls -la C:/Temp/sanity-check.exe 2>&1)"
+          echo "Running..."
+          C:/Temp/sanity-check.exe 2>&1
+          RC=$?
+          echo "=== Exit code: $RC ==="
+          rm -f C:/Temp/sanity-check.exe
+          exit $RC
+          WINSCRIPT
           else
             # Linux: Unix paths work normally
             scp -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
               artifact/sanity-check $USER@$VM_IP:/tmp/sanity-check
             ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
-              $USER@$VM_IP "chmod +x /tmp/sanity-check; /tmp/sanity-check; rm -f /tmp/sanity-check"
+              $USER@$VM_IP bash << 'LINSCRIPT'
+          echo "=== sanity-check on $(uname -m) ==="
+          chmod +x /tmp/sanity-check
+          echo "Running..."
+          /tmp/sanity-check 2>&1
+          RC=$?
+          echo "=== Exit code: $RC ==="
+          rm -f /tmp/sanity-check
+          exit $RC
+          LINSCRIPT
           fi
 
       - name: Stop and restore VM
