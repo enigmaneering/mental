@@ -470,23 +470,24 @@ static void* opencl_kernel_compile(void* dev, const char* source, size_t source_
             return NULL;
         }
 
-        /* Debug: print the generated OpenCL C so CI logs show what's being compiled */
-        printf("=== Generated OpenCL C (%zu bytes) ===\n%s=== END ===\n", opencl_len, opencl_src);
-        fflush(stdout);
-
         /* Pass NULL for lengths to let OpenCL auto-detect (null-terminated) */
         const char* src_ptr = opencl_src;
         program = p_clCreateProgramWithSource(cl_dev->context, 1,
                                                &src_ptr,
                                                NULL, &err);
-        printf("clCreateProgramWithSource returned: %d\n", err);
-        fflush(stdout);
+        if (!program || err != CL_SUCCESS) {
+            if (error) snprintf(error, error_len,
+                "clCreateProgramWithSource failed (err=%d). Generated OpenCL C (%zu bytes):\n%.200s%s",
+                err, opencl_len, opencl_src,
+                opencl_len > 200 ? "\n..." : "");
+            free(opencl_src);
+            return NULL;
+        }
         free(opencl_src);
     }
 
     if (!program || err != CL_SUCCESS) {
-        if (error) snprintf(error, error_len, "Failed to create OpenCL program (err=%d). "
-                           "Try running sanity-check for diagnostics.", err);
+        if (error) snprintf(error, error_len, "Failed to create OpenCL program (err=%d)", err);
         return NULL;
     }
 
