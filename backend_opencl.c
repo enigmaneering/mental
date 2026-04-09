@@ -22,14 +22,30 @@
 
 /* Bring in the CL type definitions without linking the system loader.
  * We only need the types and constants — all functions are resolved
- * through our own function pointers below. */
+ * through our own function pointers below.
+ * If headers aren't available (e.g. WASM), export opencl_backend = NULL. */
 #ifdef __APPLE__
-#include <OpenCL/opencl.h>
+#  if __has_include(<OpenCL/opencl.h>)
+#    include <OpenCL/opencl.h>
+#    define MENTAL_OPENCL_AVAILABLE 1
+#  endif
 #else
-#include <CL/cl.h>
+#  if __has_include(<CL/cl.h>)
+#    include <CL/cl.h>
+#    define MENTAL_OPENCL_AVAILABLE 1
+#  endif
+#endif
+
+#ifndef MENTAL_OPENCL_AVAILABLE
+#  define MENTAL_OPENCL_AVAILABLE 0
 #endif
 
 #include "mental_internal.h"
+
+#if !MENTAL_OPENCL_AVAILABLE
+#include <stddef.h>
+mental_backend* opencl_backend = NULL;
+#else
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -616,3 +632,5 @@ static mental_backend g_opencl_backend = {
 };
 
 mental_backend* opencl_backend = &g_opencl_backend;
+
+#endif /* MENTAL_OPENCL_AVAILABLE */
