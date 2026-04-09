@@ -396,9 +396,10 @@ static void* pocl_kernel_compile(void* dev, const char* source, size_t source_le
         free(glsl_out);
         if (!opencl_src) return NULL;
 
+        const char* src_ptr = opencl_src;
         program = p_clCreateProgramWithSource(d->context, 1,
-                                               (const char**)&opencl_src,
-                                               &opencl_len, &err);
+                                               &src_ptr,
+                                               NULL, &err);
         free(opencl_src);
     }
 
@@ -414,7 +415,12 @@ static void* pocl_kernel_compile(void* dev, const char* source, size_t source_le
         return NULL;
     }
 
-    cl_kernel kernel = p_clCreateKernel(program, "main", &err);
+    /* Try "mental_compute" first (our OpenCL C transpiler output),
+     * then "main" (standard GLSL entry point for non-transpiled sources) */
+    cl_kernel kernel = p_clCreateKernel(program, "mental_compute", &err);
+    if (err != CL_SUCCESS) {
+        kernel = p_clCreateKernel(program, "main", &err);
+    }
     if (err != CL_SUCCESS) {
         size_t names_size;
         p_clGetProgramInfo(program, CL_PROGRAM_KERNEL_NAMES, 0, NULL, &names_size);

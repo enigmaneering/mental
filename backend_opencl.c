@@ -465,14 +465,22 @@ static void* opencl_kernel_compile(void* dev, const char* source, size_t source_
         free(glsl_out);
         if (!opencl_src) return NULL;
 
+        if (!opencl_src || opencl_len == 0) {
+            if (error) snprintf(error, error_len, "OpenCL C transpilation produced empty output");
+            return NULL;
+        }
+
+        /* Pass NULL for lengths to let OpenCL auto-detect (null-terminated) */
+        const char* src_ptr = opencl_src;
         program = p_clCreateProgramWithSource(cl_dev->context, 1,
-                                               (const char**)&opencl_src,
-                                               &opencl_len, &err);
+                                               &src_ptr,
+                                               NULL, &err);
         free(opencl_src);
     }
 
     if (!program || err != CL_SUCCESS) {
-        if (error) snprintf(error, error_len, "Failed to create OpenCL program (err=%d)", err);
+        if (error) snprintf(error, error_len, "Failed to create OpenCL program (err=%d). "
+                           "Try running sanity-check for diagnostics.", err);
         return NULL;
     }
 
@@ -488,7 +496,12 @@ static void* opencl_kernel_compile(void* dev, const char* source, size_t source_
     }
 
     /* Create kernel (assume function named "main" or first kernel) */
-    cl_kernel kernel = p_clCreateKernel(program, "main", &err);
+    /* Try "mental_compute" first (our OpenCL C transpiler output),
+     * then "main" (standard GLSL entry point for non-transpiled sources) */
+    cl_kernel kernel = p_clCreateKernel(program, "mental_compute", &err);
+    if (err != CL_SUCCESS) {
+        kernel = p_clCreateKernel(program, "main", &err);
+    }
     if (err != CL_SUCCESS) {
         /* Try to get first kernel name */
         size_t kernel_names_size;

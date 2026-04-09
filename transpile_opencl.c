@@ -297,7 +297,7 @@ char* mental_glsl_to_opencl_c(const char* glsl_source, size_t glsl_len,
 
     /* Assemble the OpenCL C source */
     pos += snprintf(output + pos, out_capacity - pos,
-                    "__kernel void main(%s)\n{\n%s}\n", args, final_body);
+                    "__kernel void mental_compute(%s)\n{\n%s}\n", args, final_body);
 
     free(body4);
     free(final_body);
