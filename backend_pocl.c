@@ -364,7 +364,14 @@ static void* pocl_kernel_compile(void* dev, const char* source, size_t source_le
                     (unsigned char)source[2] == 0x23 &&
                     (unsigned char)source[3] == 0x07);
 
-    if (is_spirv) {
+    /* Check if source is already OpenCL C */
+    int is_opencl_c = (source_len > 8 && strstr(source, "__kernel") != NULL);
+
+    if (is_opencl_c) {
+        /* Already OpenCL C — pass directly to the compiler */
+        const char* src_ptr = source;
+        program = p_clCreateProgramWithSource(d->context, 1, &src_ptr, NULL, &err);
+    } else if (is_spirv) {
         /* SPIR-V binary — try clCreateProgramWithIL */
         typedef cl_program (CL_API_CALL *pfn_clCreateProgramWithIL)(
             cl_context, const void*, size_t, cl_int*);

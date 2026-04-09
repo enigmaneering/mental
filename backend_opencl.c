@@ -436,16 +436,22 @@ static void* opencl_kernel_compile(void* dev, const char* source, size_t source_
                     (unsigned char)source[2] == 0x23 &&
                     (unsigned char)source[3] == 0x07);
 
+    /* Check if source is already OpenCL C (contains __kernel keyword) */
+    int is_opencl_c = (source_len > 8 && strstr(source, "__kernel") != NULL);
+
     /* Strategy:
      * 1. If source is already SPIR-V and we have clCreateProgramWithIL → use it
-     * 2. Otherwise, transpile GLSL → SPIR-V → GLSL (spirv-cross) → OpenCL C
-     *    and use clCreateProgramWithSource with the OpenCL C text.
-     *    This path works on any OpenCL implementation, no SPIR-V support needed. */
+     * 2. If source is already OpenCL C → pass directly to clCreateProgramWithSource
+     * 3. Otherwise, transpile GLSL → SPIR-V → GLSL (spirv-cross) → OpenCL C */
     if (is_spirv && p_clCreateProgramWithIL) {
         program = p_clCreateProgramWithIL(cl_dev->context, source, source_len, &err);
     } else if (is_spirv) {
         if (error) snprintf(error, error_len, "SPIR-V input requires OpenCL 2.1+ (clCreateProgramWithIL not available)");
         return NULL;
+    } else if (is_opencl_c) {
+        /* Already OpenCL C — pass directly to the compiler */
+        const char* src_ptr = source;
+        program = p_clCreateProgramWithSource(cl_dev->context, 1, &src_ptr, NULL, &err);
     } else {
         /* Transpile: GLSL → SPIR-V → GLSL (spirv-cross) → OpenCL C */
         size_t spirv_len = 0;

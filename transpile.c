@@ -112,6 +112,18 @@ char* mental_transpile(const char* source, size_t source_len, mental_api_type ta
         return result;
     }
 
+    /* If source language is unknown (e.g. OpenCL C) and the target is
+     * GLSL (which means the backend is OpenCL/PoCL), pass through as-is.
+     * The backend will try to compile it directly. */
+    if (src_lang == MENTAL_LANG_UNKNOWN) {
+        char* result = malloc(source_len + 1);
+        if (!result) return NULL;
+        memcpy(result, source, source_len);
+        result[source_len] = '\0';
+        *out_len = source_len;
+        return result;
+    }
+
     /* Transpilation pipeline: Source -> SPIRV -> Target */
     unsigned char* spirv = NULL;
     size_t spirv_len = 0;
