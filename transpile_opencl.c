@@ -194,7 +194,9 @@ char* mental_glsl_to_opencl_c(const char* glsl_source, size_t glsl_len,
         }
     }
 
-    /* Build kernel argument list */
+    /* Build kernel argument list.
+     * Use "argN" names to avoid collisions when multiple buffers have
+     * the same member name (e.g. "data" in both input and output). */
     char args[4096] = {0};
     size_t args_pos = 0;
     for (int i = 0; i < binding_count; i++) {
@@ -202,8 +204,8 @@ char* mental_glsl_to_opencl_c(const char* glsl_source, size_t glsl_len,
             args_pos += snprintf(args + args_pos, sizeof(args) - args_pos, ", ");
         }
         args_pos += snprintf(args + args_pos, sizeof(args) - args_pos,
-                             "__global %s* %s",
-                             bindings[i].type, bindings[i].member);
+                             "__global %s* arg%d",
+                             bindings[i].type, bindings[i].binding);
     }
 
     /* Second pass: build the OpenCL C source */
@@ -269,19 +271,22 @@ char* mental_glsl_to_opencl_c(const char* glsl_source, size_t glsl_len,
                     "gl_GlobalInvocationID.z", "get_global_id(2)");
     free(body3);
 
-    /* Replace struct-wrapped access: _27.a[i] -> a[i] */
+    /* Replace struct-wrapped access: _27.a[i] -> arg0[i] */
     char* current = body4;
     for (int i = 0; i < binding_count; i++) {
         if (bindings[i].instance[0] == '\0') continue;
 
-        /* Build "INSTANCE.MEMBER" pattern */
+        /* Build "INSTANCE.MEMBER" pattern → "argN" replacement */
         char pattern[256];
         snprintf(pattern, sizeof(pattern), "%s.%s",
                  bindings[i].instance, bindings[i].member);
 
+        char replacement[64];
+        snprintf(replacement, sizeof(replacement), "arg%d", bindings[i].binding);
+
         char* next_body = malloc(out_capacity);
         str_replace_all(next_body, out_capacity, current,
-                        pattern, bindings[i].member);
+                        pattern, replacement);
 
         if (current != body4) free(current);
         current = next_body;
