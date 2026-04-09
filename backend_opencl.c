@@ -453,15 +453,18 @@ static void* opencl_kernel_compile(void* dev, const char* source, size_t source_
             program = p_clCreateProgramWithIL(cl_dev->context, source, source_len, &err);
         }
     } else if (is_spirv) {
-        if (error) snprintf(error, error_len, "SPIR-V input requires OpenCL 2.1+ (clCreateProgramWithIL not available)");
+        if (error) snprintf(error, error_len, "SPIR-V input requires OpenCL 2.1+ (clCreateProgramWithIL not available on this ICD)");
         return NULL;
     } else {
-        /* Last resort: assume the source is OpenCL C and pass it directly */
-        program = p_clCreateProgramWithSource(cl_dev->context, 1, &source, &source_len, &err);
+        /* No clCreateProgramWithIL available — cannot compile GLSL on OpenCL.
+         * The source would need to be OpenCL C, which GLSL is not. */
+        if (error) snprintf(error, error_len, "OpenCL backend requires clCreateProgramWithIL (OpenCL 2.1+) to compile GLSL shaders. "
+                           "This OpenCL implementation does not support it.");
+        return NULL;
     }
 
     if (!program || err != CL_SUCCESS) {
-        if (error) snprintf(error, error_len, "Failed to create OpenCL program (err=%d)", err);
+        if (error) snprintf(error, error_len, "Failed to create OpenCL program via SPIR-V (err=%d)", err);
         return NULL;
     }
 
