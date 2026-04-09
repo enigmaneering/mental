@@ -51,44 +51,24 @@ static mental_backend** get_backend_priority(int* count) {
     static mental_backend* backends[10];
     *count = 0;
 
+    /* Platform-preferred backends first */
 #if defined(__APPLE__)
-    /* macOS: Metal -> OpenCL */
-#ifdef MENTAL_HAS_METAL
+    /* macOS: Metal */
     if (metal_backend) backends[(*count)++] = metal_backend;
-#endif
 #elif defined(_WIN32)
-    /* Windows: D3D12 -> Vulkan -> OpenCL -> OpenGL -> PoCL */
-#ifdef MENTAL_HAS_D3D12
+    /* Windows: D3D12 */
     if (d3d12_backend) backends[(*count)++] = d3d12_backend;
 #endif
-#ifdef MENTAL_HAS_VULKAN
-    if (vulkan_backend) backends[(*count)++] = vulkan_backend;
-#endif
-#else
-    /* Linux: Vulkan -> OpenCL */
-#ifdef MENTAL_HAS_VULKAN
-    if (vulkan_backend) backends[(*count)++] = vulkan_backend;
-#endif
-#endif
 
-    /* WebGPU (cross-platform, runtime-loaded via wgpu-native) */
-#ifdef MENTAL_HAS_WEBGPU
+    /* Cross-platform GPU backends */
+    if (vulkan_backend) backends[(*count)++] = vulkan_backend;
     if (webgpu_backend) backends[(*count)++] = webgpu_backend;
-#endif
 
-    /* Universal fallbacks: OpenCL -> OpenGL 4.3+ -> PoCL (CPU-only last resort) */
-#ifdef MENTAL_HAS_OPENCL
+    /* Universal fallbacks */
     if (opencl_backend) backends[(*count)++] = opencl_backend;
-#endif
-#ifdef MENTAL_HAS_OPENGL
     if (opengl_backend) backends[(*count)++] = opengl_backend;
-#endif
-#ifdef MENTAL_HAS_D3D11
-    if (d3d11_backend) backends[(*count)++] = d3d11_backend;
-#endif
-#ifdef MENTAL_HAS_POCL
-    if (pocl_backend) backends[(*count)++] = pocl_backend;
-#endif
+    if (d3d11_backend)  backends[(*count)++] = d3d11_backend;
+    if (pocl_backend)   backends[(*count)++] = pocl_backend;
 
     return backends;
 }

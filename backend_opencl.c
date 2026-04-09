@@ -1,9 +1,28 @@
 /*
- * Mental - OpenCL Backend (Fallback for all platforms)
+ * Mental - OpenCL Backend (System ICD Loader)
+ *
+ * Uses the system-installed OpenCL ICD loader (e.g. ocl-icd on Linux,
+ * the OpenCL.framework on macOS, OpenCL.dll on Windows).
+ * The library is loaded dynamically via dlopen / LoadLibrary so that
+ * the backend is always compilable — it simply fails gracefully at
+ * runtime if no OpenCL runtime is present.
  */
 
-#ifdef MENTAL_HAS_OPENCL
+#ifdef _WIN32
+#  include <windows.h>
+#  define CL_DLOPEN(path)    LoadLibraryA(path)
+#  define CL_DLSYM(lib, sym) GetProcAddress((HMODULE)(lib), sym)
+#  define CL_DLCLOSE(lib)    FreeLibrary((HMODULE)(lib))
+#else
+#  include <dlfcn.h>
+#  define CL_DLOPEN(path)    dlopen(path, RTLD_LAZY)
+#  define CL_DLSYM(lib, sym) dlsym(lib, sym)
+#  define CL_DLCLOSE(lib)    dlclose(lib)
+#endif
 
+/* Bring in the CL type definitions without linking the system loader.
+ * We only need the types and constants — all functions are resolved
+ * through our own function pointers below. */
 #ifdef __APPLE__
 #include <OpenCL/opencl.h>
 #else
@@ -14,6 +33,132 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* ------------------------------------------------------------------ */
+/*  OpenCL function pointer types (subset we need)                    */
+/* ------------------------------------------------------------------ */
+
+typedef cl_int      (CL_API_CALL *pfn_clGetPlatformIDs)(cl_uint, cl_platform_id*, cl_uint*);
+typedef cl_int      (CL_API_CALL *pfn_clGetDeviceIDs)(cl_platform_id, cl_device_type, cl_uint, cl_device_id*, cl_uint*);
+typedef cl_int      (CL_API_CALL *pfn_clGetDeviceInfo)(cl_device_id, cl_device_info, size_t, void*, size_t*);
+typedef cl_context  (CL_API_CALL *pfn_clCreateContext)(const cl_context_properties*, cl_uint, const cl_device_id*, void (CL_CALLBACK*)(const char*, const void*, size_t, void*), void*, cl_int*);
+typedef cl_int      (CL_API_CALL *pfn_clReleaseContext)(cl_context);
+typedef cl_command_queue (CL_API_CALL *pfn_clCreateCommandQueue)(cl_context, cl_device_id, cl_command_queue_properties, cl_int*);
+typedef cl_int      (CL_API_CALL *pfn_clReleaseCommandQueue)(cl_command_queue);
+typedef cl_mem      (CL_API_CALL *pfn_clCreateBuffer)(cl_context, cl_mem_flags, size_t, void*, cl_int*);
+typedef cl_int      (CL_API_CALL *pfn_clReleaseMemObject)(cl_mem);
+typedef cl_int      (CL_API_CALL *pfn_clEnqueueWriteBuffer)(cl_command_queue, cl_mem, cl_bool, size_t, size_t, const void*, cl_uint, const cl_event*, cl_event*);
+typedef cl_int      (CL_API_CALL *pfn_clEnqueueReadBuffer)(cl_command_queue, cl_mem, cl_bool, size_t, size_t, void*, cl_uint, const cl_event*, cl_event*);
+typedef cl_int      (CL_API_CALL *pfn_clEnqueueCopyBuffer)(cl_command_queue, cl_mem, cl_mem, size_t, size_t, size_t, cl_uint, const cl_event*, cl_event*);
+typedef cl_int      (CL_API_CALL *pfn_clFinish)(cl_command_queue);
+typedef cl_program  (CL_API_CALL *pfn_clCreateProgramWithSource)(cl_context, cl_uint, const char**, const size_t*, cl_int*);
+typedef cl_program  (CL_API_CALL *pfn_clCreateProgramWithIL)(cl_context, const void*, size_t, cl_int*);
+typedef cl_int      (CL_API_CALL *pfn_clBuildProgram)(cl_program, cl_uint, const cl_device_id*, const char*, void (CL_CALLBACK*)(cl_program, void*), void*);
+typedef cl_int      (CL_API_CALL *pfn_clGetProgramBuildInfo)(cl_program, cl_device_id, cl_program_build_info, size_t, void*, size_t*);
+typedef cl_int      (CL_API_CALL *pfn_clGetProgramInfo)(cl_program, cl_program_info, size_t, void*, size_t*);
+typedef cl_int      (CL_API_CALL *pfn_clReleaseProgram)(cl_program);
+typedef cl_kernel   (CL_API_CALL *pfn_clCreateKernel)(cl_program, const char*, cl_int*);
+typedef cl_int      (CL_API_CALL *pfn_clSetKernelArg)(cl_kernel, cl_uint, size_t, const void*);
+typedef cl_int      (CL_API_CALL *pfn_clEnqueueNDRangeKernel)(cl_command_queue, cl_kernel, cl_uint, const size_t*, const size_t*, const size_t*, cl_uint, const cl_event*, cl_event*);
+typedef cl_int      (CL_API_CALL *pfn_clReleaseKernel)(cl_kernel);
+
+/* ------------------------------------------------------------------ */
+/*  Resolved function pointers                                        */
+/* ------------------------------------------------------------------ */
+
+static pfn_clGetPlatformIDs          p_clGetPlatformIDs;
+static pfn_clGetDeviceIDs            p_clGetDeviceIDs;
+static pfn_clGetDeviceInfo           p_clGetDeviceInfo;
+static pfn_clCreateContext           p_clCreateContext;
+static pfn_clReleaseContext          p_clReleaseContext;
+static pfn_clCreateCommandQueue      p_clCreateCommandQueue;
+static pfn_clReleaseCommandQueue     p_clReleaseCommandQueue;
+static pfn_clCreateBuffer            p_clCreateBuffer;
+static pfn_clReleaseMemObject        p_clReleaseMemObject;
+static pfn_clEnqueueWriteBuffer      p_clEnqueueWriteBuffer;
+static pfn_clEnqueueReadBuffer       p_clEnqueueReadBuffer;
+static pfn_clEnqueueCopyBuffer       p_clEnqueueCopyBuffer;
+static pfn_clFinish                  p_clFinish;
+static pfn_clCreateProgramWithSource p_clCreateProgramWithSource;
+static pfn_clCreateProgramWithIL     p_clCreateProgramWithIL;  /* may be NULL (OpenCL < 2.1) */
+static pfn_clBuildProgram            p_clBuildProgram;
+static pfn_clGetProgramBuildInfo     p_clGetProgramBuildInfo;
+static pfn_clGetProgramInfo          p_clGetProgramInfo;
+static pfn_clReleaseProgram          p_clReleaseProgram;
+static pfn_clCreateKernel            p_clCreateKernel;
+static pfn_clSetKernelArg            p_clSetKernelArg;
+static pfn_clEnqueueNDRangeKernel    p_clEnqueueNDRangeKernel;
+static pfn_clReleaseKernel           p_clReleaseKernel;
+
+/* ------------------------------------------------------------------ */
+/*  Dynamic loader                                                    */
+/* ------------------------------------------------------------------ */
+
+static void* g_opencl_lib = NULL;
+
+static int load_opencl_symbols(void) {
+#define LOAD(ptr, name) do { \
+    *(void**)(&ptr) = (void*)CL_DLSYM(g_opencl_lib, #name); \
+    if (!ptr) return -1; \
+} while (0)
+
+    LOAD(p_clGetPlatformIDs,          clGetPlatformIDs);
+    LOAD(p_clGetDeviceIDs,            clGetDeviceIDs);
+    LOAD(p_clGetDeviceInfo,           clGetDeviceInfo);
+    LOAD(p_clCreateContext,           clCreateContext);
+    LOAD(p_clReleaseContext,          clReleaseContext);
+    LOAD(p_clCreateCommandQueue,      clCreateCommandQueue);
+    LOAD(p_clReleaseCommandQueue,     clReleaseCommandQueue);
+    LOAD(p_clCreateBuffer,            clCreateBuffer);
+    LOAD(p_clReleaseMemObject,        clReleaseMemObject);
+    LOAD(p_clEnqueueWriteBuffer,      clEnqueueWriteBuffer);
+    LOAD(p_clEnqueueReadBuffer,       clEnqueueReadBuffer);
+    LOAD(p_clEnqueueCopyBuffer,       clEnqueueCopyBuffer);
+    LOAD(p_clFinish,                  clFinish);
+    LOAD(p_clCreateProgramWithSource, clCreateProgramWithSource);
+    LOAD(p_clBuildProgram,            clBuildProgram);
+    LOAD(p_clGetProgramBuildInfo,     clGetProgramBuildInfo);
+    LOAD(p_clGetProgramInfo,          clGetProgramInfo);
+    LOAD(p_clReleaseProgram,          clReleaseProgram);
+    LOAD(p_clCreateKernel,            clCreateKernel);
+    LOAD(p_clSetKernelArg,            clSetKernelArg);
+    LOAD(p_clEnqueueNDRangeKernel,    clEnqueueNDRangeKernel);
+    LOAD(p_clReleaseKernel,           clReleaseKernel);
+
+#undef LOAD
+
+    /* clCreateProgramWithIL is optional (OpenCL 2.1+) — don't fail if absent */
+    *(void**)(&p_clCreateProgramWithIL) = (void*)CL_DLSYM(g_opencl_lib, "clCreateProgramWithIL");
+
+    return 0;
+}
+
+/* Try to load the system OpenCL ICD loader */
+static int open_opencl_library(void) {
+    const char* candidates[4];
+    int n = 0;
+
+#ifdef _WIN32
+    candidates[n++] = "OpenCL.dll";
+#elif defined(__APPLE__)
+    candidates[n++] = "/System/Library/Frameworks/OpenCL.framework/OpenCL";
+#else
+    candidates[n++] = "libOpenCL.so.1";
+    candidates[n++] = "libOpenCL.so";
+#endif
+
+    for (int i = 0; i < n; i++) {
+        g_opencl_lib = CL_DLOPEN(candidates[i]);
+        if (g_opencl_lib && load_opencl_symbols() == 0) return 0;
+        if (g_opencl_lib) { CL_DLCLOSE(g_opencl_lib); g_opencl_lib = NULL; }
+    }
+
+    return -1;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Device state                                                      */
+/* ------------------------------------------------------------------ */
 
 /* OpenCL device wrapper */
 typedef struct {
@@ -39,12 +184,18 @@ static cl_platform_id g_platform = NULL;
 static cl_device_id* g_devices = NULL;
 static cl_uint g_device_count = 0;
 
+/* ------------------------------------------------------------------ */
+/*  Backend interface                                                 */
+/* ------------------------------------------------------------------ */
+
 static int opencl_init(void) {
+    if (open_opencl_library() != 0) return -1;
+
     cl_int err;
 
     /* Get first platform */
     cl_uint platform_count;
-    err = clGetPlatformIDs(1, &g_platform, &platform_count);
+    err = p_clGetPlatformIDs(1, &g_platform, &platform_count);
     if (err != CL_SUCCESS || platform_count == 0) {
         return -1;
     }
@@ -53,9 +204,9 @@ static int opencl_init(void) {
      * This covers systems where system OpenCL provides CPU compute.
      * PoCL (further down the chain) is only for targets with no system
      * OpenCL installed at all. */
-    err = clGetDeviceIDs(g_platform, CL_DEVICE_TYPE_GPU, 0, NULL, &g_device_count);
+    err = p_clGetDeviceIDs(g_platform, CL_DEVICE_TYPE_GPU, 0, NULL, &g_device_count);
     if (err != CL_SUCCESS || g_device_count == 0) {
-        err = clGetDeviceIDs(g_platform, CL_DEVICE_TYPE_ALL, 0, NULL, &g_device_count);
+        err = p_clGetDeviceIDs(g_platform, CL_DEVICE_TYPE_ALL, 0, NULL, &g_device_count);
         if (err != CL_SUCCESS || g_device_count == 0) {
             return -1;
         }
@@ -64,9 +215,9 @@ static int opencl_init(void) {
     g_devices = malloc(sizeof(cl_device_id) * g_device_count);
     if (!g_devices) return -1;
 
-    err = clGetDeviceIDs(g_platform, CL_DEVICE_TYPE_GPU, g_device_count, g_devices, NULL);
+    err = p_clGetDeviceIDs(g_platform, CL_DEVICE_TYPE_GPU, g_device_count, g_devices, NULL);
     if (err != CL_SUCCESS) {
-        err = clGetDeviceIDs(g_platform, CL_DEVICE_TYPE_ALL, g_device_count, g_devices, NULL);
+        err = p_clGetDeviceIDs(g_platform, CL_DEVICE_TYPE_ALL, g_device_count, g_devices, NULL);
         if (err != CL_SUCCESS) {
             free(g_devices);
             g_devices = NULL;
@@ -83,6 +234,7 @@ static void opencl_shutdown(void) {
         g_devices = NULL;
     }
     g_device_count = 0;
+    if (g_opencl_lib) { CL_DLCLOSE(g_opencl_lib); g_opencl_lib = NULL; }
 }
 
 static int opencl_device_count(void) {
@@ -92,7 +244,7 @@ static int opencl_device_count(void) {
 static int opencl_device_info(int index, char* name, size_t name_len) {
     if (index < 0 || index >= (int)g_device_count) return -1;
 
-    cl_int err = clGetDeviceInfo(g_devices[index], CL_DEVICE_NAME,
+    cl_int err = p_clGetDeviceInfo(g_devices[index], CL_DEVICE_NAME,
                                   name_len, name, NULL);
     return (err == CL_SUCCESS) ? 0 : -1;
 }
@@ -107,16 +259,16 @@ static void* opencl_device_create(int index) {
     dev->device_id = g_devices[index];
 
     /* Create context */
-    dev->context = clCreateContext(NULL, 1, &dev->device_id, NULL, NULL, &err);
+    dev->context = p_clCreateContext(NULL, 1, &dev->device_id, NULL, NULL, &err);
     if (err != CL_SUCCESS) {
         free(dev);
         return NULL;
     }
 
     /* Create command queue */
-    dev->queue = clCreateCommandQueue(dev->context, dev->device_id, 0, &err);
+    dev->queue = p_clCreateCommandQueue(dev->context, dev->device_id, 0, &err);
     if (err != CL_SUCCESS) {
-        clReleaseContext(dev->context);
+        p_clReleaseContext(dev->context);
         free(dev);
         return NULL;
     }
@@ -128,8 +280,8 @@ static void opencl_device_destroy(void* dev) {
     if (!dev) return;
 
     OpenCLDevice* cl_dev = (OpenCLDevice*)dev;
-    clReleaseCommandQueue(cl_dev->queue);
-    clReleaseContext(cl_dev->context);
+    p_clReleaseCommandQueue(cl_dev->queue);
+    p_clReleaseContext(cl_dev->context);
     free(cl_dev);
 }
 
@@ -137,7 +289,7 @@ static void* opencl_buffer_alloc(void* dev, size_t bytes) {
     OpenCLDevice* cl_dev = (OpenCLDevice*)dev;
 
     cl_int err;
-    cl_mem buffer = clCreateBuffer(cl_dev->context,
+    cl_mem buffer = p_clCreateBuffer(cl_dev->context,
                                     CL_MEM_READ_WRITE,
                                     bytes,
                                     NULL,
@@ -146,7 +298,7 @@ static void* opencl_buffer_alloc(void* dev, size_t bytes) {
 
     OpenCLBuffer* buf = malloc(sizeof(OpenCLBuffer));
     if (!buf) {
-        clReleaseMemObject(buffer);
+        p_clReleaseMemObject(buffer);
         return NULL;
     }
 
@@ -159,7 +311,7 @@ static void* opencl_buffer_alloc(void* dev, size_t bytes) {
 static void opencl_buffer_write(void* buf, const void* data, size_t bytes) {
     OpenCLBuffer* cl_buf = (OpenCLBuffer*)buf;
 
-    clEnqueueWriteBuffer(cl_buf->queue,
+    p_clEnqueueWriteBuffer(cl_buf->queue,
                          cl_buf->buffer,
                          CL_TRUE,
                          0,
@@ -171,7 +323,7 @@ static void opencl_buffer_write(void* buf, const void* data, size_t bytes) {
 static void opencl_buffer_read(void* buf, void* data, size_t bytes) {
     OpenCLBuffer* cl_buf = (OpenCLBuffer*)buf;
 
-    clEnqueueReadBuffer(cl_buf->queue,
+    p_clEnqueueReadBuffer(cl_buf->queue,
                         cl_buf->buffer,
                         CL_TRUE,
                         0,
@@ -186,7 +338,7 @@ static void* opencl_buffer_resize(void* dev, void* old_buf, size_t old_size, siz
 
     /* Allocate new buffer */
     cl_int err;
-    cl_mem new_buffer = clCreateBuffer(cl_dev->context,
+    cl_mem new_buffer = p_clCreateBuffer(cl_dev->context,
                                         CL_MEM_READ_WRITE,
                                         new_size,
                                         NULL,
@@ -195,16 +347,16 @@ static void* opencl_buffer_resize(void* dev, void* old_buf, size_t old_size, siz
 
     /* Copy old data */
     size_t copy_size = old_size < new_size ? old_size : new_size;
-    clEnqueueCopyBuffer(cl_dev->queue,
+    p_clEnqueueCopyBuffer(cl_dev->queue,
                         old_cl_buf->buffer,
                         new_buffer,
                         0, 0,
                         copy_size,
                         0, NULL, NULL);
-    clFinish(cl_dev->queue);
+    p_clFinish(cl_dev->queue);
 
     /* Release old buffer */
-    clReleaseMemObject(old_cl_buf->buffer);
+    p_clReleaseMemObject(old_cl_buf->buffer);
     old_cl_buf->buffer = new_buffer;
 
     return old_buf;
@@ -216,7 +368,7 @@ static void* opencl_buffer_clone(void* dev, void* src_buf, size_t size) {
 
     /* Allocate new buffer */
     cl_int err;
-    cl_mem new_buffer = clCreateBuffer(cl_dev->context,
+    cl_mem new_buffer = p_clCreateBuffer(cl_dev->context,
                                         CL_MEM_READ_WRITE,
                                         size,
                                         NULL,
@@ -224,18 +376,18 @@ static void* opencl_buffer_clone(void* dev, void* src_buf, size_t size) {
     if (err != CL_SUCCESS) return NULL;
 
     /* Copy data from source buffer */
-    clEnqueueCopyBuffer(cl_dev->queue,
+    p_clEnqueueCopyBuffer(cl_dev->queue,
                         src_cl_buf->buffer,
                         new_buffer,
                         0, 0,
                         size,
                         0, NULL, NULL);
-    clFinish(cl_dev->queue);
+    p_clFinish(cl_dev->queue);
 
     /* Create new buffer wrapper */
     OpenCLBuffer* clone_buf = malloc(sizeof(OpenCLBuffer));
     if (!clone_buf) {
-        clReleaseMemObject(new_buffer);
+        p_clReleaseMemObject(new_buffer);
         return NULL;
     }
 
@@ -249,7 +401,7 @@ static void opencl_buffer_destroy(void* buf) {
     if (!buf) return;
 
     OpenCLBuffer* cl_buf = (OpenCLBuffer*)buf;
-    clReleaseMemObject(cl_buf->buffer);
+    p_clReleaseMemObject(cl_buf->buffer);
     free(cl_buf);
 }
 
@@ -270,26 +422,14 @@ static void* opencl_kernel_compile(void* dev, const char* source, size_t source_
                     (unsigned char)source[3] == 0x07);
 
     if (is_spirv) {
-#ifdef CL_VERSION_2_1
-        program = clCreateProgramWithIL(cl_dev->context, source, source_len, &err);
-#else
-        /* clCreateProgramWithIL not available — try loading it dynamically */
-        typedef cl_program (CL_API_CALL *pfn_clCreateProgramWithIL)(
-            cl_context, const void*, size_t, cl_int*);
-        pfn_clCreateProgramWithIL fn = NULL;
-#ifdef clGetExtensionFunctionAddressForPlatform
-        fn = (pfn_clCreateProgramWithIL)clGetExtensionFunctionAddressForPlatform(
-            NULL, "clCreateProgramWithIL");
-#endif
-        if (fn) {
-            program = fn(cl_dev->context, source, source_len, &err);
+        if (p_clCreateProgramWithIL) {
+            program = p_clCreateProgramWithIL(cl_dev->context, source, source_len, &err);
         } else {
             if (error) snprintf(error, error_len, "SPIR-V input requires OpenCL 2.1+ (clCreateProgramWithIL not available)");
             return NULL;
         }
-#endif
     } else {
-        program = clCreateProgramWithSource(cl_dev->context, 1, &source, &source_len, &err);
+        program = p_clCreateProgramWithSource(cl_dev->context, 1, &source, &source_len, &err);
     }
 
     if (!program || err != CL_SUCCESS) {
@@ -298,30 +438,30 @@ static void* opencl_kernel_compile(void* dev, const char* source, size_t source_
     }
 
     /* Build program */
-    err = clBuildProgram(program, 1, &cl_dev->device_id, NULL, NULL, NULL);
+    err = p_clBuildProgram(program, 1, &cl_dev->device_id, NULL, NULL, NULL);
     if (err != CL_SUCCESS) {
         if (error) {
-            clGetProgramBuildInfo(program, cl_dev->device_id, CL_PROGRAM_BUILD_LOG,
+            p_clGetProgramBuildInfo(program, cl_dev->device_id, CL_PROGRAM_BUILD_LOG,
                                   error_len, error, NULL);
         }
-        clReleaseProgram(program);
+        p_clReleaseProgram(program);
         return NULL;
     }
 
     /* Create kernel (assume function named "main" or first kernel) */
-    cl_kernel kernel = clCreateKernel(program, "main", &err);
+    cl_kernel kernel = p_clCreateKernel(program, "main", &err);
     if (err != CL_SUCCESS) {
         /* Try to get first kernel name */
         size_t kernel_names_size;
-        clGetProgramInfo(program, CL_PROGRAM_KERNEL_NAMES, 0, NULL, &kernel_names_size);
+        p_clGetProgramInfo(program, CL_PROGRAM_KERNEL_NAMES, 0, NULL, &kernel_names_size);
         if (kernel_names_size > 0) {
             char* kernel_names = malloc(kernel_names_size);
-            clGetProgramInfo(program, CL_PROGRAM_KERNEL_NAMES, kernel_names_size,
+            p_clGetProgramInfo(program, CL_PROGRAM_KERNEL_NAMES, kernel_names_size,
                             kernel_names, NULL);
             /* Get first kernel name (up to first ';') */
             char* semicolon = strchr(kernel_names, ';');
             if (semicolon) *semicolon = '\0';
-            kernel = clCreateKernel(program, kernel_names, &err);
+            kernel = p_clCreateKernel(program, kernel_names, &err);
             free(kernel_names);
         }
 
@@ -329,16 +469,16 @@ static void* opencl_kernel_compile(void* dev, const char* source, size_t source_
             if (error) {
                 snprintf(error, error_len, "Failed to create OpenCL kernel");
             }
-            clReleaseProgram(program);
+            p_clReleaseProgram(program);
             return NULL;
         }
     }
 
-    clReleaseProgram(program);
+    p_clReleaseProgram(program);
 
     OpenCLKernel* cl_kernel = malloc(sizeof(OpenCLKernel));
     if (!cl_kernel) {
-        clReleaseKernel(kernel);
+        p_clReleaseKernel(kernel);
         return NULL;
     }
 
@@ -363,35 +503,35 @@ static void opencl_kernel_dispatch(void* kernel, void** inputs, int input_count,
     for (int i = 0; i < input_count; i++) {
         if (inputs[i]) {
             OpenCLBuffer* input_buf = (OpenCLBuffer*)inputs[i];
-            clSetKernelArg(cl_kernel->kernel, i, sizeof(cl_mem), &input_buf->buffer);
+            p_clSetKernelArg(cl_kernel->kernel, i, sizeof(cl_mem), &input_buf->buffer);
         }
     }
 
     /* Set output argument */
     OpenCLBuffer* output_buf = (OpenCLBuffer*)output;
-    clSetKernelArg(cl_kernel->kernel, input_count, sizeof(cl_mem), &output_buf->buffer);
+    p_clSetKernelArg(cl_kernel->kernel, input_count, sizeof(cl_mem), &output_buf->buffer);
 
     /* Execute */
     size_t global_work_size = work_size;
-    clEnqueueNDRangeKernel(cl_kernel->queue,
+    p_clEnqueueNDRangeKernel(cl_kernel->queue,
                            cl_kernel->kernel,
                            1,
                            NULL,
                            &global_work_size,
                            NULL,
                            0, NULL, NULL);
-    clFinish(cl_kernel->queue);
+    p_clFinish(cl_kernel->queue);
 }
 
 static void opencl_kernel_destroy(void* kernel) {
     if (!kernel) return;
 
     OpenCLKernel* cl_kernel = (OpenCLKernel*)kernel;
-    clReleaseKernel(cl_kernel->kernel);
+    p_clReleaseKernel(cl_kernel->kernel);
     free(cl_kernel);
 }
 
-/* ── Pipe ────────────────────────────────────���─────────────────── */
+/* ── Pipe ─────────────────────────────────────────────────────────── */
 
 typedef struct {
     cl_command_queue queue;
@@ -416,16 +556,16 @@ static int opencl_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
     for (int i = 0; i < input_count; i++) {
         if (inputs[i]) {
             OpenCLBuffer* input_buf = (OpenCLBuffer*)inputs[i];
-            clSetKernelArg(cl_kernel->kernel, i, sizeof(cl_mem), &input_buf->buffer);
+            p_clSetKernelArg(cl_kernel->kernel, i, sizeof(cl_mem), &input_buf->buffer);
         }
     }
 
     OpenCLBuffer* output_buf = (OpenCLBuffer*)output;
-    clSetKernelArg(cl_kernel->kernel, input_count, sizeof(cl_mem), &output_buf->buffer);
+    p_clSetKernelArg(cl_kernel->kernel, input_count, sizeof(cl_mem), &output_buf->buffer);
 
     /* Enqueue without waiting */
     size_t global_work_size = work_size;
-    clEnqueueNDRangeKernel(pipe->queue,
+    p_clEnqueueNDRangeKernel(pipe->queue,
                            cl_kernel->kernel,
                            1,
                            NULL,
@@ -438,7 +578,7 @@ static int opencl_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
 
 static int opencl_pipe_execute(void* pipe_ptr) {
     OpenCLPipe* pipe = (OpenCLPipe*)pipe_ptr;
-    clFinish(pipe->queue);
+    p_clFinish(pipe->queue);
     return 0;
 }
 
@@ -476,10 +616,3 @@ static mental_backend g_opencl_backend = {
 };
 
 mental_backend* opencl_backend = &g_opencl_backend;
-
-#else
-/* OpenCL not available */
-#include "mental_internal.h"
-#include <stddef.h>
-mental_backend* opencl_backend = NULL;
-#endif /* MENTAL_HAS_OPENCL */

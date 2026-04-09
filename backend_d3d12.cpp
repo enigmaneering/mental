@@ -1,8 +1,18 @@
 /*
- * Mental - D3D12 Backend (Windows)
+ * Mental - D3D12 Backend (Windows, runtime-loaded)
+ *
+ * d3d12.dll and dxgi.dll are loaded at runtime via LoadLibraryA / GetProcAddress.
+ * Only three free functions need dlsym:
+ *   - D3D12CreateDevice        (d3d12.dll)
+ *   - D3D12SerializeRootSignature (d3d12.dll)
+ *   - CreateDXGIFactory2       (dxgi.dll)
+ * All other D3D12/DXGI calls go through COM vtable pointers on the returned
+ * interface objects, so they don't need explicit symbol resolution.
+ *
+ * On non-Windows platforms the file exports d3d12_backend = NULL.
  */
 
-#ifdef MENTAL_HAS_D3D12
+#ifdef _WIN32
 
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -16,6 +26,67 @@
 #include <windows.h>
 
 using Microsoft::WRL::ComPtr;
+
+/* ── Runtime-loaded function pointers ────────────────────────────── */
+
+static HMODULE g_d3d12_dll = NULL;
+static HMODULE g_dxgi_dll  = NULL;
+
+/* d3d12.dll */
+typedef HRESULT (WINAPI *PFN_D3D12CreateDevice)(
+    IUnknown* pAdapter, D3D_FEATURE_LEVEL MinimumFeatureLevel,
+    REFIID riid, void** ppDevice);
+typedef HRESULT (WINAPI *PFN_D3D12SerializeRootSignature)(
+    const D3D12_ROOT_SIGNATURE_DESC* pRootSignature,
+    D3D_ROOT_SIGNATURE_VERSION Version, ID3DBlob** ppBlob, ID3DBlob** ppErrorBlob);
+
+/* dxgi.dll */
+typedef HRESULT (WINAPI *PFN_CreateDXGIFactory2)(
+    UINT Flags, REFIID riid, void** ppFactory);
+
+static PFN_D3D12CreateDevice          pfn_D3D12CreateDevice          = NULL;
+static PFN_D3D12SerializeRootSignature pfn_D3D12SerializeRootSignature = NULL;
+static PFN_CreateDXGIFactory2          pfn_CreateDXGIFactory2          = NULL;
+
+static int d3d12_load_libraries(void) {
+    g_d3d12_dll = LoadLibraryA("d3d12.dll");
+    if (!g_d3d12_dll) return -1;
+
+    g_dxgi_dll = LoadLibraryA("dxgi.dll");
+    if (!g_dxgi_dll) {
+        FreeLibrary(g_d3d12_dll);
+        g_d3d12_dll = NULL;
+        return -1;
+    }
+
+    pfn_D3D12CreateDevice = (PFN_D3D12CreateDevice)
+        GetProcAddress(g_d3d12_dll, "D3D12CreateDevice");
+    pfn_D3D12SerializeRootSignature = (PFN_D3D12SerializeRootSignature)
+        GetProcAddress(g_d3d12_dll, "D3D12SerializeRootSignature");
+    pfn_CreateDXGIFactory2 = (PFN_CreateDXGIFactory2)
+        GetProcAddress(g_dxgi_dll, "CreateDXGIFactory2");
+
+    if (!pfn_D3D12CreateDevice || !pfn_D3D12SerializeRootSignature || !pfn_CreateDXGIFactory2) {
+        FreeLibrary(g_dxgi_dll);  g_dxgi_dll  = NULL;
+        FreeLibrary(g_d3d12_dll); g_d3d12_dll = NULL;
+        pfn_D3D12CreateDevice          = NULL;
+        pfn_D3D12SerializeRootSignature = NULL;
+        pfn_CreateDXGIFactory2          = NULL;
+        return -1;
+    }
+
+    return 0;
+}
+
+static void d3d12_free_libraries(void) {
+    if (g_dxgi_dll)  { FreeLibrary(g_dxgi_dll);  g_dxgi_dll  = NULL; }
+    if (g_d3d12_dll) { FreeLibrary(g_d3d12_dll); g_d3d12_dll = NULL; }
+    pfn_D3D12CreateDevice          = NULL;
+    pfn_D3D12SerializeRootSignature = NULL;
+    pfn_CreateDXGIFactory2          = NULL;
+}
+
+/* ── D3D12 type wrappers ────────────────────────────────────────── */
 
 /* D3D12 device wrapper */
 typedef struct {
@@ -63,12 +134,18 @@ static std::vector<ComPtr<IDXGIAdapter1>> g_adapters;
 static void d3d12_buffer_destroy(void* buf);
 
 static int d3d12_init(void) {
+    /* Load d3d12.dll and dxgi.dll at runtime */
+    if (d3d12_load_libraries() != 0) return -1;
+
     HRESULT hr;
 
     /* Create DXGI factory */
     ComPtr<IDXGIFactory6> factory;
-    hr = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
-    if (FAILED(hr)) return -1;
+    hr = pfn_CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
+    if (FAILED(hr)) {
+        d3d12_free_libraries();
+        return -1;
+    }
 
     /* Enumerate adapters */
     ComPtr<IDXGIAdapter1> adapter;
@@ -87,17 +164,23 @@ static int d3d12_init(void) {
          * Virtual adapters (e.g. Parallels) often expose D3D12 at FL 11_x
          * which supports rendering but not cs_6_0 compute pipelines.
          * Requiring FL 12_0 lets the fallback chain drop to D3D11. */
-        if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0,
-                                         __uuidof(ID3D12Device), nullptr))) {
+        if (SUCCEEDED(pfn_D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0,
+                                             __uuidof(ID3D12Device), nullptr))) {
             g_adapters.push_back(adapter);
         }
     }
 
-    return g_adapters.empty() ? -1 : 0;
+    if (g_adapters.empty()) {
+        d3d12_free_libraries();
+        return -1;
+    }
+
+    return 0;
 }
 
 static void d3d12_shutdown(void) {
     g_adapters.clear();
+    d3d12_free_libraries();
 }
 
 static int d3d12_device_count(void) {
@@ -120,8 +203,8 @@ static void* d3d12_device_create(int index) {
     D3D12Device* dev = new D3D12Device();
 
     /* Create device */
-    HRESULT hr = D3D12CreateDevice(g_adapters[index].Get(), D3D_FEATURE_LEVEL_11_0,
-                                    IID_PPV_ARGS(&dev->device));
+    HRESULT hr = pfn_D3D12CreateDevice(g_adapters[index].Get(), D3D_FEATURE_LEVEL_11_0,
+                                        IID_PPV_ARGS(&dev->device));
     if (FAILED(hr)) {
         delete dev;
         return NULL;
@@ -530,7 +613,7 @@ static void* d3d12_kernel_compile(void* dev, const char* source, size_t source_l
      *   - RWStructuredBuffer (UAV, register(u#)) for read-write buffers
      *   - StructuredBuffer (SRV, register(t#)) for read-only buffers
      *
-     * WGSL var<storage, read> maps to SRV via Naga→spirv-cross, while
+     * WGSL var<storage, read> maps to SRV via Naga->spirv-cross, while
      * GLSL/HLSL typically uses RWStructuredBuffer (UAV) for everything.
      * Supporting both ensures all source languages work. */
     D3D12_DESCRIPTOR_RANGE ranges[2] = {};
@@ -562,8 +645,8 @@ static void* d3d12_kernel_compile(void* dev, const char* source, size_t source_l
 
     ComPtr<ID3DBlob> signature;
     ComPtr<ID3DBlob> sig_error;
-    HRESULT hr = D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1,
-                                              &signature, &sig_error);
+    HRESULT hr = pfn_D3D12SerializeRootSignature(&root_sig_desc, D3D_ROOT_SIGNATURE_VERSION_1,
+                                                  &signature, &sig_error);
     if (FAILED(hr)) {
         if (error && sig_error) {
             snprintf(error, error_len, "Failed to serialize root signature: %s",
@@ -626,7 +709,7 @@ static void* d3d12_kernel_compile(void* dev, const char* source, size_t source_l
 
 static int d3d12_kernel_workgroup_size(void* kernel) {
     (void)kernel;
-    /* D3D12 default thread group size — matches the [numthreads(64,1,1)]
+    /* D3D12 default thread group size -- matches the [numthreads(64,1,1)]
      * declaration used in transpiled HLSL shaders. */
     return 64;
 }
@@ -825,7 +908,7 @@ static int d3d12_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
     D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle = d3d_kernel->descriptor_heap->GetGPUDescriptorHandleForHeapStart();
     pipe->command_list->SetComputeRootDescriptorTable(0, gpu_handle);
 
-    /* UAV barrier before dispatch — ensures writes from a previous
+    /* UAV barrier before dispatch -- ensures writes from a previous
      * dispatch in this pipe are visible.  Required when one stage's
      * output feeds the next stage's input via the same UAV resource. */
     D3D12_RESOURCE_BARRIER uav_barrier = {};
@@ -884,7 +967,7 @@ static void* d3d12_viewport_attach(void* dev, void* buffer, void* surface, char*
 
     /* Create DXGI factory */
     ComPtr<IDXGIFactory4> factory;
-    HRESULT hr = CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
+    HRESULT hr = pfn_CreateDXGIFactory2(0, IID_PPV_ARGS(&factory));
     if (FAILED(hr)) {
         if (error) {
             snprintf(error, error_len, "Failed to create DXGI factory");
@@ -1071,5 +1154,7 @@ static mental_backend g_d3d12_backend = {
 mental_backend* d3d12_backend = &g_d3d12_backend;
 
 #else
+/* Non-Windows: D3D12 is not available */
+#include "mental_internal.h"
 mental_backend* d3d12_backend = NULL;
-#endif /* MENTAL_HAS_D3D12 */
+#endif /* _WIN32 */

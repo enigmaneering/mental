@@ -1,8 +1,16 @@
 /*
  * Mental - Metal Backend (macOS)
+ *
+ * Runtime-loaded via dlopen — zero link-time framework dependencies.
+ * On macOS the Metal.framework and QuartzCore.framework are loaded at
+ * init time.  All Objective-C classes and selectors work via the
+ * runtime once the frameworks are resident; no individual function
+ * pointer resolution is needed.
+ *
+ * On non-Apple platforms this file compiles to a single NULL export.
  */
 
-#ifdef MENTAL_HAS_METAL
+#if defined(__APPLE__) && !defined(MENTAL_DISABLE_METAL)
 
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
@@ -15,6 +23,11 @@
 #include "mental_internal.h"
 #include <string.h>
 #include <stdlib.h>
+#include <dlfcn.h>
+
+/* Framework handles (dlopen'd at init, dlclose'd at shutdown) */
+static void* g_metal_lib = NULL;
+static void* g_quartzcore_lib = NULL;
 
 /* Metal device wrapper */
 typedef struct {
@@ -47,14 +60,44 @@ static NSArray<id<MTLDevice>>* g_metal_devices = nil;
 
 static int metal_init(void) {
     @autoreleasepool {
+        /* Load Metal.framework at runtime */
+        g_metal_lib = dlopen("/System/Library/Frameworks/Metal.framework/Metal", RTLD_LAZY);
+        if (!g_metal_lib) return -1;
+
+        /* Load QuartzCore.framework for CAMetalLayer */
+        g_quartzcore_lib = dlopen("/System/Library/Frameworks/QuartzCore.framework/QuartzCore", RTLD_LAZY);
+        if (!g_quartzcore_lib) {
+            dlclose(g_metal_lib);
+            g_metal_lib = NULL;
+            return -1;
+        }
+
+        /* Frameworks are loaded — Objective-C classes are now registered
+         * with the runtime.  Normal ObjC message dispatch works. */
         g_metal_devices = MTLCopyAllDevices();
-        return g_metal_devices.count > 0 ? 0 : -1;
+        if (!g_metal_devices || g_metal_devices.count == 0) {
+            dlclose(g_quartzcore_lib);
+            g_quartzcore_lib = NULL;
+            dlclose(g_metal_lib);
+            g_metal_lib = NULL;
+            return -1;
+        }
+        return 0;
     }
 }
 
 static void metal_shutdown(void) {
     @autoreleasepool {
         g_metal_devices = nil;
+
+        if (g_quartzcore_lib) {
+            dlclose(g_quartzcore_lib);
+            g_quartzcore_lib = NULL;
+        }
+        if (g_metal_lib) {
+            dlclose(g_metal_lib);
+            g_metal_lib = NULL;
+        }
     }
 }
 
@@ -430,7 +473,7 @@ static void metal_viewport_detach(void* viewport_ptr) {
 }
 
 /* Backend implementation */
-/* ── Pipe ──────────────────────────────────────────────────────── */
+/* -- Pipe --------------------------------------------------------- */
 
 typedef struct {
     id<MTLCommandQueue> queue;
@@ -522,6 +565,7 @@ static mental_backend g_metal_backend = {
 mental_backend* metal_backend = &g_metal_backend;
 
 #else
-/* Metal SDK not available */
+/* Not Apple or force-disabled — Metal is not available */
+#include "mental_internal.h"
 mental_backend* metal_backend = NULL;
-#endif /* MENTAL_HAS_METAL */
+#endif /* __APPLE__ && !MENTAL_DISABLE_METAL */

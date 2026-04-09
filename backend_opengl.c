@@ -9,86 +9,33 @@
  * by spirv-cross when needed).
  *
  * Not built on macOS — Apple capped OpenGL at 4.1.
+ *
+ * All platform libraries (GL, GLX, X11, WGL) are loaded dynamically
+ * via dlopen/LoadLibrary so no link-time dependency is required.
+ * If the libraries are absent at runtime, init() returns -1 gracefully.
  */
 
-#ifdef MENTAL_HAS_OPENGL
+#if defined(_WIN32) || defined(__linux__)
 
-/* Must be included before gl.h */
+/* ------------------------------------------------------------------ */
+/*  Platform-specific dlopen macros                                   */
+/* ------------------------------------------------------------------ */
+
 #ifdef _WIN32
 #  include <windows.h>
-#endif
-
-#include <GL/gl.h>
-
-/*
- * We need OpenGL 4.3+ entry points that are not in the base gl.h.
- * Pull them through the platform's extension mechanism.
- */
-#ifdef _WIN32
-   /* wglGetProcAddress is declared in wingdi.h (via windows.h) */
-#  define MENTAL_GL_GETPROC(name) wglGetProcAddress(name)
+#  define GL_DLOPEN(path)     LoadLibraryA(path)
+#  define GL_DLSYM(lib, sym)  GetProcAddress((HMODULE)(lib), sym)
+#  define GL_DLCLOSE(lib)     FreeLibrary((HMODULE)(lib))
+#  define GL_LIB_NAME         "opengl32.dll"
 #else
-#  include <GL/glx.h>
-#  define MENTAL_GL_GETPROC(name) glXGetProcAddressARB((const GLubyte*)(name))
-#endif
-
-/* glext.h may or may not be present — define the tokens and types we
- * need ourselves if they are missing.  Windows/MinGW gl.h only covers
- * OpenGL 1.1 and lacks all modern types and constants. */
-
-/* Modern GL types missing from Windows/MinGW gl.h */
-#ifndef GL_VERSION_1_5
-typedef ptrdiff_t GLsizeiptr;
-typedef ptrdiff_t GLintptr;
-#endif
-#ifndef GL_VERSION_2_0
-typedef char GLchar;
-#endif
-
-#ifndef GL_COMPUTE_SHADER
-#define GL_COMPUTE_SHADER                 0x91B9
-#endif
-#ifndef GL_SHADER_STORAGE_BUFFER
-#define GL_SHADER_STORAGE_BUFFER          0x90D2
-#endif
-#ifndef GL_COMPILE_STATUS
-#define GL_COMPILE_STATUS                 0x8B81
-#endif
-#ifndef GL_LINK_STATUS
-#define GL_LINK_STATUS                    0x8B82
-#endif
-#ifndef GL_INFO_LOG_LENGTH
-#define GL_INFO_LOG_LENGTH                0x8B84
-#endif
-#ifndef GL_MAJOR_VERSION
-#define GL_MAJOR_VERSION                  0x821B
-#endif
-#ifndef GL_MINOR_VERSION
-#define GL_MINOR_VERSION                  0x821C
-#endif
-#ifndef GL_MAP_READ_BIT
-#define GL_MAP_READ_BIT                   0x0001
-#endif
-#ifndef GL_MAP_WRITE_BIT
-#define GL_MAP_WRITE_BIT                  0x0002
-#endif
-#ifndef GL_DYNAMIC_STORAGE_BIT
-#define GL_DYNAMIC_STORAGE_BIT            0x0100
-#endif
-#ifndef GL_MAP_COHERENT_BIT
-#define GL_MAP_COHERENT_BIT               0x0080
-#endif
-#ifndef GL_RENDERER
-#define GL_RENDERER                       0x1F01
-#endif
-#ifndef GL_COPY_READ_BUFFER
-#define GL_COPY_READ_BUFFER               0x8F36
-#endif
-#ifndef GL_SHADER_STORAGE_BARRIER_BIT
-#define GL_SHADER_STORAGE_BARRIER_BIT     0x00002000
-#endif
-#ifndef GL_DYNAMIC_COPY
-#define GL_DYNAMIC_COPY                   0x88EA
+#  include <dlfcn.h>
+#  define GL_DLOPEN(path)     dlopen(path, RTLD_LAZY)
+#  define GL_DLSYM(lib, sym)  dlsym(lib, sym)
+#  define GL_DLCLOSE(lib)     dlclose(lib)
+#  define GL_LIB_NAME_1       "libGL.so.1"
+#  define GL_LIB_NAME_2       "libGL.so"
+#  define X11_LIB_NAME        "libX11.so"
+#  define X11_LIB_NAME_2      "libX11.so.6"
 #endif
 
 #include "mental_internal.h"
@@ -97,117 +44,201 @@ typedef char GLchar;
 #include <string.h>
 
 /* ------------------------------------------------------------------ */
-/*  GL function pointer types                                         */
+/*  GL types and constants                                            */
 /*                                                                    */
-/*  On Linux, GL/glext.h (included from GL/gl.h) provides all         */
-/*  PFN*PROC typedefs.  On Windows, gl.h is minimal and we may need   */
-/*  to define them ourselves.  Guard each with #ifndef.               */
+/*  We define everything we need ourselves since we no longer include  */
+/*  any GL headers (no link-time dependency).                         */
 /* ------------------------------------------------------------------ */
 
-#ifndef PFNGLCREATESHADERPROC
-typedef GLuint (APIENTRY *PFNGLCREATESHADERPROC)(GLenum);
-#endif
-#ifndef PFNGLSHADERSOURCEPROC
-typedef void   (APIENTRY *PFNGLSHADERSOURCEPROC)(GLuint, GLsizei, const GLchar *const*, const GLint*);
-#endif
-#ifndef PFNGLCOMPILESHADERPROC
-typedef void   (APIENTRY *PFNGLCOMPILESHADERPROC)(GLuint);
-#endif
-#ifndef PFNGLGETSHADERIVPROC
-typedef void   (APIENTRY *PFNGLGETSHADERIVPROC)(GLuint, GLenum, GLint*);
-#endif
-#ifndef PFNGLGETSHADERINFOLOGPROC
-typedef void   (APIENTRY *PFNGLGETSHADERINFOLOGPROC)(GLuint, GLsizei, GLsizei*, GLchar*);
-#endif
-#ifndef PFNGLCREATEPROGRAMPROC
-typedef GLuint (APIENTRY *PFNGLCREATEPROGRAMPROC)(void);
-#endif
-#ifndef PFNGLATTACHSHADERPROC
-typedef void   (APIENTRY *PFNGLATTACHSHADERPROC)(GLuint, GLuint);
-#endif
-#ifndef PFNGLLINKPROGRAMPROC
-typedef void   (APIENTRY *PFNGLLINKPROGRAMPROC)(GLuint);
-#endif
-#ifndef PFNGLGETPROGRAMIVPROC
-typedef void   (APIENTRY *PFNGLGETPROGRAMIVPROC)(GLuint, GLenum, GLint*);
-#endif
-#ifndef PFNGLGETPROGRAMINFOLOGPROC
-typedef void   (APIENTRY *PFNGLGETPROGRAMINFOLOGPROC)(GLuint, GLsizei, GLsizei*, GLchar*);
-#endif
-#ifndef PFNGLUSEPROGRAMPROC
-typedef void   (APIENTRY *PFNGLUSEPROGRAMPROC)(GLuint);
-#endif
-#ifndef PFNGLDELETESHADERPROC
-typedef void   (APIENTRY *PFNGLDELETESHADERPROC)(GLuint);
-#endif
-#ifndef PFNGLDELETEPROGRAMPROC
-typedef void   (APIENTRY *PFNGLDELETEPROGRAMPROC)(GLuint);
-#endif
-#ifndef PFNGLDISPATCHCOMPUTEPROC
-typedef void   (APIENTRY *PFNGLDISPATCHCOMPUTEPROC)(GLuint, GLuint, GLuint);
-#endif
-#ifndef PFNGLMEMORYBARRIERPROC
-typedef void   (APIENTRY *PFNGLMEMORYBARRIERPROC)(GLbitfield);
-#endif
-#ifndef PFNGLGENBUFFERSPROC
-typedef void   (APIENTRY *PFNGLGENBUFFERSPROC)(GLsizei, GLuint*);
-#endif
-#ifndef PFNGLDELETEBUFFERSPROC
-typedef void   (APIENTRY *PFNGLDELETEBUFFERSPROC)(GLsizei, const GLuint*);
-#endif
-#ifndef PFNGLBINDBUFFERPROC
-typedef void   (APIENTRY *PFNGLBINDBUFFERPROC)(GLenum, GLuint);
-#endif
-#ifndef PFNGLBINDBUFFERBASEPROC
-typedef void   (APIENTRY *PFNGLBINDBUFFERBASEPROC)(GLenum, GLuint, GLuint);
-#endif
-#ifndef PFNGLBUFFERDATAPROC
-typedef void   (APIENTRY *PFNGLBUFFERDATAPROC)(GLenum, GLsizeiptr, const void*, GLenum);
-#endif
-#ifndef PFNGLBUFFERSUBDATAPROC
-typedef void   (APIENTRY *PFNGLBUFFERSUBDATAPROC)(GLenum, GLintptr, GLsizeiptr, const void*);
-#endif
-#ifndef PFNGLGETBUFFERSUBDATAPROC
-typedef void   (APIENTRY *PFNGLGETBUFFERSUBDATAPROC)(GLenum, GLintptr, GLsizeiptr, void*);
-#endif
-#ifndef PFNGLMAPBUFFERRANGEPROC
-typedef void*  (APIENTRY *PFNGLMAPBUFFERRANGEPROC)(GLenum, GLintptr, GLsizeiptr, GLbitfield);
-#endif
-#ifndef PFNGLUNMAPBUFFERPROC
-typedef GLboolean (APIENTRY *PFNGLUNMAPBUFFERPROC)(GLenum);
-#endif
-#ifndef PFNGLCOPYBUFFERSUBDATAPROC
-typedef void   (APIENTRY *PFNGLCOPYBUFFERSUBDATAPROC)(GLenum, GLenum, GLintptr, GLintptr, GLsizeiptr);
+/* Base GL types */
+typedef unsigned int   GLenum;
+typedef unsigned char  GLboolean;
+typedef unsigned int   GLbitfield;
+typedef void           GLvoid;
+typedef int            GLint;
+typedef unsigned int   GLuint;
+typedef int            GLsizei;
+typedef float          GLfloat;
+typedef double         GLdouble;
+typedef char           GLchar;
+typedef ptrdiff_t      GLsizeiptr;
+typedef ptrdiff_t      GLintptr;
+typedef unsigned char  GLubyte;
+
+/* Constants */
+#define GL_COMPUTE_SHADER                 0x91B9
+#define GL_SHADER_STORAGE_BUFFER          0x90D2
+#define GL_COMPILE_STATUS                 0x8B81
+#define GL_LINK_STATUS                    0x8B82
+#define GL_INFO_LOG_LENGTH                0x8B84
+#define GL_MAJOR_VERSION                  0x821B
+#define GL_MINOR_VERSION                  0x821C
+#define GL_MAP_READ_BIT                   0x0001
+#define GL_MAP_WRITE_BIT                  0x0002
+#define GL_DYNAMIC_STORAGE_BIT            0x0100
+#define GL_MAP_COHERENT_BIT               0x0080
+#define GL_RENDERER                       0x1F01
+#define GL_COPY_READ_BUFFER               0x8F36
+#define GL_SHADER_STORAGE_BARRIER_BIT     0x00002000
+#define GL_DYNAMIC_COPY                   0x88EA
+#define GL_TRUE                           1
+#define GL_FALSE                          0
+
+#ifndef APIENTRY
+#  ifdef _WIN32
+#    define APIENTRY __stdcall
+#  else
+#    define APIENTRY
+#  endif
 #endif
 
 /* ------------------------------------------------------------------ */
-/*  Resolved function pointers (populated during init)                */
+/*  GL function pointer types                                         */
 /* ------------------------------------------------------------------ */
 
-static PFNGLCREATESHADERPROC        pglCreateShader;
-static PFNGLSHADERSOURCEPROC        pglShaderSource;
-static PFNGLCOMPILESHADERPROC       pglCompileShader;
-static PFNGLGETSHADERIVPROC         pglGetShaderiv;
-static PFNGLGETSHADERINFOLOGPROC    pglGetShaderInfoLog;
-static PFNGLCREATEPROGRAMPROC       pglCreateProgram;
-static PFNGLATTACHSHADERPROC        pglAttachShader;
-static PFNGLLINKPROGRAMPROC         pglLinkProgram;
-static PFNGLGETPROGRAMIVPROC        pglGetProgramiv;
-static PFNGLGETPROGRAMINFOLOGPROC   pglGetProgramInfoLog;
-static PFNGLUSEPROGRAMPROC          pglUseProgram;
-static PFNGLDELETESHADERPROC        pglDeleteShader;
-static PFNGLDELETEPROGRAMPROC       pglDeleteProgram;
-static PFNGLDISPATCHCOMPUTEPROC     pglDispatchCompute;
-static PFNGLMEMORYBARRIERPROC       pglMemoryBarrier;
+/* Base GL functions (from the library itself) */
+typedef void        (APIENTRY *pfn_glGetIntegerv)(GLenum, GLint*);
+typedef const GLubyte* (APIENTRY *pfn_glGetString)(GLenum);
+typedef void        (APIENTRY *pfn_glFinish)(void);
 
-static PFNGLGENBUFFERSPROC          pglGenBuffers;
-static PFNGLDELETEBUFFERSPROC       pglDeleteBuffers;
-static PFNGLBINDBUFFERPROC          pglBindBuffer;
-static PFNGLBINDBUFFERBASEPROC      pglBindBufferBase;
-static PFNGLBUFFERDATAPROC          pglBufferData;
-static PFNGLBUFFERSUBDATAPROC       pglBufferSubData;
-static PFNGLGETBUFFERSUBDATAPROC    pglGetBufferSubData;
-static PFNGLCOPYBUFFERSUBDATAPROC   pglCopyBufferSubData;
+/* Extension / 4.3+ functions (loaded via platform extension loader) */
+typedef GLuint      (APIENTRY *pfn_glCreateShader)(GLenum);
+typedef void        (APIENTRY *pfn_glShaderSource)(GLuint, GLsizei, const GLchar *const*, const GLint*);
+typedef void        (APIENTRY *pfn_glCompileShader)(GLuint);
+typedef void        (APIENTRY *pfn_glGetShaderiv)(GLuint, GLenum, GLint*);
+typedef void        (APIENTRY *pfn_glGetShaderInfoLog)(GLuint, GLsizei, GLsizei*, GLchar*);
+typedef GLuint      (APIENTRY *pfn_glCreateProgram)(void);
+typedef void        (APIENTRY *pfn_glAttachShader)(GLuint, GLuint);
+typedef void        (APIENTRY *pfn_glLinkProgram)(GLuint);
+typedef void        (APIENTRY *pfn_glGetProgramiv)(GLuint, GLenum, GLint*);
+typedef void        (APIENTRY *pfn_glGetProgramInfoLog)(GLuint, GLsizei, GLsizei*, GLchar*);
+typedef void        (APIENTRY *pfn_glUseProgram)(GLuint);
+typedef void        (APIENTRY *pfn_glDeleteShader)(GLuint);
+typedef void        (APIENTRY *pfn_glDeleteProgram)(GLuint);
+typedef void        (APIENTRY *pfn_glDispatchCompute)(GLuint, GLuint, GLuint);
+typedef void        (APIENTRY *pfn_glMemoryBarrier)(GLbitfield);
+typedef void        (APIENTRY *pfn_glGenBuffers)(GLsizei, GLuint*);
+typedef void        (APIENTRY *pfn_glDeleteBuffers)(GLsizei, const GLuint*);
+typedef void        (APIENTRY *pfn_glBindBuffer)(GLenum, GLuint);
+typedef void        (APIENTRY *pfn_glBindBufferBase)(GLenum, GLuint, GLuint);
+typedef void        (APIENTRY *pfn_glBufferData)(GLenum, GLsizeiptr, const void*, GLenum);
+typedef void        (APIENTRY *pfn_glBufferSubData)(GLenum, GLintptr, GLsizeiptr, const void*);
+typedef void        (APIENTRY *pfn_glGetBufferSubData)(GLenum, GLintptr, GLsizeiptr, void*);
+typedef void        (APIENTRY *pfn_glCopyBufferSubData)(GLenum, GLenum, GLintptr, GLintptr, GLsizeiptr);
+
+/* ------------------------------------------------------------------ */
+/*  Platform-specific context function pointer types                  */
+/* ------------------------------------------------------------------ */
+
+#ifdef _WIN32
+
+/* wglGetProcAddress — loaded from opengl32.dll */
+typedef void* (APIENTRY *pfn_wglGetProcAddress)(const char*);
+typedef void* (APIENTRY *pfn_wglCreateContext)(void*);
+typedef int   (APIENTRY *pfn_wglMakeCurrent)(void*, void*);
+typedef int   (APIENTRY *pfn_wglDeleteContext)(void*);
+
+static pfn_wglGetProcAddress  p_wglGetProcAddress;
+static pfn_wglCreateContext   p_wglCreateContext;
+static pfn_wglMakeCurrent     p_wglMakeCurrent;
+static pfn_wglDeleteContext   p_wglDeleteContext;
+
+#else /* Linux */
+
+/* X11 function pointer types */
+typedef struct _XDisplay Display;
+typedef unsigned long XID;
+typedef XID Window;
+
+typedef Display* (*pfn_XOpenDisplay)(const char*);
+typedef int      (*pfn_XCloseDisplay)(Display*);
+typedef int      (*pfn_XDefaultScreen)(Display*);
+
+static pfn_XOpenDisplay   p_XOpenDisplay;
+static pfn_XCloseDisplay  p_XCloseDisplay;
+static pfn_XDefaultScreen p_XDefaultScreen;
+
+/* GLX types — opaque pointers */
+typedef struct __GLXcontextRec* GLXContext;
+typedef XID GLXPbuffer;
+typedef XID GLXDrawable;
+typedef struct __GLXFBConfigRec* GLXFBConfig;
+
+/* GLX constants */
+#define GLX_DRAWABLE_TYPE     0x8010
+#define GLX_PBUFFER_BIT       0x00000004
+#define GLX_RENDER_TYPE       0x8011
+#define GLX_RGBA_BIT          0x00000001
+#define GLX_RED_SIZE          8
+#define GLX_PBUFFER_WIDTH     0x8041
+#define GLX_PBUFFER_HEIGHT    0x8042
+#define GLX_RGBA_TYPE         0x8014
+#define None                  0L
+
+/* GLX function pointer types */
+typedef GLXFBConfig* (*pfn_glXChooseFBConfig)(Display*, int, const int*, int*);
+typedef GLXPbuffer   (*pfn_glXCreatePbuffer)(Display*, GLXFBConfig, const int*);
+typedef void         (*pfn_glXDestroyPbuffer)(Display*, GLXPbuffer);
+typedef GLXContext   (*pfn_glXCreateNewContext)(Display*, GLXFBConfig, int, GLXContext, int);
+typedef void         (*pfn_glXDestroyContext)(Display*, GLXContext);
+typedef int          (*pfn_glXMakeContextCurrent)(Display*, GLXDrawable, GLXDrawable, GLXContext);
+typedef void         (*pfn_XFree)(void*);
+typedef void*        (*pfn_glXGetProcAddressARB)(const GLubyte*);
+
+static pfn_glXChooseFBConfig     p_glXChooseFBConfig;
+static pfn_glXCreatePbuffer      p_glXCreatePbuffer;
+static pfn_glXDestroyPbuffer     p_glXDestroyPbuffer;
+static pfn_glXCreateNewContext   p_glXCreateNewContext;
+static pfn_glXDestroyContext     p_glXDestroyContext;
+static pfn_glXMakeContextCurrent p_glXMakeContextCurrent;
+static pfn_XFree                 p_XFree;
+static pfn_glXGetProcAddressARB  p_glXGetProcAddressARB;
+
+#endif /* _WIN32 / Linux */
+
+/* ------------------------------------------------------------------ */
+/*  Resolved GL function pointers                                     */
+/* ------------------------------------------------------------------ */
+
+/* Base GL functions (from the library directly) */
+static pfn_glGetIntegerv     pglGetIntegerv;
+static pfn_glGetString       pglGetString;
+static pfn_glFinish          pglFinish;
+
+/* Extension / 4.3+ functions */
+static pfn_glCreateShader       pglCreateShader;
+static pfn_glShaderSource       pglShaderSource;
+static pfn_glCompileShader      pglCompileShader;
+static pfn_glGetShaderiv        pglGetShaderiv;
+static pfn_glGetShaderInfoLog   pglGetShaderInfoLog;
+static pfn_glCreateProgram      pglCreateProgram;
+static pfn_glAttachShader       pglAttachShader;
+static pfn_glLinkProgram        pglLinkProgram;
+static pfn_glGetProgramiv       pglGetProgramiv;
+static pfn_glGetProgramInfoLog  pglGetProgramInfoLog;
+static pfn_glUseProgram         pglUseProgram;
+static pfn_glDeleteShader       pglDeleteShader;
+static pfn_glDeleteProgram      pglDeleteProgram;
+static pfn_glDispatchCompute    pglDispatchCompute;
+static pfn_glMemoryBarrier      pglMemoryBarrier;
+
+static pfn_glGenBuffers         pglGenBuffers;
+static pfn_glDeleteBuffers      pglDeleteBuffers;
+static pfn_glBindBuffer         pglBindBuffer;
+static pfn_glBindBufferBase     pglBindBufferBase;
+static pfn_glBufferData         pglBufferData;
+static pfn_glBufferSubData      pglBufferSubData;
+static pfn_glGetBufferSubData   pglGetBufferSubData;
+static pfn_glCopyBufferSubData  pglCopyBufferSubData;
+
+/* ------------------------------------------------------------------ */
+/*  Library handles                                                   */
+/* ------------------------------------------------------------------ */
+
+static void* g_gl_lib  = NULL;   /* opengl32.dll / libGL.so */
+#ifndef _WIN32
+static void* g_x11_lib = NULL;   /* libX11.so               */
+#endif
 
 /* ------------------------------------------------------------------ */
 /*  Hidden context (headless)                                         */
@@ -224,7 +255,7 @@ static PFNGLCOPYBUFFERSUBDATAPROC   pglCopyBufferSubData;
 
 static HWND   g_hwnd;
 static HDC    g_hdc;
-static HGLRC  g_hglrc;
+static void*  g_hglrc;   /* HGLRC, but stored as void* to avoid type issues */
 
 static int create_hidden_context(void) {
     /* Register a throwaway window class */
@@ -252,70 +283,68 @@ static int create_hidden_context(void) {
     if (!fmt) return -1;
     SetPixelFormat(g_hdc, fmt, &pfd);
 
-    g_hglrc = wglCreateContext(g_hdc);
+    g_hglrc = p_wglCreateContext(g_hdc);
     if (!g_hglrc) return -1;
-    wglMakeCurrent(g_hdc, g_hglrc);
+    p_wglMakeCurrent(g_hdc, g_hglrc);
     return 0;
 }
 
 static void destroy_hidden_context(void) {
-    if (g_hglrc) { wglMakeCurrent(NULL, NULL); wglDeleteContext(g_hglrc); g_hglrc = NULL; }
+    if (g_hglrc) { p_wglMakeCurrent(NULL, NULL); p_wglDeleteContext(g_hglrc); g_hglrc = NULL; }
     if (g_hdc)   { ReleaseDC(g_hwnd, g_hdc); g_hdc = NULL; }
     if (g_hwnd)  { DestroyWindow(g_hwnd); g_hwnd = NULL; }
 }
 
 #else /* Linux / GLX */
 
-#include <X11/Xlib.h>
-
 static Display*    g_dpy;
 static GLXContext  g_glx_ctx;
 static GLXPbuffer  g_pbuf;
 
 static int create_hidden_context(void) {
-    g_dpy = XOpenDisplay(NULL);
+    g_dpy = p_XOpenDisplay(NULL);
     if (!g_dpy) return -1;
 
     /* Request an fbconfig that supports pbuffers and OpenGL */
-    static int fb_attribs[] = {
+    int fb_attribs[] = {
         GLX_DRAWABLE_TYPE, GLX_PBUFFER_BIT,
         GLX_RENDER_TYPE,   GLX_RGBA_BIT,
         GLX_RED_SIZE,      1,
         None
     };
     int nconfigs = 0;
-    GLXFBConfig* configs = glXChooseFBConfig(g_dpy, DefaultScreen(g_dpy),
-                                              fb_attribs, &nconfigs);
+    GLXFBConfig* configs = p_glXChooseFBConfig(g_dpy, p_XDefaultScreen(g_dpy),
+                                                fb_attribs, &nconfigs);
     if (!configs || nconfigs == 0) {
-        XCloseDisplay(g_dpy);
+        p_XCloseDisplay(g_dpy);
         g_dpy = NULL;
         return -1;
     }
 
     /* Create 1x1 pbuffer (never displayed) */
-    static int pb_attribs[] = { GLX_PBUFFER_WIDTH, 1, GLX_PBUFFER_HEIGHT, 1, None };
-    g_pbuf = glXCreatePbuffer(g_dpy, configs[0], pb_attribs);
+    int pb_attribs[] = { GLX_PBUFFER_WIDTH, 1, GLX_PBUFFER_HEIGHT, 1, None };
+    g_pbuf = p_glXCreatePbuffer(g_dpy, configs[0], pb_attribs);
 
-    g_glx_ctx = glXCreateNewContext(g_dpy, configs[0], GLX_RGBA_TYPE, NULL, True);
-    XFree(configs);
+    g_glx_ctx = p_glXCreateNewContext(g_dpy, configs[0], GLX_RGBA_TYPE, NULL, 1);
+    p_XFree(configs);
 
     if (!g_glx_ctx) {
-        glXDestroyPbuffer(g_dpy, g_pbuf);
-        XCloseDisplay(g_dpy);
+        p_glXDestroyPbuffer(g_dpy, g_pbuf);
+        p_XCloseDisplay(g_dpy);
         g_dpy = NULL;
         return -1;
     }
 
-    glXMakeContextCurrent(g_dpy, g_pbuf, g_pbuf, g_glx_ctx);
+    p_glXMakeContextCurrent(g_dpy, g_pbuf, g_pbuf, g_glx_ctx);
     return 0;
 }
 
 static void destroy_hidden_context(void) {
     if (g_dpy) {
-        glXMakeContextCurrent(g_dpy, None, None, NULL);
-        if (g_glx_ctx)  { glXDestroyContext(g_dpy, g_glx_ctx); g_glx_ctx = NULL; }
-        if (g_pbuf)     { glXDestroyPbuffer(g_dpy, g_pbuf); g_pbuf = 0; }
-        XCloseDisplay(g_dpy);
+        p_glXMakeContextCurrent(g_dpy, None, None, NULL);
+        if (g_glx_ctx)  { p_glXDestroyContext(g_dpy, g_glx_ctx); g_glx_ctx = NULL; }
+        if (g_pbuf)     { p_glXDestroyPbuffer(g_dpy, g_pbuf); g_pbuf = 0; }
+        p_XCloseDisplay(g_dpy);
         g_dpy = NULL;
     }
 }
@@ -323,12 +352,95 @@ static void destroy_hidden_context(void) {
 #endif /* _WIN32 / Linux */
 
 /* ------------------------------------------------------------------ */
-/*  GL function loader                                                */
+/*  Dynamic library loading                                           */
 /* ------------------------------------------------------------------ */
+
+static int load_platform_libraries(void) {
+#ifdef _WIN32
+    /* Load opengl32.dll */
+    g_gl_lib = GL_DLOPEN(GL_LIB_NAME);
+    if (!g_gl_lib) return -1;
+
+    /* WGL functions live in opengl32.dll */
+    *(void**)(&p_wglGetProcAddress) = (void*)GL_DLSYM(g_gl_lib, "wglGetProcAddress");
+    *(void**)(&p_wglCreateContext)  = (void*)GL_DLSYM(g_gl_lib, "wglCreateContext");
+    *(void**)(&p_wglMakeCurrent)    = (void*)GL_DLSYM(g_gl_lib, "wglMakeCurrent");
+    *(void**)(&p_wglDeleteContext)  = (void*)GL_DLSYM(g_gl_lib, "wglDeleteContext");
+    if (!p_wglGetProcAddress || !p_wglCreateContext || !p_wglMakeCurrent || !p_wglDeleteContext)
+        return -1;
+
+#else /* Linux */
+    /* Load X11 */
+    g_x11_lib = GL_DLOPEN(X11_LIB_NAME_2);
+    if (!g_x11_lib) g_x11_lib = GL_DLOPEN(X11_LIB_NAME);
+    if (!g_x11_lib) return -1;
+
+    *(void**)(&p_XOpenDisplay)   = GL_DLSYM(g_x11_lib, "XOpenDisplay");
+    *(void**)(&p_XCloseDisplay)  = GL_DLSYM(g_x11_lib, "XCloseDisplay");
+    *(void**)(&p_XDefaultScreen) = GL_DLSYM(g_x11_lib, "XDefaultScreen");
+    *(void**)(&p_XFree)          = GL_DLSYM(g_x11_lib, "XFree");
+    if (!p_XOpenDisplay || !p_XCloseDisplay || !p_XDefaultScreen || !p_XFree)
+        return -1;
+
+    /* Load GL (which includes GLX on Linux) */
+    g_gl_lib = GL_DLOPEN(GL_LIB_NAME_1);
+    if (!g_gl_lib) g_gl_lib = GL_DLOPEN(GL_LIB_NAME_2);
+    if (!g_gl_lib) return -1;
+
+    /* GLX functions are exported from libGL.so */
+    *(void**)(&p_glXChooseFBConfig)     = GL_DLSYM(g_gl_lib, "glXChooseFBConfig");
+    *(void**)(&p_glXCreatePbuffer)      = GL_DLSYM(g_gl_lib, "glXCreatePbuffer");
+    *(void**)(&p_glXDestroyPbuffer)     = GL_DLSYM(g_gl_lib, "glXDestroyPbuffer");
+    *(void**)(&p_glXCreateNewContext)   = GL_DLSYM(g_gl_lib, "glXCreateNewContext");
+    *(void**)(&p_glXDestroyContext)     = GL_DLSYM(g_gl_lib, "glXDestroyContext");
+    *(void**)(&p_glXMakeContextCurrent) = GL_DLSYM(g_gl_lib, "glXMakeContextCurrent");
+    *(void**)(&p_glXGetProcAddressARB)  = GL_DLSYM(g_gl_lib, "glXGetProcAddressARB");
+
+    if (!p_glXChooseFBConfig || !p_glXCreatePbuffer || !p_glXDestroyPbuffer ||
+        !p_glXCreateNewContext || !p_glXDestroyContext || !p_glXMakeContextCurrent ||
+        !p_glXGetProcAddressARB)
+        return -1;
+#endif
+
+    /* Base GL functions available directly from the library */
+    *(void**)(&pglGetIntegerv) = (void*)GL_DLSYM(g_gl_lib, "glGetIntegerv");
+    *(void**)(&pglGetString)   = (void*)GL_DLSYM(g_gl_lib, "glGetString");
+    *(void**)(&pglFinish)      = (void*)GL_DLSYM(g_gl_lib, "glFinish");
+    if (!pglGetIntegerv || !pglGetString || !pglFinish)
+        return -1;
+
+    return 0;
+}
+
+static void unload_platform_libraries(void) {
+    if (g_gl_lib) { GL_DLCLOSE(g_gl_lib); g_gl_lib = NULL; }
+#ifndef _WIN32
+    if (g_x11_lib) { GL_DLCLOSE(g_x11_lib); g_x11_lib = NULL; }
+#endif
+}
+
+/* ------------------------------------------------------------------ */
+/*  Extension function loader                                         */
+/*                                                                    */
+/*  Must be called AFTER a context is current.  Uses the platform's   */
+/*  extension loader to get 4.3+ compute entry points.                */
+/* ------------------------------------------------------------------ */
+
+static void* gl_get_proc(const char* name) {
+#ifdef _WIN32
+    /* wglGetProcAddress returns NULL for GL 1.1 functions, so fall back
+     * to GetProcAddress on the GL library for those. */
+    void* ptr = (void*)p_wglGetProcAddress(name);
+    if (!ptr) ptr = (void*)GL_DLSYM(g_gl_lib, name);
+    return ptr;
+#else
+    return (void*)p_glXGetProcAddressARB((const GLubyte*)name);
+#endif
+}
 
 static int load_gl_functions(void) {
 #define LOAD(ptr, name) do { \
-    *(void**)(&ptr) = (void*)MENTAL_GL_GETPROC(#name); \
+    *(void**)(&ptr) = gl_get_proc(#name); \
     if (!ptr) return -1; \
 } while (0)
 
@@ -389,27 +501,40 @@ typedef struct {
 /* ------------------------------------------------------------------ */
 
 static int opengl_init(void) {
-    if (create_hidden_context() != 0) return -1;
+    /* Step 1: dlopen the platform libraries */
+    if (load_platform_libraries() != 0) {
+        unload_platform_libraries();
+        return -1;
+    }
 
-    /* Query version — requires a current context */
-    glGetIntegerv(GL_MAJOR_VERSION, &g_gl_major);
-    glGetIntegerv(GL_MINOR_VERSION, &g_gl_minor);
+    /* Step 2: Create a hidden context (needs WGL/GLX functions) */
+    if (create_hidden_context() != 0) {
+        unload_platform_libraries();
+        return -1;
+    }
+
+    /* Step 3: Query version — requires a current context */
+    pglGetIntegerv(GL_MAJOR_VERSION, &g_gl_major);
+    pglGetIntegerv(GL_MINOR_VERSION, &g_gl_minor);
 
     if (g_gl_major < 4 || (g_gl_major == 4 && g_gl_minor < 3)) {
         /* Below 4.3 — no compute shaders, reject. */
         destroy_hidden_context();
+        unload_platform_libraries();
         return -1;
     }
 
-    const char* renderer = (const char*)glGetString(GL_RENDERER);
+    const char* renderer = (const char*)pglGetString(GL_RENDERER);
     if (renderer) {
         strncpy(g_gl_renderer, renderer, sizeof(g_gl_renderer) - 1);
     } else {
         snprintf(g_gl_renderer, sizeof(g_gl_renderer), "OpenGL %d.%d Device", g_gl_major, g_gl_minor);
     }
 
+    /* Step 4: Load extension functions (needs current context) */
     if (load_gl_functions() != 0) {
         destroy_hidden_context();
+        unload_platform_libraries();
         return -1;
     }
 
@@ -418,6 +543,7 @@ static int opengl_init(void) {
 
 static void opengl_shutdown(void) {
     destroy_hidden_context();
+    unload_platform_libraries();
     g_gl_major = 0;
     g_gl_minor = 0;
     g_gl_renderer[0] = '\0';
@@ -502,7 +628,7 @@ static void* opengl_buffer_resize(void* dev, void* old_buf, size_t old_size, siz
     gl_buf->ssbo = new_ssbo;
     gl_buf->size = new_size;
 
-    glFinish();
+    pglFinish();
     return old_buf;
 }
 
@@ -524,7 +650,7 @@ static void* opengl_buffer_clone(void* dev, void* src_buf, size_t size) {
 
     clone->size = size;
 
-    glFinish();
+    pglFinish();
     return clone;
 }
 
@@ -613,7 +739,7 @@ static void opengl_kernel_dispatch(void* kernel, void** inputs, int input_count,
 
     /* Ensure writes are visible before any subsequent buffer read */
     pglMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-    glFinish();
+    pglFinish();
 }
 
 static void opengl_kernel_destroy(void* kernel) {
@@ -624,7 +750,7 @@ static void opengl_kernel_destroy(void* kernel) {
 }
 
 
-/* ── Pipe ───��──────────────────────────────────────────────────── */
+/* -- Pipe ---------------------------------------------------------- */
 
 typedef struct {
     int dummy; /* OpenGL is immediate-mode; no extra state needed */
@@ -672,7 +798,7 @@ static int opengl_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
 
 static int opengl_pipe_execute(void* pipe_ptr) {
     (void)pipe_ptr;
-    glFinish();
+    pglFinish();
     return 0;
 }
 
@@ -715,8 +841,8 @@ static mental_backend g_opengl_backend = {
 mental_backend* opengl_backend = &g_opengl_backend;
 
 #else
-/* OpenGL not available at build time */
+/* OpenGL compute not supported on this platform (macOS, etc.) */
 #include "mental_internal.h"
 #include <stddef.h>
 mental_backend* opengl_backend = NULL;
-#endif /* MENTAL_HAS_OPENGL */
+#endif /* _WIN32 || __linux__ */

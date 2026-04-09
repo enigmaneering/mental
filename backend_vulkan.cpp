@@ -1,16 +1,254 @@
 /*
  * Mental - Vulkan Backend (Linux, Windows)
+ *
+ * The Vulkan loader is opened at runtime via dlopen / LoadLibrary so that
+ * the library can be compiled on any platform and will fail gracefully
+ * when no Vulkan driver is installed.
+ *
+ * Loading strategy:
+ *   1. dlopen the Vulkan loader library
+ *   2. dlsym("vkGetInstanceProcAddr")
+ *   3. Use vkGetInstanceProcAddr(NULL, ...) for pre-instance functions
+ *   4. Create a VkInstance
+ *   5. Use vkGetInstanceProcAddr(instance, ...) for all remaining functions
  */
 
-#ifdef MENTAL_HAS_VULKAN
+#ifdef _WIN32
+#  include <windows.h>
+#  define VK_DLOPEN(path)    ((void*)LoadLibraryA(path))
+#  define VK_DLSYM(lib, sym) ((void*)GetProcAddress((HMODULE)(lib), sym))
+#  define VK_DLCLOSE(lib)    FreeLibrary((HMODULE)(lib))
+#else
+#  include <dlfcn.h>
+#  define VK_DLOPEN(path)    dlopen(path, RTLD_LAZY)
+#  define VK_DLSYM(lib, sym) dlsym(lib, sym)
+#  define VK_DLCLOSE(lib)    dlclose(lib)
+#endif
 
+/* Vulkan header for types and constants only — no linking required.
+ * If the header isn't available (e.g. macOS without Vulkan SDK),
+ * the backend exports vulkan_backend = NULL. */
+#if __has_include(<vulkan/vulkan.h>)
+#define MENTAL_VULKAN_AVAILABLE 1
 #include <vulkan/vulkan.h>
+#else
+#define MENTAL_VULKAN_AVAILABLE 0
+#endif
+
 #include "mental_internal.h"
+
+#if MENTAL_VULKAN_AVAILABLE
 #include "transpile.h"
 #include <vector>
 #include <string>
 #include <cstring>
 #include <cstdlib>
+#include <cstdio>
+
+/* ------------------------------------------------------------------ */
+/*  Resolved Vulkan function pointers                                 */
+/* ------------------------------------------------------------------ */
+
+/* The loader entry point — resolved via dlsym */
+static PFN_vkGetInstanceProcAddr p_vkGetInstanceProcAddr;
+
+/* Pre-instance functions (resolved with instance = NULL) */
+static PFN_vkCreateInstance            p_vkCreateInstance;
+static PFN_vkEnumeratePhysicalDevices  p_vkEnumeratePhysicalDevices;
+
+/* Instance-level functions */
+static PFN_vkDestroyInstance                         p_vkDestroyInstance;
+static PFN_vkGetPhysicalDeviceProperties             p_vkGetPhysicalDeviceProperties;
+static PFN_vkGetPhysicalDeviceQueueFamilyProperties  p_vkGetPhysicalDeviceQueueFamilyProperties;
+static PFN_vkGetPhysicalDeviceMemoryProperties       p_vkGetPhysicalDeviceMemoryProperties;
+static PFN_vkCreateDevice                            p_vkCreateDevice;
+static PFN_vkGetDeviceProcAddr                       p_vkGetDeviceProcAddr;
+
+/* Device-level functions */
+static PFN_vkDestroyDevice               p_vkDestroyDevice;
+static PFN_vkGetDeviceQueue              p_vkGetDeviceQueue;
+static PFN_vkCreateCommandPool           p_vkCreateCommandPool;
+static PFN_vkDestroyCommandPool          p_vkDestroyCommandPool;
+static PFN_vkCreateBuffer                p_vkCreateBuffer;
+static PFN_vkDestroyBuffer               p_vkDestroyBuffer;
+static PFN_vkGetBufferMemoryRequirements p_vkGetBufferMemoryRequirements;
+static PFN_vkAllocateMemory              p_vkAllocateMemory;
+static PFN_vkFreeMemory                  p_vkFreeMemory;
+static PFN_vkBindBufferMemory            p_vkBindBufferMemory;
+static PFN_vkMapMemory                   p_vkMapMemory;
+static PFN_vkUnmapMemory                 p_vkUnmapMemory;
+static PFN_vkCreateShaderModule          p_vkCreateShaderModule;
+static PFN_vkDestroyShaderModule         p_vkDestroyShaderModule;
+static PFN_vkCreateDescriptorSetLayout   p_vkCreateDescriptorSetLayout;
+static PFN_vkDestroyDescriptorSetLayout  p_vkDestroyDescriptorSetLayout;
+static PFN_vkCreatePipelineLayout        p_vkCreatePipelineLayout;
+static PFN_vkDestroyPipelineLayout       p_vkDestroyPipelineLayout;
+static PFN_vkCreateComputePipelines      p_vkCreateComputePipelines;
+static PFN_vkDestroyPipeline             p_vkDestroyPipeline;
+static PFN_vkCreateDescriptorPool        p_vkCreateDescriptorPool;
+static PFN_vkDestroyDescriptorPool       p_vkDestroyDescriptorPool;
+static PFN_vkResetDescriptorPool         p_vkResetDescriptorPool;
+static PFN_vkAllocateDescriptorSets      p_vkAllocateDescriptorSets;
+static PFN_vkUpdateDescriptorSets        p_vkUpdateDescriptorSets;
+static PFN_vkAllocateCommandBuffers      p_vkAllocateCommandBuffers;
+static PFN_vkFreeCommandBuffers          p_vkFreeCommandBuffers;
+static PFN_vkBeginCommandBuffer          p_vkBeginCommandBuffer;
+static PFN_vkEndCommandBuffer            p_vkEndCommandBuffer;
+static PFN_vkCmdBindPipeline             p_vkCmdBindPipeline;
+static PFN_vkCmdBindDescriptorSets       p_vkCmdBindDescriptorSets;
+static PFN_vkCmdDispatch                 p_vkCmdDispatch;
+static PFN_vkCmdPipelineBarrier          p_vkCmdPipelineBarrier;
+static PFN_vkQueueSubmit                 p_vkQueueSubmit;
+static PFN_vkQueueWaitIdle               p_vkQueueWaitIdle;
+
+/* Image functions (for headless viewport) */
+static PFN_vkCreateImage                 p_vkCreateImage;
+static PFN_vkDestroyImage                p_vkDestroyImage;
+static PFN_vkGetImageMemoryRequirements  p_vkGetImageMemoryRequirements;
+static PFN_vkBindImageMemory             p_vkBindImageMemory;
+
+/* KHR swapchain/surface functions (optional — may be NULL on headless) */
+static PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR  p_vkGetPhysicalDeviceSurfaceCapabilitiesKHR;
+static PFN_vkGetPhysicalDeviceSurfaceFormatsKHR       p_vkGetPhysicalDeviceSurfaceFormatsKHR;
+static PFN_vkGetPhysicalDeviceSurfacePresentModesKHR  p_vkGetPhysicalDeviceSurfacePresentModesKHR;
+static PFN_vkCreateSwapchainKHR                       p_vkCreateSwapchainKHR;
+static PFN_vkDestroySwapchainKHR                      p_vkDestroySwapchainKHR;
+static PFN_vkGetSwapchainImagesKHR                    p_vkGetSwapchainImagesKHR;
+static PFN_vkAcquireNextImageKHR                      p_vkAcquireNextImageKHR;
+static PFN_vkQueuePresentKHR                          p_vkQueuePresentKHR;
+
+/* ------------------------------------------------------------------ */
+/*  Dynamic library handle                                            */
+/* ------------------------------------------------------------------ */
+
+static void* g_vk_lib = NULL;
+
+static void* vk_try_open(const char* name) {
+    void* lib = VK_DLOPEN(name);
+    return lib;
+}
+
+static int load_vulkan_library(void) {
+    if (g_vk_lib) return 0;
+
+#ifdef _WIN32
+    g_vk_lib = vk_try_open("vulkan-1.dll");
+#elif defined(__APPLE__)
+    g_vk_lib = vk_try_open("libvulkan.dylib");
+    if (!g_vk_lib) g_vk_lib = vk_try_open("libvulkan.1.dylib");
+#else
+    g_vk_lib = vk_try_open("libvulkan.so.1");
+    if (!g_vk_lib) g_vk_lib = vk_try_open("libvulkan.so");
+#endif
+
+    if (!g_vk_lib) return -1;
+
+    /* Resolve the single entry point we need from dlsym */
+    p_vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)VK_DLSYM(g_vk_lib, "vkGetInstanceProcAddr");
+    if (!p_vkGetInstanceProcAddr) {
+        VK_DLCLOSE(g_vk_lib);
+        g_vk_lib = NULL;
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Resolve pre-instance functions (instance = VK_NULL_HANDLE) */
+static int resolve_global_functions(void) {
+#define VK_LOAD_GLOBAL(fn) do { \
+    p_##fn = (PFN_##fn)p_vkGetInstanceProcAddr(VK_NULL_HANDLE, #fn); \
+    if (!p_##fn) return -1; \
+} while (0)
+
+    VK_LOAD_GLOBAL(vkCreateInstance);
+    VK_LOAD_GLOBAL(vkEnumeratePhysicalDevices);
+
+#undef VK_LOAD_GLOBAL
+    return 0;
+}
+
+/* Resolve instance-level functions */
+static int resolve_instance_functions(VkInstance instance) {
+#define VK_LOAD_INSTANCE(fn) do { \
+    p_##fn = (PFN_##fn)p_vkGetInstanceProcAddr(instance, #fn); \
+    if (!p_##fn) return -1; \
+} while (0)
+
+    VK_LOAD_INSTANCE(vkDestroyInstance);
+    VK_LOAD_INSTANCE(vkGetPhysicalDeviceProperties);
+    VK_LOAD_INSTANCE(vkGetPhysicalDeviceQueueFamilyProperties);
+    VK_LOAD_INSTANCE(vkGetPhysicalDeviceMemoryProperties);
+    VK_LOAD_INSTANCE(vkCreateDevice);
+    VK_LOAD_INSTANCE(vkGetDeviceProcAddr);
+
+    VK_LOAD_INSTANCE(vkDestroyDevice);
+    VK_LOAD_INSTANCE(vkGetDeviceQueue);
+    VK_LOAD_INSTANCE(vkCreateCommandPool);
+    VK_LOAD_INSTANCE(vkDestroyCommandPool);
+    VK_LOAD_INSTANCE(vkCreateBuffer);
+    VK_LOAD_INSTANCE(vkDestroyBuffer);
+    VK_LOAD_INSTANCE(vkGetBufferMemoryRequirements);
+    VK_LOAD_INSTANCE(vkAllocateMemory);
+    VK_LOAD_INSTANCE(vkFreeMemory);
+    VK_LOAD_INSTANCE(vkBindBufferMemory);
+    VK_LOAD_INSTANCE(vkMapMemory);
+    VK_LOAD_INSTANCE(vkUnmapMemory);
+    VK_LOAD_INSTANCE(vkCreateShaderModule);
+    VK_LOAD_INSTANCE(vkDestroyShaderModule);
+    VK_LOAD_INSTANCE(vkCreateDescriptorSetLayout);
+    VK_LOAD_INSTANCE(vkDestroyDescriptorSetLayout);
+    VK_LOAD_INSTANCE(vkCreatePipelineLayout);
+    VK_LOAD_INSTANCE(vkDestroyPipelineLayout);
+    VK_LOAD_INSTANCE(vkCreateComputePipelines);
+    VK_LOAD_INSTANCE(vkDestroyPipeline);
+    VK_LOAD_INSTANCE(vkCreateDescriptorPool);
+    VK_LOAD_INSTANCE(vkDestroyDescriptorPool);
+    VK_LOAD_INSTANCE(vkResetDescriptorPool);
+    VK_LOAD_INSTANCE(vkAllocateDescriptorSets);
+    VK_LOAD_INSTANCE(vkUpdateDescriptorSets);
+    VK_LOAD_INSTANCE(vkAllocateCommandBuffers);
+    VK_LOAD_INSTANCE(vkFreeCommandBuffers);
+    VK_LOAD_INSTANCE(vkBeginCommandBuffer);
+    VK_LOAD_INSTANCE(vkEndCommandBuffer);
+    VK_LOAD_INSTANCE(vkCmdBindPipeline);
+    VK_LOAD_INSTANCE(vkCmdBindDescriptorSets);
+    VK_LOAD_INSTANCE(vkCmdDispatch);
+    VK_LOAD_INSTANCE(vkCmdPipelineBarrier);
+    VK_LOAD_INSTANCE(vkQueueSubmit);
+    VK_LOAD_INSTANCE(vkQueueWaitIdle);
+
+    VK_LOAD_INSTANCE(vkCreateImage);
+    VK_LOAD_INSTANCE(vkDestroyImage);
+    VK_LOAD_INSTANCE(vkGetImageMemoryRequirements);
+    VK_LOAD_INSTANCE(vkBindImageMemory);
+
+#undef VK_LOAD_INSTANCE
+
+    /* KHR swapchain/surface functions are optional — NULL is OK */
+    p_vkGetPhysicalDeviceSurfaceCapabilitiesKHR = (PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR)
+        p_vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
+    p_vkGetPhysicalDeviceSurfaceFormatsKHR = (PFN_vkGetPhysicalDeviceSurfaceFormatsKHR)
+        p_vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfaceFormatsKHR");
+    p_vkGetPhysicalDeviceSurfacePresentModesKHR = (PFN_vkGetPhysicalDeviceSurfacePresentModesKHR)
+        p_vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfacePresentModesKHR");
+    p_vkCreateSwapchainKHR = (PFN_vkCreateSwapchainKHR)
+        p_vkGetInstanceProcAddr(instance, "vkCreateSwapchainKHR");
+    p_vkDestroySwapchainKHR = (PFN_vkDestroySwapchainKHR)
+        p_vkGetInstanceProcAddr(instance, "vkDestroySwapchainKHR");
+    p_vkGetSwapchainImagesKHR = (PFN_vkGetSwapchainImagesKHR)
+        p_vkGetInstanceProcAddr(instance, "vkGetSwapchainImagesKHR");
+    p_vkAcquireNextImageKHR = (PFN_vkAcquireNextImageKHR)
+        p_vkGetInstanceProcAddr(instance, "vkAcquireNextImageKHR");
+    p_vkQueuePresentKHR = (PFN_vkQueuePresentKHR)
+        p_vkGetInstanceProcAddr(instance, "vkQueuePresentKHR");
+
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Vulkan device / buffer / kernel wrappers                          */
+/* ------------------------------------------------------------------ */
 
 /* Vulkan device wrapper */
 typedef struct {
@@ -59,6 +297,18 @@ static VkInstance g_instance = VK_NULL_HANDLE;
 static std::vector<VkPhysicalDevice> g_physical_devices;
 
 static int vulkan_init(void) {
+    /* Load the Vulkan shared library */
+    if (load_vulkan_library() != 0) {
+        return -1;
+    }
+
+    /* Resolve pre-instance functions */
+    if (resolve_global_functions() != 0) {
+        VK_DLCLOSE(g_vk_lib);
+        g_vk_lib = NULL;
+        return -1;
+    }
+
     /* Create instance */
     VkApplicationInfo app_info = {};
     app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -72,32 +322,52 @@ static int vulkan_init(void) {
     create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     create_info.pApplicationInfo = &app_info;
 
-    if (vkCreateInstance(&create_info, nullptr, &g_instance) != VK_SUCCESS) {
+    if (p_vkCreateInstance(&create_info, nullptr, &g_instance) != VK_SUCCESS) {
+        VK_DLCLOSE(g_vk_lib);
+        g_vk_lib = NULL;
+        return -1;
+    }
+
+    /* Resolve all instance-level functions */
+    if (resolve_instance_functions(g_instance) != 0) {
+        /* We have vkDestroyInstance if it was resolved before failure,
+         * but play it safe and just close the library. */
+        if (p_vkDestroyInstance) p_vkDestroyInstance(g_instance, nullptr);
+        g_instance = VK_NULL_HANDLE;
+        VK_DLCLOSE(g_vk_lib);
+        g_vk_lib = NULL;
         return -1;
     }
 
     /* Enumerate physical devices */
     uint32_t device_count = 0;
-    vkEnumeratePhysicalDevices(g_instance, &device_count, nullptr);
+    p_vkEnumeratePhysicalDevices(g_instance, &device_count, nullptr);
 
     if (device_count == 0) {
-        vkDestroyInstance(g_instance, nullptr);
+        p_vkDestroyInstance(g_instance, nullptr);
         g_instance = VK_NULL_HANDLE;
+        VK_DLCLOSE(g_vk_lib);
+        g_vk_lib = NULL;
         return -1;
     }
 
     g_physical_devices.resize(device_count);
-    vkEnumeratePhysicalDevices(g_instance, &device_count, g_physical_devices.data());
+    p_vkEnumeratePhysicalDevices(g_instance, &device_count, g_physical_devices.data());
 
     return 0;
 }
 
 static void vulkan_shutdown(void) {
     if (g_instance != VK_NULL_HANDLE) {
-        vkDestroyInstance(g_instance, nullptr);
+        p_vkDestroyInstance(g_instance, nullptr);
         g_instance = VK_NULL_HANDLE;
     }
     g_physical_devices.clear();
+
+    if (g_vk_lib) {
+        VK_DLCLOSE(g_vk_lib);
+        g_vk_lib = NULL;
+    }
 }
 
 static int vulkan_device_count(void) {
@@ -108,7 +378,7 @@ static int vulkan_device_info(int index, char* name, size_t name_len) {
     if (index < 0 || index >= (int)g_physical_devices.size()) return -1;
 
     VkPhysicalDeviceProperties props;
-    vkGetPhysicalDeviceProperties(g_physical_devices[index], &props);
+    p_vkGetPhysicalDeviceProperties(g_physical_devices[index], &props);
 
     strncpy(name, props.deviceName, name_len - 1);
     name[name_len - 1] = '\0';
@@ -118,10 +388,10 @@ static int vulkan_device_info(int index, char* name, size_t name_len) {
 
 static uint32_t find_compute_queue_family(VkPhysicalDevice device) {
     uint32_t queue_family_count = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, nullptr);
+    p_vkGetPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, nullptr);
 
     std::vector<VkQueueFamilyProperties> queue_families(queue_family_count);
-    vkGetPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, queue_families.data());
+    p_vkGetPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, queue_families.data());
 
     for (uint32_t i = 0; i < queue_family_count; i++) {
         if (queue_families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
@@ -159,13 +429,13 @@ static void* vulkan_device_create(int index) {
     device_create_info.queueCreateInfoCount = 1;
     device_create_info.pQueueCreateInfos = &queue_create_info;
 
-    if (vkCreateDevice(dev->physical_device, &device_create_info, nullptr, &dev->device) != VK_SUCCESS) {
+    if (p_vkCreateDevice(dev->physical_device, &device_create_info, nullptr, &dev->device) != VK_SUCCESS) {
         delete dev;
         return NULL;
     }
 
     /* Get queue */
-    vkGetDeviceQueue(dev->device, dev->queue_family_index, 0, &dev->queue);
+    p_vkGetDeviceQueue(dev->device, dev->queue_family_index, 0, &dev->queue);
 
     /* Create command pool */
     VkCommandPoolCreateInfo pool_info = {};
@@ -173,8 +443,8 @@ static void* vulkan_device_create(int index) {
     pool_info.queueFamilyIndex = dev->queue_family_index;
     pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 
-    if (vkCreateCommandPool(dev->device, &pool_info, nullptr, &dev->command_pool) != VK_SUCCESS) {
-        vkDestroyDevice(dev->device, nullptr);
+    if (p_vkCreateCommandPool(dev->device, &pool_info, nullptr, &dev->command_pool) != VK_SUCCESS) {
+        p_vkDestroyDevice(dev->device, nullptr);
         delete dev;
         return NULL;
     }
@@ -186,14 +456,14 @@ static void vulkan_device_destroy(void* dev) {
     if (!dev) return;
 
     VulkanDevice* vk_dev = (VulkanDevice*)dev;
-    vkDestroyCommandPool(vk_dev->device, vk_dev->command_pool, nullptr);
-    vkDestroyDevice(vk_dev->device, nullptr);
+    p_vkDestroyCommandPool(vk_dev->device, vk_dev->command_pool, nullptr);
+    p_vkDestroyDevice(vk_dev->device, nullptr);
     delete vk_dev;
 }
 
 static uint32_t find_memory_type(VkPhysicalDevice physical_device, uint32_t type_filter, VkMemoryPropertyFlags properties) {
     VkPhysicalDeviceMemoryProperties mem_properties;
-    vkGetPhysicalDeviceMemoryProperties(physical_device, &mem_properties);
+    p_vkGetPhysicalDeviceMemoryProperties(physical_device, &mem_properties);
 
     for (uint32_t i = 0; i < mem_properties.memoryTypeCount; i++) {
         if ((type_filter & (1 << i)) && (mem_properties.memoryTypes[i].propertyFlags & properties) == properties) {
@@ -218,14 +488,14 @@ static void* vulkan_buffer_alloc(void* dev, size_t bytes) {
     buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    if (vkCreateBuffer(vk_dev->device, &buffer_info, nullptr, &buf->buffer) != VK_SUCCESS) {
+    if (p_vkCreateBuffer(vk_dev->device, &buffer_info, nullptr, &buf->buffer) != VK_SUCCESS) {
         delete buf;
         return NULL;
     }
 
     /* Allocate memory */
     VkMemoryRequirements mem_requirements;
-    vkGetBufferMemoryRequirements(vk_dev->device, buf->buffer, &mem_requirements);
+    p_vkGetBufferMemoryRequirements(vk_dev->device, buf->buffer, &mem_requirements);
 
     VkMemoryAllocateInfo alloc_info = {};
     alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -234,23 +504,23 @@ static void* vulkan_buffer_alloc(void* dev, size_t bytes) {
                                                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
     if (alloc_info.memoryTypeIndex == UINT32_MAX) {
-        vkDestroyBuffer(vk_dev->device, buf->buffer, nullptr);
+        p_vkDestroyBuffer(vk_dev->device, buf->buffer, nullptr);
         delete buf;
         return NULL;
     }
 
-    if (vkAllocateMemory(vk_dev->device, &alloc_info, nullptr, &buf->memory) != VK_SUCCESS) {
-        vkDestroyBuffer(vk_dev->device, buf->buffer, nullptr);
+    if (p_vkAllocateMemory(vk_dev->device, &alloc_info, nullptr, &buf->memory) != VK_SUCCESS) {
+        p_vkDestroyBuffer(vk_dev->device, buf->buffer, nullptr);
         delete buf;
         return NULL;
     }
 
-    vkBindBufferMemory(vk_dev->device, buf->buffer, buf->memory, 0);
+    p_vkBindBufferMemory(vk_dev->device, buf->buffer, buf->memory, 0);
 
     /* Map memory persistently */
-    if (vkMapMemory(vk_dev->device, buf->memory, 0, bytes, 0, &buf->mapped_ptr) != VK_SUCCESS) {
-        vkFreeMemory(vk_dev->device, buf->memory, nullptr);
-        vkDestroyBuffer(vk_dev->device, buf->buffer, nullptr);
+    if (p_vkMapMemory(vk_dev->device, buf->memory, 0, bytes, 0, &buf->mapped_ptr) != VK_SUCCESS) {
+        p_vkFreeMemory(vk_dev->device, buf->memory, nullptr);
+        p_vkDestroyBuffer(vk_dev->device, buf->buffer, nullptr);
         delete buf;
         return NULL;
     }
@@ -282,9 +552,9 @@ static void* vulkan_buffer_resize(void* dev, void* old_buf, size_t old_size, siz
     memcpy(new_buf->mapped_ptr, old_vk_buf->mapped_ptr, copy_size);
 
     /* Destroy old buffer */
-    vkUnmapMemory(old_vk_buf->device_ctx->device, old_vk_buf->memory);
-    vkDestroyBuffer(old_vk_buf->device_ctx->device, old_vk_buf->buffer, nullptr);
-    vkFreeMemory(old_vk_buf->device_ctx->device, old_vk_buf->memory, nullptr);
+    p_vkUnmapMemory(old_vk_buf->device_ctx->device, old_vk_buf->memory);
+    p_vkDestroyBuffer(old_vk_buf->device_ctx->device, old_vk_buf->buffer, nullptr);
+    p_vkFreeMemory(old_vk_buf->device_ctx->device, old_vk_buf->memory, nullptr);
     delete old_vk_buf;
 
     return new_buf;
@@ -308,9 +578,9 @@ static void vulkan_buffer_destroy(void* buf) {
     if (!buf) return;
 
     VulkanBuffer* vk_buf = (VulkanBuffer*)buf;
-    vkUnmapMemory(vk_buf->device_ctx->device, vk_buf->memory);
-    vkDestroyBuffer(vk_buf->device_ctx->device, vk_buf->buffer, nullptr);
-    vkFreeMemory(vk_buf->device_ctx->device, vk_buf->memory, nullptr);
+    p_vkUnmapMemory(vk_buf->device_ctx->device, vk_buf->memory);
+    p_vkDestroyBuffer(vk_buf->device_ctx->device, vk_buf->buffer, nullptr);
+    p_vkFreeMemory(vk_buf->device_ctx->device, vk_buf->memory, nullptr);
     delete vk_buf;
 }
 
@@ -349,7 +619,7 @@ static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_
     module_info.codeSize = spirv_len;
     module_info.pCode = spirv_data;
 
-    if (vkCreateShaderModule(vk_dev->device, &module_info, nullptr, &kernel->shader_module) != VK_SUCCESS) {
+    if (p_vkCreateShaderModule(vk_dev->device, &module_info, nullptr, &kernel->shader_module) != VK_SUCCESS) {
         if (error) {
             snprintf(error, error_len, "Failed to create shader module");
         }
@@ -376,9 +646,9 @@ static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_
     layout_info.bindingCount = 16;
     layout_info.pBindings = bindings.data();
 
-    if (vkCreateDescriptorSetLayout(vk_dev->device, &layout_info, nullptr,
+    if (p_vkCreateDescriptorSetLayout(vk_dev->device, &layout_info, nullptr,
                                      &kernel->descriptor_set_layout) != VK_SUCCESS) {
-        vkDestroyShaderModule(vk_dev->device, kernel->shader_module, nullptr);
+        p_vkDestroyShaderModule(vk_dev->device, kernel->shader_module, nullptr);
         if (error) {
             snprintf(error, error_len, "Failed to create descriptor set layout");
         }
@@ -392,10 +662,10 @@ static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_
     pipeline_layout_info.setLayoutCount = 1;
     pipeline_layout_info.pSetLayouts = &kernel->descriptor_set_layout;
 
-    if (vkCreatePipelineLayout(vk_dev->device, &pipeline_layout_info, nullptr,
+    if (p_vkCreatePipelineLayout(vk_dev->device, &pipeline_layout_info, nullptr,
                                 &kernel->pipeline_layout) != VK_SUCCESS) {
-        vkDestroyDescriptorSetLayout(vk_dev->device, kernel->descriptor_set_layout, nullptr);
-        vkDestroyShaderModule(vk_dev->device, kernel->shader_module, nullptr);
+        p_vkDestroyDescriptorSetLayout(vk_dev->device, kernel->descriptor_set_layout, nullptr);
+        p_vkDestroyShaderModule(vk_dev->device, kernel->shader_module, nullptr);
         if (error) {
             snprintf(error, error_len, "Failed to create pipeline layout");
         }
@@ -415,11 +685,11 @@ static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_
     pipeline_info.stage = shader_stage_info;
     pipeline_info.layout = kernel->pipeline_layout;
 
-    if (vkCreateComputePipelines(vk_dev->device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr,
+    if (p_vkCreateComputePipelines(vk_dev->device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr,
                                   &kernel->pipeline) != VK_SUCCESS) {
-        vkDestroyPipelineLayout(vk_dev->device, kernel->pipeline_layout, nullptr);
-        vkDestroyDescriptorSetLayout(vk_dev->device, kernel->descriptor_set_layout, nullptr);
-        vkDestroyShaderModule(vk_dev->device, kernel->shader_module, nullptr);
+        p_vkDestroyPipelineLayout(vk_dev->device, kernel->pipeline_layout, nullptr);
+        p_vkDestroyDescriptorSetLayout(vk_dev->device, kernel->descriptor_set_layout, nullptr);
+        p_vkDestroyShaderModule(vk_dev->device, kernel->shader_module, nullptr);
         if (error) {
             snprintf(error, error_len, "Failed to create compute pipeline");
         }
@@ -439,12 +709,12 @@ static void* vulkan_kernel_compile(void* dev, const char* source, size_t source_
     pool_info.maxSets = 1;
     pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
-    if (vkCreateDescriptorPool(vk_dev->device, &pool_info, nullptr,
+    if (p_vkCreateDescriptorPool(vk_dev->device, &pool_info, nullptr,
                                 &kernel->descriptor_pool) != VK_SUCCESS) {
-        vkDestroyPipeline(vk_dev->device, kernel->pipeline, nullptr);
-        vkDestroyPipelineLayout(vk_dev->device, kernel->pipeline_layout, nullptr);
-        vkDestroyDescriptorSetLayout(vk_dev->device, kernel->descriptor_set_layout, nullptr);
-        vkDestroyShaderModule(vk_dev->device, kernel->shader_module, nullptr);
+        p_vkDestroyPipeline(vk_dev->device, kernel->pipeline, nullptr);
+        p_vkDestroyPipelineLayout(vk_dev->device, kernel->pipeline_layout, nullptr);
+        p_vkDestroyDescriptorSetLayout(vk_dev->device, kernel->descriptor_set_layout, nullptr);
+        p_vkDestroyShaderModule(vk_dev->device, kernel->shader_module, nullptr);
         if (error) {
             snprintf(error, error_len, "Failed to create descriptor pool");
         }
@@ -478,7 +748,7 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
     alloc_info.descriptorSetCount = 1;
     alloc_info.pSetLayouts = &vk_kernel->descriptor_set_layout;
 
-    if (vkAllocateDescriptorSets(vk_dev->device, &alloc_info, &descriptor_set) != VK_SUCCESS) {
+    if (p_vkAllocateDescriptorSets(vk_dev->device, &alloc_info, &descriptor_set) != VK_SUCCESS) {
         return;
     }
 
@@ -523,7 +793,7 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
     descriptor_writes[input_count].descriptorCount = 1;
     descriptor_writes[input_count].pBufferInfo = &buffer_infos[input_count];
 
-    vkUpdateDescriptorSets(vk_dev->device, (uint32_t)descriptor_writes.size(),
+    p_vkUpdateDescriptorSets(vk_dev->device, (uint32_t)descriptor_writes.size(),
                            descriptor_writes.data(), 0, nullptr);
 
     /* Allocate command buffer */
@@ -534,7 +804,7 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
     cmd_buf_alloc_info.commandBufferCount = 1;
 
     VkCommandBuffer command_buffer;
-    if (vkAllocateCommandBuffers(vk_dev->device, &cmd_buf_alloc_info, &command_buffer) != VK_SUCCESS) {
+    if (p_vkAllocateCommandBuffers(vk_dev->device, &cmd_buf_alloc_info, &command_buffer) != VK_SUCCESS) {
         return;
     }
 
@@ -543,17 +813,17 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-    vkBeginCommandBuffer(command_buffer, &begin_info);
-    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_kernel->pipeline);
-    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+    p_vkBeginCommandBuffer(command_buffer, &begin_info);
+    p_vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_kernel->pipeline);
+    p_vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                             vk_kernel->pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
     /* work_size is the total number of invocations. The shader's
      * local_size_x defines the workgroup size (typically 256).
      * vkCmdDispatch takes the number of workgroups, not invocations. */
     uint32_t local_size = (uint32_t)vulkan_kernel_workgroup_size(kernel);
     uint32_t num_groups = ((uint32_t)work_size + local_size - 1) / local_size;
-    vkCmdDispatch(command_buffer, num_groups, 1, 1);
-    vkEndCommandBuffer(command_buffer);
+    p_vkCmdDispatch(command_buffer, num_groups, 1, 1);
+    p_vkEndCommandBuffer(command_buffer);
 
     /* Submit command buffer */
     VkSubmitInfo submit_info = {};
@@ -561,18 +831,18 @@ static void vulkan_kernel_dispatch(void* kernel, void** inputs, int input_count,
     submit_info.commandBufferCount = 1;
     submit_info.pCommandBuffers = &command_buffer;
 
-    if (vkQueueSubmit(vk_dev->queue, 1, &submit_info, VK_NULL_HANDLE) != VK_SUCCESS) {
-        vkFreeCommandBuffers(vk_dev->device, vk_dev->command_pool, 1, &command_buffer);
+    if (p_vkQueueSubmit(vk_dev->queue, 1, &submit_info, VK_NULL_HANDLE) != VK_SUCCESS) {
+        p_vkFreeCommandBuffers(vk_dev->device, vk_dev->command_pool, 1, &command_buffer);
         return;
     }
 
-    vkQueueWaitIdle(vk_dev->queue);
+    p_vkQueueWaitIdle(vk_dev->queue);
 
     /* Free command buffer */
-    vkFreeCommandBuffers(vk_dev->device, vk_dev->command_pool, 1, &command_buffer);
+    p_vkFreeCommandBuffers(vk_dev->device, vk_dev->command_pool, 1, &command_buffer);
 
     /* Reset descriptor pool for next dispatch */
-    vkResetDescriptorPool(vk_dev->device, vk_kernel->descriptor_pool, 0);
+    p_vkResetDescriptorPool(vk_dev->device, vk_kernel->descriptor_pool, 0);
 }
 
 static void vulkan_kernel_destroy(void* kernel) {
@@ -582,19 +852,19 @@ static void vulkan_kernel_destroy(void* kernel) {
     VkDevice device = vk_kernel->device_ctx->device;
 
     if (vk_kernel->descriptor_pool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(device, vk_kernel->descriptor_pool, nullptr);
+        p_vkDestroyDescriptorPool(device, vk_kernel->descriptor_pool, nullptr);
     }
     if (vk_kernel->pipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device, vk_kernel->pipeline, nullptr);
+        p_vkDestroyPipeline(device, vk_kernel->pipeline, nullptr);
     }
     if (vk_kernel->pipeline_layout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(device, vk_kernel->pipeline_layout, nullptr);
+        p_vkDestroyPipelineLayout(device, vk_kernel->pipeline_layout, nullptr);
     }
     if (vk_kernel->descriptor_set_layout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(device, vk_kernel->descriptor_set_layout, nullptr);
+        p_vkDestroyDescriptorSetLayout(device, vk_kernel->descriptor_set_layout, nullptr);
     }
     if (vk_kernel->shader_module != VK_NULL_HANDLE) {
-        vkDestroyShaderModule(device, vk_kernel->shader_module, nullptr);
+        p_vkDestroyShaderModule(device, vk_kernel->shader_module, nullptr);
     }
     delete vk_kernel;
 }
@@ -617,8 +887,8 @@ static void* vulkan_viewport_attach(void* dev, void* buffer, void* surface, char
     /* Check if swapchain functions are available.
      * On headless systems (lavapipe without display), the VK_KHR_swapchain
      * extension may not be loaded, leaving function pointers NULL. */
-    int has_swapchain = (vkGetPhysicalDeviceSurfaceCapabilitiesKHR != NULL &&
-                         vkCreateSwapchainKHR != NULL);
+    int has_swapchain = (p_vkGetPhysicalDeviceSurfaceCapabilitiesKHR != NULL &&
+                         p_vkCreateSwapchainKHR != NULL);
 
     VulkanViewport* viewport = new VulkanViewport();
     viewport->surface = vk_surface;
@@ -638,7 +908,7 @@ static void* vulkan_viewport_attach(void* dev, void* buffer, void* surface, char
 
     /* Query surface capabilities — if this fails, fall back to headless */
     VkSurfaceCapabilitiesKHR capabilities = {};
-    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vk_dev->physical_device, vk_surface, &capabilities) != VK_SUCCESS) {
+    if (p_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(vk_dev->physical_device, vk_surface, &capabilities) != VK_SUCCESS) {
         viewport->swapchain = VK_NULL_HANDLE;
         viewport->headless = 1;
         return viewport;
@@ -646,14 +916,14 @@ static void* vulkan_viewport_attach(void* dev, void* buffer, void* surface, char
 
     /* Query surface formats */
     uint32_t format_count = 0;
-    vkGetPhysicalDeviceSurfaceFormatsKHR(vk_dev->physical_device, vk_surface, &format_count, nullptr);
+    p_vkGetPhysicalDeviceSurfaceFormatsKHR(vk_dev->physical_device, vk_surface, &format_count, nullptr);
     if (format_count == 0) {
         viewport->swapchain = VK_NULL_HANDLE;
         viewport->headless = 1;
         return viewport;
     }
     std::vector<VkSurfaceFormatKHR> formats(format_count);
-    vkGetPhysicalDeviceSurfaceFormatsKHR(vk_dev->physical_device, vk_surface, &format_count, formats.data());
+    p_vkGetPhysicalDeviceSurfaceFormatsKHR(vk_dev->physical_device, vk_surface, &format_count, formats.data());
 
     /* Choose format - prefer BGRA8 UNORM */
     VkSurfaceFormatKHR surface_format = formats[0];
@@ -666,9 +936,9 @@ static void* vulkan_viewport_attach(void* dev, void* buffer, void* surface, char
 
     /* Query present modes */
     uint32_t present_mode_count;
-    vkGetPhysicalDeviceSurfacePresentModesKHR(vk_dev->physical_device, vk_surface, &present_mode_count, nullptr);
+    p_vkGetPhysicalDeviceSurfacePresentModesKHR(vk_dev->physical_device, vk_surface, &present_mode_count, nullptr);
     std::vector<VkPresentModeKHR> present_modes(present_mode_count);
-    vkGetPhysicalDeviceSurfacePresentModesKHR(vk_dev->physical_device, vk_surface, &present_mode_count, present_modes.data());
+    p_vkGetPhysicalDeviceSurfacePresentModesKHR(vk_dev->physical_device, vk_surface, &present_mode_count, present_modes.data());
 
     /* Create swapchain */
     VkSwapchainCreateInfoKHR swapchain_info = {};
@@ -688,16 +958,16 @@ static void* vulkan_viewport_attach(void* dev, void* buffer, void* surface, char
 
     /* Try to create swapchain for double-buffered present */
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
-    VkResult sc_result = vkCreateSwapchainKHR(vk_dev->device, &swapchain_info, nullptr, &swapchain);
+    VkResult sc_result = p_vkCreateSwapchainKHR(vk_dev->device, &swapchain_info, nullptr, &swapchain);
 
     if (sc_result == VK_SUCCESS && swapchain != VK_NULL_HANDLE) {
         /* Double-buffered path */
         viewport->swapchain = swapchain;
 
         uint32_t image_count;
-        vkGetSwapchainImagesKHR(vk_dev->device, swapchain, &image_count, nullptr);
+        p_vkGetSwapchainImagesKHR(vk_dev->device, swapchain, &image_count, nullptr);
         viewport->swapchain_images.resize(image_count);
-        vkGetSwapchainImagesKHR(vk_dev->device, swapchain, &image_count, viewport->swapchain_images.data());
+        p_vkGetSwapchainImagesKHR(vk_dev->device, swapchain, &image_count, viewport->swapchain_images.data());
     } else {
         /* Headless fallback: create a single image as render target.
          * Present becomes a copy-only operation (no display output). */
@@ -719,14 +989,14 @@ static void* vulkan_viewport_attach(void* dev, void* buffer, void* surface, char
         img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-        if (vkCreateImage(vk_dev->device, &img_info, nullptr, &viewport->headless_image) != VK_SUCCESS) {
+        if (p_vkCreateImage(vk_dev->device, &img_info, nullptr, &viewport->headless_image) != VK_SUCCESS) {
             if (error) snprintf(error, error_len, "Failed to create headless render target");
             delete viewport;
             return NULL;
         }
 
         VkMemoryRequirements mem_req;
-        vkGetImageMemoryRequirements(vk_dev->device, viewport->headless_image, &mem_req);
+        p_vkGetImageMemoryRequirements(vk_dev->device, viewport->headless_image, &mem_req);
 
         VkMemoryAllocateInfo mem_alloc = {};
         mem_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -734,14 +1004,14 @@ static void* vulkan_viewport_attach(void* dev, void* buffer, void* surface, char
         mem_alloc.memoryTypeIndex = find_memory_type(vk_dev->physical_device, mem_req.memoryTypeBits,
                                                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-        if (vkAllocateMemory(vk_dev->device, &mem_alloc, nullptr, &viewport->headless_memory) != VK_SUCCESS) {
-            vkDestroyImage(vk_dev->device, viewport->headless_image, nullptr);
+        if (p_vkAllocateMemory(vk_dev->device, &mem_alloc, nullptr, &viewport->headless_memory) != VK_SUCCESS) {
+            p_vkDestroyImage(vk_dev->device, viewport->headless_image, nullptr);
             if (error) snprintf(error, error_len, "Failed to allocate headless image memory");
             delete viewport;
             return NULL;
         }
 
-        vkBindImageMemory(vk_dev->device, viewport->headless_image, viewport->headless_memory, 0);
+        p_vkBindImageMemory(vk_dev->device, viewport->headless_image, viewport->headless_memory, 0);
     }
 
     return viewport;
@@ -756,12 +1026,12 @@ static void vulkan_viewport_present(void* viewport_ptr) {
     if (viewport->headless) {
         /* Headless: just wait for any pending work to complete.
          * The data is in the buffer — no display output needed. */
-        vkQueueWaitIdle(vk_dev->queue);
+        p_vkQueueWaitIdle(vk_dev->queue);
         return;
     }
 
     /* Double-buffered path: acquire, present */
-    vkAcquireNextImageKHR(vk_dev->device, viewport->swapchain, UINT64_MAX,
+    p_vkAcquireNextImageKHR(vk_dev->device, viewport->swapchain, UINT64_MAX,
                           VK_NULL_HANDLE, VK_NULL_HANDLE, &viewport->image_index);
 
     VkPresentInfoKHR present_info = {};
@@ -770,8 +1040,8 @@ static void vulkan_viewport_present(void* viewport_ptr) {
     present_info.pSwapchains = &viewport->swapchain;
     present_info.pImageIndices = &viewport->image_index;
 
-    vkQueuePresentKHR(vk_dev->queue, &present_info);
-    vkQueueWaitIdle(vk_dev->queue);
+    p_vkQueuePresentKHR(vk_dev->queue, &present_info);
+    p_vkQueueWaitIdle(vk_dev->queue);
 }
 
 static void vulkan_viewport_detach(void* viewport_ptr) {
@@ -781,13 +1051,13 @@ static void vulkan_viewport_detach(void* viewport_ptr) {
     VkDevice device = viewport->device_ctx->device;
 
     if (viewport->swapchain != VK_NULL_HANDLE) {
-        vkDestroySwapchainKHR(device, viewport->swapchain, nullptr);
+        p_vkDestroySwapchainKHR(device, viewport->swapchain, nullptr);
     }
     if (viewport->headless_image != VK_NULL_HANDLE) {
-        vkDestroyImage(device, viewport->headless_image, nullptr);
+        p_vkDestroyImage(device, viewport->headless_image, nullptr);
     }
     if (viewport->headless_memory != VK_NULL_HANDLE) {
-        vkFreeMemory(device, viewport->headless_memory, nullptr);
+        p_vkFreeMemory(device, viewport->headless_memory, nullptr);
     }
 
     delete viewport;
@@ -814,7 +1084,7 @@ static void* vulkan_pipe_create(void* dev) {
     alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     alloc_info.commandBufferCount = 1;
 
-    if (vkAllocateCommandBuffers(vk_dev->device, &alloc_info, &pipe->command_buffer) != VK_SUCCESS) {
+    if (p_vkAllocateCommandBuffers(vk_dev->device, &alloc_info, &pipe->command_buffer) != VK_SUCCESS) {
         delete pipe;
         return NULL;
     }
@@ -824,8 +1094,8 @@ static void* vulkan_pipe_create(void* dev) {
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-    if (vkBeginCommandBuffer(pipe->command_buffer, &begin_info) != VK_SUCCESS) {
-        vkFreeCommandBuffers(vk_dev->device, vk_dev->command_pool, 1, &pipe->command_buffer);
+    if (p_vkBeginCommandBuffer(pipe->command_buffer, &begin_info) != VK_SUCCESS) {
+        p_vkFreeCommandBuffers(vk_dev->device, vk_dev->command_pool, 1, &pipe->command_buffer);
         delete pipe;
         return NULL;
     }
@@ -848,7 +1118,7 @@ static int vulkan_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
     alloc_info.descriptorSetCount = 1;
     alloc_info.pSetLayouts = &vk_kernel->descriptor_set_layout;
 
-    if (vkAllocateDescriptorSets(vk_dev->device, &alloc_info, &descriptor_set) != VK_SUCCESS) {
+    if (p_vkAllocateDescriptorSets(vk_dev->device, &alloc_info, &descriptor_set) != VK_SUCCESS) {
         return -1;
     }
 
@@ -888,7 +1158,7 @@ static int vulkan_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
     descriptor_writes[input_count].descriptorCount = 1;
     descriptor_writes[input_count].pBufferInfo = &buffer_infos[input_count];
 
-    vkUpdateDescriptorSets(vk_dev->device, (uint32_t)descriptor_writes.size(),
+    p_vkUpdateDescriptorSets(vk_dev->device, (uint32_t)descriptor_writes.size(),
                            descriptor_writes.data(), 0, nullptr);
 
     /* Insert pipeline barrier between dispatches */
@@ -896,19 +1166,19 @@ static int vulkan_pipe_add(void* pipe_ptr, void* kernel, void** inputs,
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    vkCmdPipelineBarrier(pipe->command_buffer,
+    p_vkCmdPipelineBarrier(pipe->command_buffer,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          0, 1, &barrier, 0, nullptr, 0, nullptr);
 
     /* Bind pipeline and descriptor set, then dispatch */
-    vkCmdBindPipeline(pipe->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_kernel->pipeline);
-    vkCmdBindDescriptorSets(pipe->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+    p_vkCmdBindPipeline(pipe->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_kernel->pipeline);
+    p_vkCmdBindDescriptorSets(pipe->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                             vk_kernel->pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
 
     uint32_t local_size = (uint32_t)vulkan_kernel_workgroup_size(kernel);
     uint32_t num_groups = ((uint32_t)work_size + local_size - 1) / local_size;
-    vkCmdDispatch(pipe->command_buffer, num_groups, 1, 1);
+    p_vkCmdDispatch(pipe->command_buffer, num_groups, 1, 1);
 
     return 0;
 }
@@ -917,25 +1187,25 @@ static int vulkan_pipe_execute(void* pipe_ptr) {
     VulkanPipe* pipe = (VulkanPipe*)pipe_ptr;
     VulkanDevice* vk_dev = pipe->device_ctx;
 
-    vkEndCommandBuffer(pipe->command_buffer);
+    p_vkEndCommandBuffer(pipe->command_buffer);
 
     VkSubmitInfo submit_info = {};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submit_info.commandBufferCount = 1;
     submit_info.pCommandBuffers = &pipe->command_buffer;
 
-    if (vkQueueSubmit(vk_dev->queue, 1, &submit_info, VK_NULL_HANDLE) != VK_SUCCESS) {
+    if (p_vkQueueSubmit(vk_dev->queue, 1, &submit_info, VK_NULL_HANDLE) != VK_SUCCESS) {
         return -1;
     }
 
-    vkQueueWaitIdle(vk_dev->queue);
+    p_vkQueueWaitIdle(vk_dev->queue);
     return 0;
 }
 
 static void vulkan_pipe_destroy(void* pipe_ptr) {
     if (!pipe_ptr) return;
     VulkanPipe* pipe = (VulkanPipe*)pipe_ptr;
-    vkFreeCommandBuffers(pipe->device_ctx->device, pipe->device_ctx->command_pool,
+    p_vkFreeCommandBuffers(pipe->device_ctx->device, pipe->device_ctx->command_pool,
                          1, &pipe->command_buffer);
     delete pipe;
 }
@@ -969,9 +1239,14 @@ static mental_backend g_vulkan_backend = {
     .viewport_detach = vulkan_viewport_detach
 };
 
-mental_backend* vulkan_backend = &g_vulkan_backend;
+extern "C" {
+    mental_backend* vulkan_backend = &g_vulkan_backend;
+}
 
-#else
-/* Vulkan SDK not available */
-mental_backend* vulkan_backend = NULL;
-#endif /* MENTAL_HAS_VULKAN */
+#else /* !MENTAL_VULKAN_AVAILABLE */
+
+extern "C" {
+    mental_backend* vulkan_backend = NULL;
+}
+
+#endif /* MENTAL_VULKAN_AVAILABLE */

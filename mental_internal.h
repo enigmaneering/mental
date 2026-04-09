@@ -115,31 +115,17 @@ struct mental_backend_t {
     void (*viewport_detach)(void* viewport);
 };
 
-/* Backend registry */
-#ifdef MENTAL_HAS_METAL
+/* Backend registry — all backends are always declared.
+ * Each backend file exports either a valid pointer (when the platform
+ * supports it and dlopen succeeds) or NULL (graceful degradation). */
 extern mental_backend* metal_backend;
-#endif
-#ifdef MENTAL_HAS_D3D12
 extern mental_backend* d3d12_backend;
-#endif
-#ifdef MENTAL_HAS_VULKAN
 extern mental_backend* vulkan_backend;
-#endif
-#ifdef MENTAL_HAS_OPENCL
 extern mental_backend* opencl_backend;
-#endif
-#ifdef MENTAL_HAS_OPENGL
 extern mental_backend* opengl_backend;
-#endif
-#ifdef MENTAL_HAS_POCL
-extern mental_backend* pocl_backend;
-#endif
-#ifdef MENTAL_HAS_WEBGPU
-extern mental_backend* webgpu_backend;
-#endif
-#ifdef MENTAL_HAS_D3D11
 extern mental_backend* d3d11_backend;
-#endif
+extern mental_backend* pocl_backend;
+extern mental_backend* webgpu_backend;
 
 /* Error handling */
 void mental_set_error(mental_error code, const char* message);

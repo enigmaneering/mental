@@ -1,20 +1,25 @@
 /*
- * Mental - D3D11 Compute Backend
+ * Mental - D3D11 Compute Backend (runtime-loaded via LoadLibrary)
  *
  * Last-resort GPU-accelerated backend for Windows 7/8 machines that lack
  * D3D12 and Vulkan.  Uses the immediate context model — dispatches execute
  * immediately, same pattern as the OpenGL backend.
  *
- * Compilation path: GLSL → SPIR-V (glslang) → HLSL (spirv-cross) →
+ * Compilation path: GLSL -> SPIR-V (glslang) -> HLSL (spirv-cross) ->
  *                   DXBC (D3DCompile, Shader Model 5.0)
  *
- * Guard: compiled only when MENTAL_HAS_D3D11 is defined by CMake.
+ * DLLs loaded at runtime: d3d11.dll, d3dcompiler_47.dll, dxgi.dll
+ * Only free/factory functions are resolved via GetProcAddress — all
+ * D3D11/DXGI methods are COM vtable calls.
+ *
+ * Always compiled.  On non-Windows, exports d3d11_backend = NULL.
  */
 
-#ifdef MENTAL_HAS_D3D11
+#include "mental_internal.h"
+
+#ifdef _WIN32
 
 #include "mental.h"
-#include "mental_internal.h"
 #include "transpile.h"
 
 #include <d3d11.h>
@@ -26,11 +31,86 @@
 #include <cstdio>
 #include <vector>
 
+/* ── Dynamic library handles ────────────────────────────────────── */
+
+static HMODULE g_d3d11_dll       = nullptr;
+static HMODULE g_d3dcompiler_dll = nullptr;
+static HMODULE g_dxgi_dll        = nullptr;
+
+/* ── Function pointer types ─────────────────────────────────────── */
+
+typedef HRESULT (WINAPI *PFN_D3D11CreateDevice)(
+    IDXGIAdapter*, D3D_DRIVER_TYPE, HMODULE, UINT,
+    const D3D_FEATURE_LEVEL*, UINT, UINT,
+    ID3D11Device**, D3D_FEATURE_LEVEL*, ID3D11DeviceContext**);
+
+typedef HRESULT (WINAPI *PFN_D3DCompile)(
+    LPCVOID, SIZE_T, LPCSTR,
+    const D3D_SHADER_MACRO*, ID3DInclude*,
+    LPCSTR, LPCSTR, UINT, UINT,
+    ID3DBlob**, ID3DBlob**);
+
+typedef HRESULT (WINAPI *PFN_CreateDXGIFactory1)(
+    REFIID, void**);
+
+/* ── Resolved function pointers ─────────────────────────────────── */
+
+static PFN_D3D11CreateDevice  pfn_D3D11CreateDevice  = nullptr;
+static PFN_D3DCompile         pfn_D3DCompile         = nullptr;
+static PFN_CreateDXGIFactory1 pfn_CreateDXGIFactory1 = nullptr;
+
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
 template<typename T>
 static void safe_release(T*& ptr) {
     if (ptr) { ptr->Release(); ptr = nullptr; }
+}
+
+static int load_d3d11_libraries(void) {
+    g_d3d11_dll = LoadLibraryA("d3d11.dll");
+    if (!g_d3d11_dll) return -1;
+
+    g_d3dcompiler_dll = LoadLibraryA("d3dcompiler_47.dll");
+    if (!g_d3dcompiler_dll) {
+        FreeLibrary(g_d3d11_dll); g_d3d11_dll = nullptr;
+        return -1;
+    }
+
+    g_dxgi_dll = LoadLibraryA("dxgi.dll");
+    if (!g_dxgi_dll) {
+        FreeLibrary(g_d3dcompiler_dll); g_d3dcompiler_dll = nullptr;
+        FreeLibrary(g_d3d11_dll);       g_d3d11_dll = nullptr;
+        return -1;
+    }
+
+    pfn_D3D11CreateDevice = (PFN_D3D11CreateDevice)
+        GetProcAddress(g_d3d11_dll, "D3D11CreateDevice");
+    pfn_D3DCompile = (PFN_D3DCompile)
+        GetProcAddress(g_d3dcompiler_dll, "D3DCompile");
+    pfn_CreateDXGIFactory1 = (PFN_CreateDXGIFactory1)
+        GetProcAddress(g_dxgi_dll, "CreateDXGIFactory1");
+
+    if (!pfn_D3D11CreateDevice || !pfn_D3DCompile || !pfn_CreateDXGIFactory1) {
+        FreeLibrary(g_dxgi_dll);        g_dxgi_dll = nullptr;
+        FreeLibrary(g_d3dcompiler_dll); g_d3dcompiler_dll = nullptr;
+        FreeLibrary(g_d3d11_dll);       g_d3d11_dll = nullptr;
+        pfn_D3D11CreateDevice  = nullptr;
+        pfn_D3DCompile         = nullptr;
+        pfn_CreateDXGIFactory1 = nullptr;
+        return -1;
+    }
+
+    return 0;
+}
+
+static void unload_d3d11_libraries(void) {
+    pfn_D3D11CreateDevice  = nullptr;
+    pfn_D3DCompile         = nullptr;
+    pfn_CreateDXGIFactory1 = nullptr;
+
+    if (g_dxgi_dll)        { FreeLibrary(g_dxgi_dll);        g_dxgi_dll = nullptr; }
+    if (g_d3dcompiler_dll) { FreeLibrary(g_d3dcompiler_dll); g_d3dcompiler_dll = nullptr; }
+    if (g_d3d11_dll)       { FreeLibrary(g_d3d11_dll);       g_d3d11_dll = nullptr; }
 }
 
 /* ── Types ───────────────────────────────────────────────────────── */
@@ -42,7 +122,7 @@ typedef struct {
 
 typedef struct {
     ID3D11Buffer*                 gpu_buffer;     /* DEFAULT, UAV-capable */
-    ID3D11Buffer*                 staging;        /* STAGING, CPU↔GPU */
+    ID3D11Buffer*                 staging;        /* STAGING, CPU<->GPU */
     ID3D11UnorderedAccessView*    uav;
     ID3D11ShaderResourceView*     srv;
     size_t                        size;
@@ -73,9 +153,14 @@ static std::vector<IDXGIAdapter1*> g_adapters;
 /* ── Init / Shutdown ─────────────────────────────────────────────── */
 
 static int d3d11_init(void) {
+    if (load_d3d11_libraries() != 0) return -1;
+
     IDXGIFactory1* factory = nullptr;
-    HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&factory);
-    if (FAILED(hr)) return -1;
+    HRESULT hr = pfn_CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&factory);
+    if (FAILED(hr)) {
+        unload_d3d11_libraries();
+        return -1;
+    }
 
     IDXGIAdapter1* adapter = nullptr;
     for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; i++) {
@@ -91,7 +176,7 @@ static int d3d11_init(void) {
         /* Test D3D11 support at feature level 11_0 (required for CS 5.0) */
         D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
         D3D_FEATURE_LEVEL actual;
-        hr = D3D11CreateDevice(adapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+        hr = pfn_D3D11CreateDevice(adapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr,
                                0, &level, 1, D3D11_SDK_VERSION,
                                nullptr, &actual, nullptr);
         if (SUCCEEDED(hr) && actual >= D3D_FEATURE_LEVEL_11_0) {
@@ -102,12 +187,19 @@ static int d3d11_init(void) {
     }
 
     factory->Release();
-    return g_adapters.empty() ? -1 : 0;
+
+    if (g_adapters.empty()) {
+        unload_d3d11_libraries();
+        return -1;
+    }
+
+    return 0;
 }
 
 static void d3d11_shutdown(void) {
     for (auto* a : g_adapters) a->Release();
     g_adapters.clear();
+    unload_d3d11_libraries();
 }
 
 static int d3d11_device_count(void) {
@@ -132,7 +224,7 @@ static void* d3d11_device_create(int index) {
     D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
     D3D_FEATURE_LEVEL actual;
 
-    HRESULT hr = D3D11CreateDevice(
+    HRESULT hr = pfn_D3D11CreateDevice(
         g_adapters[index], D3D_DRIVER_TYPE_UNKNOWN, nullptr,
         0, &level, 1, D3D11_SDK_VERSION,
         &dev->device, &actual, &dev->ctx);
@@ -175,7 +267,7 @@ static void* d3d11_buffer_alloc(void* device, size_t size) {
     HRESULT hr = dev->device->CreateBuffer(&gpu_desc, nullptr, &buf->gpu_buffer);
     if (FAILED(hr)) { delete buf; return nullptr; }
 
-    /* Staging buffer (CPU↔GPU transfers) */
+    /* Staging buffer (CPU<->GPU transfers) */
     D3D11_BUFFER_DESC stage_desc = {};
     stage_desc.ByteWidth = (UINT)size;
     stage_desc.Usage = D3D11_USAGE_STAGING;
@@ -234,14 +326,14 @@ static void d3d11_buffer_write(void* buffer, const void* data, size_t bytes) {
     memcpy(mapped.pData, data, bytes);
     buf->device->ctx->Unmap(buf->staging, 0);
 
-    /* Copy staging → GPU */
+    /* Copy staging -> GPU */
     buf->device->ctx->CopyResource(buf->gpu_buffer, buf->staging);
 }
 
 static void d3d11_buffer_read(void* buffer, void* data, size_t bytes) {
     D3D11Buffer* buf = (D3D11Buffer*)buffer;
 
-    /* Copy GPU → staging */
+    /* Copy GPU -> staging */
     buf->device->ctx->CopyResource(buf->staging, buf->gpu_buffer);
 
     /* Map staging, read, unmap */
@@ -337,7 +429,7 @@ static void* d3d11_kernel_compile(void* device, const char* source,
         }
         if (!spirv) return nullptr;
 
-        /* SPIR-V → HLSL */
+        /* SPIR-V -> HLSL */
         hlsl = mental_spirv_to_hlsl(spirv, spirv_len, &hlsl_len, error, error_len);
         if (spirv != (unsigned char*)source) free(spirv);
         if (!hlsl) return nullptr;
@@ -347,7 +439,7 @@ static void* d3d11_kernel_compile(void* device, const char* source,
     /* Compile HLSL to DXBC using D3DCompile (Shader Model 5.0) */
     ID3DBlob* blob = nullptr;
     ID3DBlob* errors = nullptr;
-    HRESULT hr = D3DCompile(hlsl, hlsl_len, "mental_cs", nullptr, nullptr,
+    HRESULT hr = pfn_D3DCompile(hlsl, hlsl_len, "mental_cs", nullptr, nullptr,
                             "main", "cs_5_0", 0, 0, &blob, &errors);
 
     if (need_free_hlsl) free(hlsl);
@@ -475,7 +567,7 @@ static void* d3d11_viewport_attach(void* dev, void* buffer, void* surface,
 
     /* Create DXGI factory */
     IDXGIFactory1* factory = nullptr;
-    HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&factory);
+    HRESULT hr = pfn_CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&factory);
     if (FAILED(hr)) {
         if (error) snprintf(error, error_len, "CreateDXGIFactory1 failed");
         delete vp;
@@ -527,7 +619,7 @@ static void d3d11_viewport_present(void* viewport) {
     D3D11Viewport* vp = (D3D11Viewport*)viewport;
     if (!vp || vp->headless || !vp->swapChain) return;
 
-    /* Copy compute buffer → back buffer via staging read + UpdateSubresource.
+    /* Copy compute buffer -> back buffer via staging read + UpdateSubresource.
      * For a full implementation this would use a shared texture, but for
      * correctness we read back and update. */
     vp->swapChain->Present(1, 0);
@@ -573,4 +665,8 @@ static mental_backend g_d3d11_backend = {
 
 mental_backend* d3d11_backend = &g_d3d11_backend;
 
-#endif /* MENTAL_HAS_D3D11 */
+#else /* !_WIN32 */
+
+mental_backend* d3d11_backend = NULL;
+
+#endif /* _WIN32 */
