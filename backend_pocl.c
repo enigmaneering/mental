@@ -46,6 +46,7 @@
 
 #include "mental_internal.h"
 #include "transpile.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -354,9 +355,52 @@ static void* pocl_kernel_compile(void* dev, const char* source, size_t source_le
     PoclDevice* d = (PoclDevice*)dev;
 
     cl_int err;
-    cl_program program = p_clCreateProgramWithSource(d->context, 1, &source, &source_len, &err);
+    cl_program program = NULL;
+
+    /* Check if source is SPIR-V binary */
+    int is_spirv = (source_len >= 4 &&
+                    (unsigned char)source[0] == 0x03 &&
+                    (unsigned char)source[1] == 0x02 &&
+                    (unsigned char)source[2] == 0x23 &&
+                    (unsigned char)source[3] == 0x07);
+
+    if (is_spirv) {
+        /* PoCL supports clCreateProgramWithIL for SPIR-V */
+        typedef cl_program (CL_API_CALL *pfn_clCreateProgramWithIL)(
+            cl_context, const void*, size_t, cl_int*);
+        pfn_clCreateProgramWithIL fn = NULL;
+        *(void**)(&fn) = (void*)POCL_DLSYM(g_pocl_lib, "clCreateProgramWithIL");
+        if (fn) {
+            program = fn(d->context, source, source_len, &err);
+        } else {
+            if (error) snprintf(error, error_len, "PoCL: clCreateProgramWithIL not available");
+            return NULL;
+        }
+    } else {
+        /* Non-SPIR-V source: compile to SPIR-V first, then use IL path.
+         * PoCL can't compile GLSL — it only speaks OpenCL C or SPIR-V. */
+        size_t spirv_len = 0;
+        unsigned char* spirv = mental_glsl_to_spirv(source, source_len,
+                                                     &spirv_len, error, error_len);
+        if (!spirv) return NULL;
+
+        typedef cl_program (CL_API_CALL *pfn_clCreateProgramWithIL)(
+            cl_context, const void*, size_t, cl_int*);
+        pfn_clCreateProgramWithIL fn = NULL;
+        *(void**)(&fn) = (void*)POCL_DLSYM(g_pocl_lib, "clCreateProgramWithIL");
+        if (fn) {
+            program = fn(d->context, spirv, spirv_len, &err);
+        } else {
+            /* No IL support — can't handle GLSL at all */
+            if (error) snprintf(error, error_len, "PoCL: cannot compile non-OpenCL-C source (no SPIR-V support)");
+            free(spirv);
+            return NULL;
+        }
+        free(spirv);
+    }
+
     if (err != CL_SUCCESS) {
-        if (error) snprintf(error, error_len, "PoCL: failed to create program");
+        if (error) snprintf(error, error_len, "PoCL: failed to create program (err=%d)", err);
         return NULL;
     }
 

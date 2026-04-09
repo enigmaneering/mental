@@ -101,6 +101,13 @@ jobs:
               xvfb opencl-headers
               ocl-icd-opencl-dev pocl-opencl-icd
 
+          - name: "Linux arm64 (OpenCL only)"
+            runner: ubuntu-24.04-arm
+            platform: linux-arm64
+            packages: >-
+              xvfb opencl-headers
+              ocl-icd-opencl-dev pocl-opencl-icd
+
           # PoCL only — CPU compute, last GPU-capable resort
           - name: "Linux amd64 (PoCL only)"
             runner: ubuntu-latest

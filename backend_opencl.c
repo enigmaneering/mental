@@ -41,6 +41,7 @@
 #endif
 
 #include "mental_internal.h"
+#include "transpile.h"
 
 #if !MENTAL_OPENCL_AVAILABLE
 #include <stddef.h>
@@ -428,23 +429,34 @@ static void* opencl_kernel_compile(void* dev, const char* source, size_t source_
     cl_int err;
     cl_program program = NULL;
 
-    /* Check if source is SPIR-V binary (magic number 0x07230203).
-     * If so, use clCreateProgramWithIL (OpenCL 2.1+).
-     * Otherwise, fall back to clCreateProgramWithSource for text. */
+    /* Check if source is SPIR-V binary (magic number 0x07230203). */
     int is_spirv = (source_len >= 4 &&
                     (unsigned char)source[0] == 0x03 &&
                     (unsigned char)source[1] == 0x02 &&
                     (unsigned char)source[2] == 0x23 &&
                     (unsigned char)source[3] == 0x07);
 
-    if (is_spirv) {
-        if (p_clCreateProgramWithIL) {
-            program = p_clCreateProgramWithIL(cl_dev->context, source, source_len, &err);
+    /* If we have clCreateProgramWithIL (OpenCL 2.1+), always go through
+     * SPIR-V.  For non-SPIR-V sources (GLSL, HLSL, etc.), compile to
+     * SPIR-V first using the built-in transpiler.  This avoids feeding
+     * GLSL to clCreateProgramWithSource which expects OpenCL C. */
+    if (p_clCreateProgramWithIL) {
+        if (!is_spirv) {
+            /* Compile source to SPIR-V */
+            size_t spirv_len = 0;
+            unsigned char* spirv = mental_glsl_to_spirv(source, source_len,
+                                                         &spirv_len, error, error_len);
+            if (!spirv) return NULL;
+            program = p_clCreateProgramWithIL(cl_dev->context, spirv, spirv_len, &err);
+            free(spirv);
         } else {
-            if (error) snprintf(error, error_len, "SPIR-V input requires OpenCL 2.1+ (clCreateProgramWithIL not available)");
-            return NULL;
+            program = p_clCreateProgramWithIL(cl_dev->context, source, source_len, &err);
         }
+    } else if (is_spirv) {
+        if (error) snprintf(error, error_len, "SPIR-V input requires OpenCL 2.1+ (clCreateProgramWithIL not available)");
+        return NULL;
     } else {
+        /* Last resort: assume the source is OpenCL C and pass it directly */
         program = p_clCreateProgramWithSource(cl_dev->context, 1, &source, &source_len, &err);
     }
 
