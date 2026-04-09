@@ -27,6 +27,9 @@ set(MENTAL_SOURCES
     transpile_other.c
     sanity.c
     backend_opencl.c
+    backend_opengl.c
+    backend_pocl.c
+    backend_webgpu.c
 )
 
 set(MENTAL_CXX_SOURCES
@@ -54,7 +57,6 @@ if(MENTAL_DISABLE_WEBGPU)
 else()
     find_path(WGPU_HEADER "webgpu/webgpu.h" HINTS ${EXTERNAL_DIR}/wgpu/include)
     if(WGPU_HEADER)
-        list(APPEND MENTAL_SOURCES backend_webgpu.c)
         set(MENTAL_HAS_WEBGPU ON)
         message(STATUS "WebGPU headers found - enabling WebGPU backend (wgpu-native, runtime-loaded)")
     else()
@@ -64,16 +66,11 @@ endif()
 
 # Platform-specific backends (all optional — library degrades gracefully)
 if(PLATFORM_DARWIN)
+    # Metal is always available on macOS (part of the base OS)
     if(NOT MENTAL_DISABLE_METAL)
-        find_library(METAL_LIBRARY Metal)
-        if(METAL_LIBRARY)
-            list(APPEND MENTAL_SOURCES backend_metal.m)
-            set_source_files_properties(backend_metal.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-            set(MENTAL_HAS_METAL ON)
-            message(STATUS "Metal found - enabling Metal backend")
-        else()
-            message(STATUS "Metal not found - Metal backend disabled")
-        endif()
+        list(APPEND MENTAL_SOURCES backend_metal.m)
+        set_source_files_properties(backend_metal.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+        message(STATUS "Metal backend enabled")
     else()
         message(STATUS "Metal backend force-disabled")
     endif()
@@ -135,12 +132,7 @@ endif()
 
 # OpenGL compute backend — always compiled, dlopen'd at runtime.
 # On macOS the file exports opengl_backend = NULL (Apple capped GL at 4.1).
-if(NOT MENTAL_DISABLE_OPENGL)
-    list(APPEND MENTAL_SOURCES backend_opengl.c)
-    message(STATUS "OpenGL compute backend enabled (dlopen'd at runtime)")
-else()
-    message(STATUS "OpenGL backend force-disabled")
-endif()
+# OpenGL backend is always compiled (dlopen'd at runtime, exports NULL on macOS)
 
 # PoCL — CPU-only OpenCL last resort (all platforms, dlopen'd at runtime).
 # Only needs OpenCL headers at build time; the library is loaded dynamically.
@@ -159,7 +151,6 @@ else()
 endif()
 
 if(MENTAL_POCL_HEADERS)
-    list(APPEND MENTAL_SOURCES backend_pocl.c)
     set(MENTAL_HAS_POCL ON)
     message(STATUS "OpenCL headers available - enabling PoCL fallback backend (dlopen'd at runtime)")
     if(EXISTS "${EXTERNAL_DIR}/pocl")

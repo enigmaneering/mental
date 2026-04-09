@@ -62,7 +62,7 @@ jobs:
           - name: "Linux amd64"
             runner: ubuntu-latest
             platform: linux-amd64
-            packages: "xvfb"
+            packages: "xvfb opencl-headers"
             install_vulkan: false
             needs_xvfb: true
             artifact: sanity-check-linux-amd64
@@ -70,7 +70,7 @@ jobs:
           - name: "Linux arm64"
             runner: ubuntu-24.04-arm
             platform: linux-arm64
-            packages: "xvfb"
+            packages: "xvfb opencl-headers"
             install_vulkan: false
             needs_xvfb: true
             artifact: sanity-check-linux-arm64

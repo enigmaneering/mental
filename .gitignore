@@ -46,3 +46,6 @@ external/freeze
 external/.version
 
 build/
+
+# Claude Code working directories
+.claude/
