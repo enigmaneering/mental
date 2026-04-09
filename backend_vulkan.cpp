@@ -162,7 +162,7 @@ static int resolve_global_functions(void) {
 } while (0)
 
     VK_LOAD_GLOBAL(vkCreateInstance);
-    VK_LOAD_GLOBAL(vkEnumeratePhysicalDevices);
+    /* vkEnumeratePhysicalDevices is instance-level, resolved after instance creation */
 
 #undef VK_LOAD_GLOBAL
     return 0;
@@ -176,6 +176,7 @@ static int resolve_instance_functions(VkInstance instance) {
 } while (0)
 
     VK_LOAD_INSTANCE(vkDestroyInstance);
+    VK_LOAD_INSTANCE(vkEnumeratePhysicalDevices);
     VK_LOAD_INSTANCE(vkGetPhysicalDeviceProperties);
     VK_LOAD_INSTANCE(vkGetPhysicalDeviceQueueFamilyProperties);
     VK_LOAD_INSTANCE(vkGetPhysicalDeviceMemoryProperties);
