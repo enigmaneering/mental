@@ -6,9 +6,10 @@
  *
  * Automatic transpilation via SPIRV intermediate representation.
  * Automatic backend selection with platform-aware fallback chain:
- *   Darwin:  Metal → WebGPU → OpenCL → PoCL
- *   Windows: D3D12 → Vulkan → WebGPU → OpenCL → OpenGL → PoCL
- *   Linux:   Vulkan → WebGPU → OpenCL → OpenGL → PoCL
+ *   Darwin:  Metal → Vulkan → WebGPU → OpenGL → D3D11 → OpenCL → PoCL
+ *   Windows: D3D12 → Vulkan → WebGPU → OpenGL → D3D11 → OpenCL → PoCL
+ *   Linux:   Vulkan → WebGPU → OpenGL → D3D11 → OpenCL → PoCL
+ * All backends are loaded dynamically (dlopen) — zero GPU link-time deps.
  *
  * Thread-safe: all operations internally lock/unlock.
  *

@@ -65,9 +65,9 @@ static mental_backend** get_backend_priority(int* count) {
     if (webgpu_backend) backends[(*count)++] = webgpu_backend;
 
     /* Universal fallbacks */
-    if (opencl_backend) backends[(*count)++] = opencl_backend;
     if (opengl_backend) backends[(*count)++] = opengl_backend;
     if (d3d11_backend)  backends[(*count)++] = d3d11_backend;
+    if (opencl_backend) backends[(*count)++] = opencl_backend;
     if (pocl_backend)   backends[(*count)++] = pocl_backend;
 
     return backends;

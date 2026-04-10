@@ -437,10 +437,11 @@ jobs:
       contents: write
 
     steps:
-      - name: Download all artifacts
+      - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: "libmental-*"
           merge-multiple: true
 
       - name: List artifacts
@@ -456,26 +457,44 @@ jobs:
             --notes "$(cat <<'EOF'
           ## libmental v${{ inputs.version }}
 
-          Universal GPU compute library.
+          Universal GPU compute library with automatic backend selection and graceful fallback.
+
+          ### Architecture
+
+          All GPU backends are loaded dynamically at runtime (dlopen/LoadLibrary). The library has **zero** GPU link-time dependencies — consumers only link against `libmental-static.a` and the system C/C++ runtime. Backends that aren't available on the target machine are silently skipped.
+
+          **Fallback chain:** Metal → D3D12 → Vulkan → WebGPU → OpenGL → D3D11 → OpenCL → PoCL (CPU)
 
           ### Platforms
 
-          | Archive | Backends |
-          |---------|----------|
-          | `darwin-arm64` | Metal, WebGPU, OpenCL, PoCL |
-          | `darwin-amd64` | Metal, WebGPU, OpenCL, PoCL |
-          | `linux-amd64` | Vulkan, WebGPU, OpenGL, OpenCL, PoCL |
-          | `linux-arm64` | Vulkan, WebGPU, OpenGL, OpenCL, PoCL |
-          | `windows-amd64` | D3D12, Vulkan, WebGPU, OpenGL, OpenCL, PoCL |
-          | `windows-arm64` | D3D12, Vulkan, WebGPU, OpenGL, OpenCL, PoCL |
+          | Archive | Available Backends |
+          |---------|-------------------|
+          | `darwin-arm64` | Metal, Vulkan*, WebGPU*, OpenCL, PoCL* |
+          | `darwin-amd64` | Metal, Vulkan*, WebGPU*, OpenCL, PoCL* |
+          | `linux-amd64` | Vulkan, WebGPU*, OpenGL, OpenCL, PoCL |
+          | `linux-arm64` | Vulkan, WebGPU*, OpenGL, OpenCL, PoCL |
+          | `windows-amd64` | D3D12, D3D11, Vulkan*, WebGPU*, OpenGL, OpenCL* |
+          | `windows-arm64` | D3D12, D3D11, Vulkan*, WebGPU*, OpenGL, OpenCL* |
           | `wasm` | WebGPU (via browser API) |
+
+          *\* = available if the runtime library is installed on the target system*
 
           ### Contents
 
           Each archive contains:
           - `include/mental.h` — public C API
-          - `lib/libmental-static.a` — static library (all backends + transpiler baked in)
+          - `lib/libmental-static.a` — static library
           - `lib/libmental.{dylib,so,dll}` — shared library
+          - `bin/sanity-check` — built-in self-test
+
+          ### Key Features
+
+          - **N inputs, N outputs** — `mental_dispatch` and `mental_pipe_add` support arbitrary input/output counts
+          - **Chained dispatch (pipes)** — record multiple kernel dispatches into a single GPU submission
+          - **Built-in transpilation** — GLSL, HLSL, WGSL, and MSL shaders auto-transpiled to the active backend
+          - **OpenCL C transpilation** — GLSL shaders automatically converted to OpenCL C for PoCL/OpenCL backends
+          - **Sanity check** — `mental_sanity_check()` exercises the full pipeline and reports results
+          - **Runtime introspection** — `mental_state_get()` shows selected backend and fallback chain status
 
           ### Usage
 
@@ -483,14 +502,19 @@ jobs:
           #include "mental.h"
 
           int main(void) {
-              int n = mental_device_count();
               mental_device dev = mental_device_get(0);
               printf("%s (%s)\n", mental_device_name(dev), mental_device_api_name(dev));
-              return 0;
+
+              mental_kernel k = mental_compile(dev, glsl_source, strlen(glsl_source));
+              mental_reference inputs[] = {ref_a, ref_b};
+              mental_reference outputs[] = {ref_c};
+              mental_dispatch(k, inputs, 2, outputs, 1, work_size);
+
+              return mental_sanity_check();
           }
           ```
 
-          Link: `cc -o app app.c -Iinclude -Llib -lmental-static -lc++ <platform-frameworks>`
+          Link: `cc -o app app.c -Iinclude -Llib -lmental-static -lc++ -ldl`
           EOF
           )" \
             artifacts/*
