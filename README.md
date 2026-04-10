@@ -1,57 +1,43 @@
-# libmental
+# `libmental`
 
-Universal GPU compute library for the [Enigmaneering Guild](https://git.enigmaneering.org).
+A Universal GPU compute library
 
 Write compute shaders in any language. Run them on any GPU. Fall back gracefully when there isn't one.
 
 ## Architecture
 
-libmental abstracts GPU compute across every major graphics API behind a single C interface. All backends are loaded dynamically at runtime via `dlopen`/`LoadLibrary` -- the library has **zero** GPU link-time dependencies. Backends that aren't available on the target machine are silently skipped.
+`libmental` abstracts GPU compute across every major graphics API behind a single C interface. All backends are loaded dynamically at runtime via `dlopen`/`LoadLibrary` -- the library has **zero** GPU link-time dependencies. Backends that aren't available on the target machine are silently skipped.
 
 ```
-                        mental_compile() + mental_dispatch()
-                                      |
-            +-------------------------+-------------------------+
-            |           Automatic Backend Selection             |
-            +---------------------------------------------------+
-            |                                                   |
-   Darwin:  Metal -> Vulkan -> WebGPU -> OpenGL -> D3D11 -> OpenCL -> PoCL
-   Windows: D3D12 -> Vulkan -> WebGPU -> OpenGL -> D3D11 -> OpenCL -> PoCL
-   Linux:   Vulkan -> WebGPU -> OpenGL -> D3D11 -> OpenCL -> PoCL
-            |                                                   |
-            +---------------------------------------------------+
-                              GPU or CPU
+                              mental_compile() + mental_dispatch()
+            ╭──────────────────────────────────┴──────────────────────────────────────╮
+            │                      Automatic Backend Selection                        │
+            ├─────────────────────────────────────────────────────────────────────────┤
+            │                                                                         │
+            │ Darwin:  Metal -> Vulkan -> WebGPU -> OpenGL -> D3D11 -> OpenCL -> PoCL │
+            │ Windows: D3D12 -> Vulkan -> WebGPU -> OpenGL -> D3D11 -> OpenCL -> PoCL │
+            │ Linux:   Vulkan -> WebGPU -> OpenGL -> D3D11 -> OpenCL -> PoCL          │
+            │                                                                         │
+            ╰──────────────────────────────────┬──────────────────────────────────────╯
+                                          GPU or CPU
 ```
 
 The first backend that initializes successfully and reports devices wins. Everything else is skipped.
-
-## Backends
-
-| Backend | API | How it's loaded |
-|---------|-----|-----------------|
-| Metal | Apple GPU | Framework (always present on macOS) |
-| D3D12 | DirectX 12 | `LoadLibrary("d3d12.dll")` |
-| D3D11 | DirectX 11 | `LoadLibrary("d3d11.dll")` |
-| Vulkan | Vulkan | `dlopen("libvulkan.so")` |
-| WebGPU | wgpu-native | `dlopen("libwgpu_native.so")` |
-| OpenGL | OpenGL 4.3+ | `dlopen("libGL.so")` |
-| OpenCL | System ICD | `dlopen("libOpenCL.so")` |
-| PoCL | CPU fallback | `dlopen("libpocl.so")` |
 
 ## Transpilation
 
 Shaders are automatically transpiled to whatever the active backend needs:
 
 ```
-    GLSL --------+
-    HLSL -----+  |    glslang        spirv-cross
-    WGSL ---+ |  |   +--------+    +-----------+
-            | |  +-> | SPIR-V | -> | GLSL      | -> Vulkan, OpenGL
-            | +----> |        | -> | HLSL      | -> D3D12, D3D11
-            +------> |        | -> | MSL       | -> Metal
-                     +--------+ -> | WGSL      | -> WebGPU
-                                   | OpenCL C  | -> OpenCL, PoCL
-                                   +-----------+
+    GLSL ────────╮
+    HLSL ─────╮  │    glslang      spirv-cross
+    WGSL ───╮ │  │   ╭────────╮   ╭───────────╮
+            │ │  ╰─> │ SPIR-V │ → │ GLSL      │ → Vulkan, OpenGL
+            │ ╰────> │        │ → │ HLSL      │ → D3D12, D3D11
+            ╰──────> │        │ → │ MSL       │ → Metal
+                     ╰────────╯ → │ WGSL      │ → WebGPU
+                                  │ OpenCL C  │ → OpenCL, PoCL
+                                  ╰───────────╯
 ```
 
 The OpenCL C path is a custom transpiler (`transpile_opencl.c`) that converts spirv-cross GLSL output into valid OpenCL C with a GLSL compatibility shim. This enables GLSL compute shaders to run on CPU-only PoCL -- the absolute last resort.
@@ -180,40 +166,4 @@ mental_state* state = mental_state_get();
 mental_state_free(state);
 ```
 
-## Building
-
-```bash
-cmake -B build
-cmake --build build --parallel
-./build/sanity-check
-```
-
-External dependencies (glslang, spirv-cross, DXC, Naga) are downloaded automatically from the [redistributables](https://github.com/enigmaneering/redistributables) releases.
-
-## Platforms
-
-| Platform | Architecture | CI Status |
-|----------|-------------|-----------|
-| macOS | arm64, amd64 | Tested on real Metal GPU |
-| Windows | amd64, arm64 | Tested on real D3D12 GPU |
-| Linux | amd64, arm64 | Tested on Vulkan (lavapipe), OpenCL, PoCL |
-| WebAssembly | wasm32 | Build verification |
-
-## Go Bindings
-
-Higher-level orchestration (manifests, spark links, process hierarchy, matrix arithmetic) lives in the [Go layer](go/):
-
-```go
-mental.On(func(e mental.Epiphany) {
-    switch e.(type) {
-    case mental.EpiphanyInception:
-        dev := mental.DeviceGet(0)
-        kernel, _ := mental.Compile(dev, glslSource)
-        mental.Dispatch(kernel,
-            []uintptr{refA.Handle(), refB.Handle()},
-            []uintptr{refC.Handle()}, 256)
-    }
-})
-```
-
-# [License](license)
+## [License](license)
