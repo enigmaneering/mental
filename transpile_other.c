@@ -161,15 +161,27 @@ static int run_command_with_timeout(const char* cmd, char* output_buf,
     if (output_buf) output_buf[total_read] = '\0';
     close(pipefd[0]);
 
-    /* Reap the child — check if it already exited */
+    /* The pipe is closed (child exited or we timed out).
+     * Give the child a brief grace period to exit, then check. */
     int wstatus;
-    pid_t result = waitpid(pid, &wstatus, WNOHANG);
+    pid_t result;
+
+    /* First try: non-blocking check */
+    result = waitpid(pid, &wstatus, WNOHANG);
+    if (result == 0) {
+        /* Child hasn't exited yet — wait up to 1 second */
+        for (int i = 0; i < 10 && result == 0; i++) {
+            usleep(100000); /* 100ms */
+            result = waitpid(pid, &wstatus, WNOHANG);
+        }
+    }
+
     if (result == pid) {
-        /* Child exited normally */
+        /* Child exited */
         return WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1;
     }
 
-    /* Child is still running — timeout. Kill it. */
+    /* Child is still running after grace period — kill it */
     kill(pid, SIGKILL);
     waitpid(pid, NULL, 0);
     if (output_buf) snprintf(output_buf + total_read,
@@ -306,15 +318,37 @@ unsigned char* mental_hlsl_to_spirv(const char* source, size_t source_len,
     fwrite(source, 1, source_len, f);
     fclose(f);
 
-    /* Compile HLSL to SPIRV using DXC */
+    /* Compile HLSL to SPIRV using DXC.
+     * On Linux, DXC needs LD_LIBRARY_PATH set to find libdxcompiler.so
+     * which lives alongside the dxc binary. */
     char cmd[4096];
     char out_path[1024];
     snprintf(out_path, sizeof(out_path), "%s/shader.spv", tmpdir);
+
+    /* Extract DXC's directory for LD_LIBRARY_PATH */
+    char dxc_dir[4096];
+    strncpy(dxc_dir, dxc, sizeof(dxc_dir) - 1);
+    dxc_dir[sizeof(dxc_dir) - 1] = '\0';
+    char* last_slash = strrchr(dxc_dir, '/');
+    if (last_slash) *last_slash = '\0';
+    /* Go up one level if dxc is in bin/ — lib/ is a sibling */
+    char dxc_lib_dir[4096];
+    snprintf(dxc_lib_dir, sizeof(dxc_lib_dir), "%s/../lib:%s", dxc_dir, dxc_dir);
+
+#ifdef _WIN32
     snprintf(cmd, sizeof(cmd),
              MENTAL_QUOTE "%s" MENTAL_QUOTE " -spirv -T cs_6_0 -E main -Fo "
              MENTAL_QUOTE "%s" MENTAL_QUOTE " "
              MENTAL_QUOTE "%s" MENTAL_QUOTE " 2>&1",
              dxc, out_path, src_path);
+#else
+    snprintf(cmd, sizeof(cmd),
+             "LD_LIBRARY_PATH=" MENTAL_QUOTE "%s" MENTAL_QUOTE " "
+             MENTAL_QUOTE "%s" MENTAL_QUOTE " -spirv -T cs_6_0 -E main -Fo "
+             MENTAL_QUOTE "%s" MENTAL_QUOTE " "
+             MENTAL_QUOTE "%s" MENTAL_QUOTE " 2>&1",
+             dxc_lib_dir, dxc, out_path, src_path);
+#endif
 
     char output_buf[4096] = {0};
     int status = run_command_with_timeout(cmd, output_buf, sizeof(output_buf),
