@@ -62,9 +62,9 @@ static int run_command_with_timeout(const char* cmd, char* output_buf,
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
 
     PROCESS_INFORMATION pi = {0};
+    /* Route through cmd.exe so shell features (2>&1, quoting) work */
     char cmd_copy[4096];
-    strncpy(cmd_copy, cmd, sizeof(cmd_copy) - 1);
-    cmd_copy[sizeof(cmd_copy) - 1] = '\0';
+    snprintf(cmd_copy, sizeof(cmd_copy), "cmd.exe /c %s", cmd);
 
     if (!CreateProcessA(NULL, cmd_copy, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
         CloseHandle(read_pipe);
