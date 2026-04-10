@@ -461,7 +461,7 @@ jobs:
 
           ### Architecture
 
-          All GPU backends are loaded dynamically at runtime (dlopen/LoadLibrary). The library has **zero** GPU link-time dependencies — consumers only link against `libmental-static.a` and the system C/C++ runtime. Backends that aren't available on the target machine are silently skipped.
+          All GPU backends are loaded dynamically at runtime (dlopen/LoadLibrary). The library has **zero** GPU link-time dependencies — consumers only link against `libmental.a` and the system C/C++ runtime. Backends that aren't available on the target machine are silently skipped.
 
           **Fallback chain:** Metal → D3D12 → Vulkan → WebGPU → OpenGL → D3D11 → OpenCL → PoCL (CPU)
 
@@ -483,8 +483,7 @@ jobs:
 
           Each archive contains:
           - `include/mental.h` — public C API
-          - `lib/libmental-static.a` — static library
-          - `lib/libmental.{dylib,so,dll}` — shared library
+          - `lib/libmental.a` — static library
           - `bin/sanity-check` — built-in self-test
 
           ### Key Features
@@ -514,7 +513,7 @@ jobs:
           }
           ```
 
-          Link: `cc -o app app.c -Iinclude -Llib -lmental-static -lc++ -ldl`
+          Link: `cc -o app app.c -Iinclude -Llib -lmental -lc++ -ldl`
           EOF
           )" \
             artifacts/*

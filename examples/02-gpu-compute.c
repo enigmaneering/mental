@@ -12,7 +12,7 @@
  * The shader adds two float vectors: C[i] = A[i] + B[i]
  *
  * Build:
- *   cc -o gpu-compute 02-gpu-compute.c -I.. -L../build -lmental-static -lc++ \
+ *   cc -o gpu-compute 02-gpu-compute.c -I.. -L../build -lmental -lc++ \
  *      -framework Metal -framework Foundation -framework QuartzCore \
  *      -framework AppKit -framework OpenCL
  *

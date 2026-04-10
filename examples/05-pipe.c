@@ -10,7 +10,7 @@
  * between stages with no CPU round-trips.
  *
  * Build:
- *   cc -o pipe 05-pipe.c -I.. -L../build -lmental-static -lc++ \
+ *   cc -o pipe 05-pipe.c -I.. -L../build -lmental -lc++ \
  *      -framework Metal -framework Foundation -framework QuartzCore \
  *      -framework AppKit -framework OpenCL
  *

@@ -9,7 +9,7 @@
  *   - Lock disclosure to freeze rules permanently
  *
  * Build:
- *   cc -o reference 01-reference.c -I.. -L../build -lmental-static -lc++ \
+ *   cc -o reference 01-reference.c -I.. -L../build -lmental -lc++ \
  *      -framework Metal -framework Foundation -framework QuartzCore \
  *      -framework AppKit -framework OpenCL
  *

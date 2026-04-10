@@ -8,7 +8,7 @@
  *   4. Verify the clone is independent (modifying original doesn't affect clone)
  *
  * Build:
- *   cc -o clone-and-pin 03-clone-and-pin.c -I.. -L../build -lmental-static -lc++ \
+ *   cc -o clone-and-pin 03-clone-and-pin.c -I.. -L../build -lmental -lc++ \
  *      -framework Metal -framework Foundation -framework QuartzCore \
  *      -framework AppKit -framework OpenCL
  *

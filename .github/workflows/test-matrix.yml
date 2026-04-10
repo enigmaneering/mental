@@ -371,7 +371,7 @@ jobs:
         if: matrix.platform == 'wasm'
         run: |
           echo "WASM build compiled successfully (no runtime tests)"
-          ls -la build/libmental-static.a build/libmental.a 2>/dev/null || ls -la build/*.a 2>/dev/null || true
+          ls -la build/libmental.a 2>/dev/null || ls -la build/*.a 2>/dev/null || true
 
       - name: Test
         if: ${{ !matrix.needs_xvfb && runner.os != 'Windows' && matrix.platform != 'wasm' }}

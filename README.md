@@ -92,7 +92,7 @@ int main(void) {
 }
 ```
 
-Link: `cc -o app app.c -Iinclude -Llib -lmental-static -lc++ -ldl`
+Link: `cc -o app app.c -Iinclude -Llib -lmental -lc++ -ldl`
 
 ## Pipes (Chained Dispatch)
 

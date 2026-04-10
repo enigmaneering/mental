@@ -7,7 +7,7 @@
  *   - Loaded libraries and their versions
  *
  * Build:
- *   cc -o state 04-state.c -I.. -L../build -lmental-static -lc++ \
+ *   cc -o state 04-state.c -I.. -L../build -lmental -lc++ \
  *      -framework Metal -framework Foundation -framework QuartzCore \
  *      -framework AppKit -framework OpenCL
  *

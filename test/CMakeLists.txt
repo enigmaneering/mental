@@ -1,24 +1,24 @@
 # Test suite for mental library
 enable_testing()
 
-# Test executables (link against static library for simpler test builds)
+# Test executables
 add_executable(test_core test_core.c)
-target_link_libraries(test_core mental-static)
+target_link_libraries(test_core mental)
 
 add_executable(test_buffer test_buffer.c)
-target_link_libraries(test_buffer mental-static)
+target_link_libraries(test_buffer mental)
 
 add_executable(test_kernel test_kernel.c)
-target_link_libraries(test_kernel mental-static)
+target_link_libraries(test_kernel mental)
 
 add_executable(test_viewport test_viewport.c)
-target_link_libraries(test_viewport mental-static)
+target_link_libraries(test_viewport mental)
 
 add_executable(test_integration test_integration.c)
-target_link_libraries(test_integration mental-static)
+target_link_libraries(test_integration mental)
 
 add_executable(test_shaders test_shaders.c)
-target_link_libraries(test_shaders mental-static)
+target_link_libraries(test_shaders mental)
 
 # Register tests with CTest
 add_test(NAME CoreOperations COMMAND test_core)
@@ -30,65 +30,65 @@ add_test(NAME Integration COMMAND test_integration)
 
 # Platform-specific native backend tests (always built, skip at runtime if backend unavailable)
 add_executable(test_metal_direct test_metal_direct.c)
-target_link_libraries(test_metal_direct mental-static)
+target_link_libraries(test_metal_direct mental)
 add_test(NAME MetalDirect COMMAND test_metal_direct)
 
 add_executable(test_d3d12_direct test_d3d12_direct.c)
-target_link_libraries(test_d3d12_direct mental-static)
+target_link_libraries(test_d3d12_direct mental)
 add_test(NAME D3D12Direct COMMAND test_d3d12_direct)
 
 add_executable(test_vulkan_direct test_vulkan_direct.c)
-target_link_libraries(test_vulkan_direct mental-static)
+target_link_libraries(test_vulkan_direct mental)
 add_test(NAME VulkanDirect COMMAND test_vulkan_direct)
 
 add_executable(test_opencl_direct test_opencl_direct.c)
-target_link_libraries(test_opencl_direct mental-static)
+target_link_libraries(test_opencl_direct mental)
 add_test(NAME OpenCLDirect COMMAND test_opencl_direct)
 
 add_executable(test_transpile test_transpile.c)
-target_link_libraries(test_transpile mental-static)
+target_link_libraries(test_transpile mental)
 add_test(NAME Transpilation COMMAND test_transpile)
 
 add_executable(test_transpile_debug test_transpile_debug.c)
-target_link_libraries(test_transpile_debug mental-static)
+target_link_libraries(test_transpile_debug mental)
 
 add_executable(test_msl_debug test_msl_debug.c)
-target_link_libraries(test_msl_debug mental-static)
+target_link_libraries(test_msl_debug mental)
 
 add_executable(test_paths_debug test_paths_debug.c)
-target_link_libraries(test_paths_debug mental-static)
+target_link_libraries(test_paths_debug mental)
 add_test(NAME PathDebug COMMAND test_paths_debug)
 
 add_executable(test_reference test_reference.c)
-target_link_libraries(test_reference mental-static)
+target_link_libraries(test_reference mental)
 add_test(NAME Reference COMMAND test_reference)
 
 add_executable(test_clone test_clone.c)
-target_link_libraries(test_clone mental-static)
+target_link_libraries(test_clone mental)
 add_test(NAME Clone COMMAND test_clone)
 
 add_executable(test_failures test_failures.c)
-target_link_libraries(test_failures mental-static)
+target_link_libraries(test_failures mental)
 add_test(NAME Failures COMMAND test_failures)
 
 
 add_executable(test_hlsl_debug test_hlsl_debug.c)
-target_link_libraries(test_hlsl_debug mental-static)
+target_link_libraries(test_hlsl_debug mental)
 
 add_executable(test_external_compilers test_external_compilers.c)
-target_link_libraries(test_external_compilers mental-static)
+target_link_libraries(test_external_compilers mental)
 
 # Real window viewport tests (platform-specific)
 if(APPLE)
     add_executable(test_viewport_window_metal test_viewport_window_metal.m)
-    target_link_libraries(test_viewport_window_metal mental-static)
+    target_link_libraries(test_viewport_window_metal mental)
     target_link_libraries(test_viewport_window_metal "-framework Cocoa" "-framework QuartzCore" "-framework Metal")
     add_test(NAME ViewportWindowMetal COMMAND test_viewport_window_metal)
 endif()
 
 if(WIN32)
     add_executable(test_viewport_window_d3d12 test_viewport_window_d3d12.c)
-    target_link_libraries(test_viewport_window_d3d12 mental-static)
+    target_link_libraries(test_viewport_window_d3d12 mental)
     add_test(NAME ViewportWindowD3D12 COMMAND test_viewport_window_d3d12)
 endif()
 
@@ -96,7 +96,7 @@ if(UNIX AND NOT APPLE)
     find_package(X11)
     if(X11_FOUND)
         add_executable(test_viewport_window_vulkan test_viewport_window_vulkan.c)
-        target_link_libraries(test_viewport_window_vulkan mental-static ${X11_LIBRARIES})
+        target_link_libraries(test_viewport_window_vulkan mental ${X11_LIBRARIES})
         target_include_directories(test_viewport_window_vulkan PRIVATE ${X11_INCLUDE_DIR})
         add_test(NAME ViewportWindowVulkan COMMAND test_viewport_window_vulkan)
     else()

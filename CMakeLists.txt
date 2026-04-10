@@ -161,36 +161,10 @@ else()
     message(STATUS "OpenCL headers not found - PoCL backend disabled")
 endif()
 
-# Create both static and dynamic libraries
-add_library(mental-static STATIC
+# Static library (all backends dlopen'd at runtime — no shared library needed)
+add_library(mental STATIC
     ${MENTAL_SOURCES}
     ${MENTAL_CXX_SOURCES}
-)
-
-add_library(mental SHARED
-    ${MENTAL_SOURCES}
-    ${MENTAL_CXX_SOURCES}
-)
-
-# Set output name for static library to avoid conflicts
-set_target_properties(mental-static PROPERTIES OUTPUT_NAME mental-static)
-
-# Shared library versioning (soname)
-# SOVERSION is the major version — bump on breaking ABI changes.
-# VERSION is the full version — bump on any release.
-# Produces: libmental.so.1.0.0, libmental.so.1 → libmental.so.1.0.0, libmental.so → libmental.so.1
-#           libmental.1.0.0.dylib, libmental.1.dylib → libmental.1.0.0.dylib (macOS)
-set_target_properties(mental PROPERTIES
-    VERSION   ${PROJECT_VERSION}
-    SOVERSION ${PROJECT_VERSION_MAJOR}
-)
-
-target_include_directories(mental-static PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${EXTERNAL_DIR}/glslang
-    ${EXTERNAL_DIR}/glslang/SPIRV
-    ${EXTERNAL_DIR}/spirv-cross
-    ${EXTERNAL_DIR}/dxc/include
 )
 
 target_include_directories(mental PUBLIC
@@ -215,10 +189,8 @@ if(PLATFORM_DARWIN)
 
     # PoCL (already discovered above)
     if(MENTAL_HAS_POCL)
-        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_POCL=1)
         target_compile_definitions(mental PRIVATE MENTAL_HAS_POCL=1)
         if(MENTAL_POCL_LIB_PATH)
-            target_compile_definitions(mental-static PRIVATE MENTAL_POCL_LIB_PATH="${MENTAL_POCL_LIB_PATH}")
             target_compile_definitions(mental PRIVATE MENTAL_POCL_LIB_PATH="${MENTAL_POCL_LIB_PATH}")
         endif()
     endif()
@@ -256,14 +228,12 @@ if(PLATFORM_DARWIN)
     )
 
     target_link_libraries(mental PUBLIC ${DARWIN_LIBS} ${DARWIN_STATIC_LIBS})
-    target_link_libraries(mental-static PUBLIC ${DARWIN_LIBS} ${DARWIN_STATIC_LIBS})
 
 elseif(PLATFORM_WINDOWS)
     # D3D12/D3D11 are dlopen'd at runtime — no compile definitions needed
 
     # Vulkan headers (runtime-loaded via dlopen — no link dependency)
     if(MENTAL_HAS_VULKAN_HEADERS)
-        target_include_directories(mental-static PRIVATE ${Vulkan_INCLUDE_DIRS})
         target_include_directories(mental PRIVATE ${Vulkan_INCLUDE_DIRS})
     endif()
 
@@ -273,10 +243,8 @@ elseif(PLATFORM_WINDOWS)
 
     # PoCL (already discovered above)
     if(MENTAL_HAS_POCL)
-        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_POCL=1)
         target_compile_definitions(mental PRIVATE MENTAL_HAS_POCL=1)
         if(MENTAL_POCL_LIB_PATH)
-            target_compile_definitions(mental-static PRIVATE MENTAL_POCL_LIB_PATH="${MENTAL_POCL_LIB_PATH}")
             target_compile_definitions(mental PRIVATE MENTAL_POCL_LIB_PATH="${MENTAL_POCL_LIB_PATH}")
         endif()
     endif()
@@ -306,12 +274,10 @@ elseif(PLATFORM_WINDOWS)
     )
 
     target_link_libraries(mental PUBLIC ${WINDOWS_LIBS} ${WINDOWS_STATIC_LIBS})
-    target_link_libraries(mental-static PUBLIC ${WINDOWS_LIBS} ${WINDOWS_STATIC_LIBS})
 
 elseif(PLATFORM_LINUX)
     # Vulkan headers (runtime-loaded via dlopen — no link dependency)
     if(MENTAL_HAS_VULKAN_HEADERS)
-        target_include_directories(mental-static PRIVATE ${Vulkan_INCLUDE_DIRS})
         target_include_directories(mental PRIVATE ${Vulkan_INCLUDE_DIRS})
     endif()
 
@@ -319,10 +285,8 @@ elseif(PLATFORM_LINUX)
 
     # PoCL (already discovered above)
     if(MENTAL_HAS_POCL)
-        target_compile_definitions(mental-static PRIVATE MENTAL_HAS_POCL=1)
         target_compile_definitions(mental PRIVATE MENTAL_HAS_POCL=1)
         if(MENTAL_POCL_LIB_PATH)
-            target_compile_definitions(mental-static PRIVATE MENTAL_POCL_LIB_PATH="${MENTAL_POCL_LIB_PATH}")
             target_compile_definitions(mental PRIVATE MENTAL_POCL_LIB_PATH="${MENTAL_POCL_LIB_PATH}")
         endif()
     endif()
@@ -352,22 +316,17 @@ elseif(PLATFORM_LINUX)
     )
 
     target_link_libraries(mental PUBLIC ${LINUX_LIBS} ${LINUX_STATIC_LIBS})
-    target_link_libraries(mental-static PUBLIC ${LINUX_LIBS} ${LINUX_STATIC_LIBS})
 endif()
 
 # WebGPU (cross-platform, runtime-loaded — same on all platforms)
 if(MENTAL_HAS_WEBGPU)
-    target_compile_definitions(mental-static PRIVATE MENTAL_HAS_WEBGPU=1)
     target_compile_definitions(mental PRIVATE MENTAL_HAS_WEBGPU=1)
-    target_include_directories(mental-static PRIVATE ${EXTERNAL_DIR}/wgpu/include)
     target_include_directories(mental PRIVATE ${EXTERNAL_DIR}/wgpu/include)
 endif()
 
-# Install targets (both shared and static)
-install(TARGETS mental mental-static
+# Install targets
+install(TARGETS mental
     ARCHIVE DESTINATION lib
-    LIBRARY DESTINATION lib
-    RUNTIME DESTINATION bin
 )
 
 install(FILES mental.h DESTINATION include)
@@ -376,27 +335,27 @@ install(FILES mental.h DESTINATION include)
 option(BUILD_EXAMPLES "Build examples" ON)
 if(BUILD_EXAMPLES)
     add_executable(00-example-device-info examples/00-device-info.c)
-    target_link_libraries(00-example-device-info mental-static)
+    target_link_libraries(00-example-device-info mental)
 
     add_executable(01-example-reference examples/01-reference.c)
-    target_link_libraries(01-example-reference mental-static)
+    target_link_libraries(01-example-reference mental)
 
     add_executable(02-example-gpu-compute examples/02-gpu-compute.c)
-    target_link_libraries(02-example-gpu-compute mental-static)
+    target_link_libraries(02-example-gpu-compute mental)
 
     add_executable(03-example-clone-and-pin examples/03-clone-and-pin.c)
-    target_link_libraries(03-example-clone-and-pin mental-static)
+    target_link_libraries(03-example-clone-and-pin mental)
 
     add_executable(04-example-state examples/04-state.c)
-    target_link_libraries(04-example-state mental-static)
+    target_link_libraries(04-example-state mental)
 
     add_executable(05-example-pipe examples/05-pipe.c)
-    target_link_libraries(05-example-pipe mental-static)
+    target_link_libraries(05-example-pipe mental)
 endif()
 
 # Sanity check binary (ships with the library)
 add_executable(sanity-check sanity-check.c)
-target_link_libraries(sanity-check mental-static)
+target_link_libraries(sanity-check mental)
 if(NOT EMSCRIPTEN)
     target_link_libraries(sanity-check m)  # libm for fabsf
 endif()

@@ -6,7 +6,7 @@
  * program — it just asks "what hardware do I have?"
  *
  * Build:
- *   cc -o device-info 00-device-info.c -I.. -L../build -lmental-static -lc++ \
+ *   cc -o device-info 00-device-info.c -I.. -L../build -lmental -lc++ \
  *      -framework Metal -framework Foundation -framework QuartzCore \
  *      -framework AppKit -framework OpenCL
  *
