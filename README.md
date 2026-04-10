@@ -9,17 +9,17 @@ Write compute shaders in any language. Run them on any GPU. Fall back gracefully
 `libmental` abstracts GPU compute across every major graphics API behind a single C interface. All backends are loaded dynamically at runtime via `dlopen`/`LoadLibrary` -- the library has **zero** GPU link-time dependencies. Backends that aren't available on the target machine are silently skipped.
 
 ```
-                              mental_compile() + mental_dispatch()
-            ╭──────────────────────────────────┴──────────────────────────────────────╮
-            │                      Automatic Backend Selection                        │
-            ├─────────────────────────────────────────────────────────────────────────┤
-            │                                                                         │
-            │ Darwin:  Metal -> Vulkan -> WebGPU -> OpenGL -> D3D11 -> OpenCL -> PoCL │
-            │ Windows: D3D12 -> Vulkan -> WebGPU -> OpenGL -> D3D11 -> OpenCL -> PoCL │
-            │ Linux:   Vulkan -> WebGPU -> OpenGL -> D3D11 -> OpenCL -> PoCL          │
-            │                                                                         │
-            ╰──────────────────────────────────┬──────────────────────────────────────╯
-                                          GPU or CPU
+                  mental_compile() + mental_dispatch()
+╭──────────────────────────────────┴──────────────────────────────────────╮
+│                      Automatic Backend Selection                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│ Darwin:  Metal -> Vulkan -> WebGPU -> OpenGL -> D3D11 -> OpenCL -> PoCL │
+│ Windows: D3D12 -> Vulkan -> WebGPU -> OpenGL -> D3D11 -> OpenCL -> PoCL │
+│ Linux:   Vulkan -> WebGPU -> OpenGL -> D3D11 -> OpenCL -> PoCL          │
+│                                                                         │
+╰──────────────────────────────────┬──────────────────────────────────────╯
+                              GPU or CPU
 ```
 
 The first backend that initializes successfully and reports devices wins. Everything else is skipped.
