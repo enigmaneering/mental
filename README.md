@@ -216,6 +216,4 @@ mental.On(func(e mental.Epiphany) {
 })
 ```
 
-## License
-
-Apache 2.0
+# [License](license)
