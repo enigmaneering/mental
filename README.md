@@ -1,6 +1,6 @@
 # libmental
 
-Universal GPU compute library for the [Enigmaneering Guild](https://enigmaneering.org).
+Universal GPU compute library for the [Enigmaneering Guild](https://git.enigmaneering.org).
 
 Write compute shaders in any language. Run them on any GPU. Fall back gracefully when there isn't one.
 
