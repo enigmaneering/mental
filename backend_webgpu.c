@@ -37,6 +37,7 @@
 #ifdef __EMSCRIPTEN__
 /* emdawnwebgpu port provides webgpu.h via --use-port flag */
 #include <webgpu/webgpu.h>
+#include <emscripten/emscripten.h>
 #else
 /* wgpu-native headers from redistributables */
 #include "external/wgpu/include/webgpu/webgpu.h"
@@ -456,9 +457,14 @@ static int webgpu_init(void) {
             .userdata1 = &cb,
         };
         p_wgpuInstanceRequestAdapter(g_instance, NULL, cb_info);
-        /* Poll until the adapter request completes */
+        /* Poll until the adapter request completes.
+         * On Emscripten, emscripten_sleep yields to the JS event loop so
+         * Dawn's promise-based async operations can resolve. */
         while (!cb.done) {
             p_wgpuInstanceProcessEvents(g_instance);
+#ifdef __EMSCRIPTEN__
+            emscripten_sleep(1);
+#endif
         }
         if (cb.status != WGPURequestAdapterStatus_Success || !cb.adapter) {
             p_wgpuInstanceRelease(g_instance);
@@ -559,6 +565,9 @@ static void* webgpu_device_create(int index) {
     p_wgpuAdapterRequestDevice(dev->adapter, &dev_desc, cb_info);
     while (!cb.done) {
         p_wgpuInstanceProcessEvents(g_instance);
+#ifdef __EMSCRIPTEN__
+        emscripten_sleep(1);
+#endif
     }
 
     if (cb.status != WGPURequestDeviceStatus_Success || !cb.device) {
@@ -652,6 +661,9 @@ static void webgpu_buffer_read(void* buf_handle, void* data, size_t bytes) {
     p_wgpuBufferMapAsync(staging, WGPUMapMode_Read, 0, bytes, map_info);
     while (!map_cb.done) {
         p_wgpuInstanceProcessEvents(g_instance);
+#ifdef __EMSCRIPTEN__
+        emscripten_sleep(1);
+#endif
     }
 
     if (map_cb.status == WGPUMapAsyncStatus_Success) {

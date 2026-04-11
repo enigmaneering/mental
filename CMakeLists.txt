@@ -376,6 +376,11 @@ if(EMSCRIPTEN)
     # Note: -sUSE_WEBGPU was removed in Emscripten 5.x in favor of this port.
     target_compile_options(mental PUBLIC --use-port=emdawnwebgpu)
     target_link_options(mental PUBLIC --use-port=emdawnwebgpu)
+
+    # Dawn's WebGPU operations are async (JavaScript promise-based). ASYNCIFY
+    # lets C code yield to the JS event loop via emscripten_sleep() so async
+    # callbacks (adapter request, device request, buffer map) can resolve.
+    target_link_options(mental PUBLIC "SHELL:-sASYNCIFY")
 endif()
 
 # Install targets
