@@ -1,4 +1,8 @@
-# `libmental`
+<picture>
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/enigmaneering/assets/refs/heads/main/libmental_light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/enigmaneering/assets/refs/heads/main/libmental_dark.svg">
+    <img alt="libmental logo" src="https://raw.githubusercontent.com/enigmaneering/assets/refs/heads/main/libmental_light.svg" >
+</picture>
 
 A Universal GPU compute library
 
