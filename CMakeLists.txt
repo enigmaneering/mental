@@ -359,10 +359,12 @@ if(EMSCRIPTEN)
     target_link_options(mental PUBLIC "SHELL:-sNO_DISABLE_EXCEPTION_CATCHING")
     target_compile_options(mental PUBLIC -fexceptions)
 
-    # Enable Emscripten's WebGPU bindings — provides navigator.gpu backed by
-    # the host system's GPU via Dawn. This gives us a real WebGPU device so
+    # Enable Emscripten's WebGPU bindings via Dawn (emdawnwebgpu port).
+    # Provides a real WebGPU device backed by the host system's GPU so
     # compute dispatch and viewport presentation work in Node.js and browsers.
-    target_link_options(mental PUBLIC "SHELL:-sUSE_WEBGPU")
+    # Note: -sUSE_WEBGPU was removed in Emscripten 5.x in favor of this port.
+    target_compile_options(mental PUBLIC --use-port=emdawnwebgpu)
+    target_link_options(mental PUBLIC --use-port=emdawnwebgpu)
 endif()
 
 # Install targets
