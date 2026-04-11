@@ -367,11 +367,12 @@ jobs:
         run: cmake --build build --parallel
 
       # ---- Test ----
-      - name: Verify WASM build
+      - name: Test (WASM via Node.js)
         if: matrix.platform == 'wasm'
         run: |
-          echo "WASM build compiled successfully (no runtime tests)"
-          ls -la build/libmental.a 2>/dev/null || ls -la build/*.a 2>/dev/null || true
+          echo "Running WASM sanity check via Node.js..."
+          ls -la build/sanity-check.js build/sanity-check.wasm 2>/dev/null || ls -la build/sanity-check* 2>/dev/null
+          node build/sanity-check.js
 
       - name: Test
         if: ${{ !matrix.needs_xvfb && runner.os != 'Windows' && matrix.platform != 'wasm' }}
