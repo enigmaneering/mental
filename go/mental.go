@@ -207,6 +207,27 @@ func (v Viewport) Detach() {
 	C.mental_viewport_detach(C.mental_viewport(unsafe.Pointer(v)))
 }
 
+// Read returns the internal framebuffer after Present has been called.
+// On WASM/Emscripten, this provides the RGBA pixel data that the host
+// environment can blit to a canvas or write to a file.
+// On native platforms, this returns an error (viewport presents directly
+// to OS display surfaces).
+//
+// The returned slice is owned by the viewport and valid until Detach.
+func (v Viewport) Read() ([]byte, error) {
+	var pixels unsafe.Pointer
+	var size C.size_t
+	rc := C.mental_viewport_read(
+		C.mental_viewport(unsafe.Pointer(v)),
+		(*unsafe.Pointer)(unsafe.Pointer(&pixels)),
+		&size,
+	)
+	if rc != 0 {
+		return nil, getLibError()
+	}
+	return unsafe.Slice((*byte)(pixels), int(size)), nil
+}
+
 // GetError returns the last error code from the C library (thread-local).
 func GetError() Error {
 	return Error(C.mental_get_error())

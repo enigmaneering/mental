@@ -1154,7 +1154,8 @@ static mental_backend g_d3d12_backend = {
     .pipe_destroy = d3d12_pipe_destroy,
     .viewport_attach = d3d12_viewport_attach,
     .viewport_present = d3d12_viewport_present,
-    .viewport_detach = d3d12_viewport_detach
+    .viewport_detach = d3d12_viewport_detach,
+    .viewport_readback = NULL
 };
 
 mental_backend* d3d12_backend = &g_d3d12_backend;

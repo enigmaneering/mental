@@ -75,6 +75,9 @@ struct mental_viewport_t {
     void* backend_viewport;
     pthread_mutex_t lock;
     int valid;
+    /* Readback framebuffer (WASM only — NULL on native backends) */
+    const void *readback_pixels;
+    size_t readback_size;
 };
 
 /* Backend interface */
@@ -115,6 +118,9 @@ struct mental_backend_t {
     void* (*viewport_attach)(void* dev, void* buffer, void* surface, char* error, size_t error_len);
     void (*viewport_present)(void* viewport);
     void (*viewport_detach)(void* viewport);
+    /* Optional: return pointer to CPU-accessible framebuffer after present.
+     * Used by WASM readback viewport. Returns NULL if not supported. */
+    const void *(*viewport_readback)(void *viewport, size_t *out_size);
 };
 
 /* Backend registry — all backends are always declared.

@@ -215,6 +215,15 @@ mental_viewport mental_viewport_attach(mental_reference ref, void* surface);
 void mental_viewport_present(mental_viewport viewport);
 void mental_viewport_detach(mental_viewport viewport);
 
+/* Read the internal framebuffer from a readback-based viewport.
+ * On WASM/Emscripten, this returns the RGBA pixel data after present().
+ * On native platforms, returns non-zero (viewport presents to OS surfaces).
+ * out_pixels: receives pointer to framebuffer (owned by viewport, valid until detach)
+ * out_size:   receives byte length of the framebuffer
+ * Returns 0 on success, non-zero if readback is not available. */
+int mental_viewport_read(mental_viewport viewport,
+                         const void **out_pixels, size_t *out_size);
+
 /*
  * Error Handling
  */

@@ -573,7 +573,8 @@ static mental_backend g_pocl_backend = {
     .pipe_destroy = pocl_pipe_destroy,
     .viewport_attach = NULL,
     .viewport_present = NULL,
-    .viewport_detach = NULL
+    .viewport_detach = NULL,
+    .viewport_readback = NULL
 };
 
 mental_backend* pocl_backend = &g_pocl_backend;

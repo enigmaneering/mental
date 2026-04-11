@@ -568,7 +568,8 @@ static mental_backend g_metal_backend = {
     .pipe_destroy = metal_pipe_destroy,
     .viewport_attach = metal_viewport_attach,
     .viewport_present = metal_viewport_present,
-    .viewport_detach = metal_viewport_detach
+    .viewport_detach = metal_viewport_detach,
+    .viewport_readback = NULL
 };
 
 mental_backend* metal_backend = &g_metal_backend;

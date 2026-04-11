@@ -1244,7 +1244,8 @@ static mental_backend g_vulkan_backend = {
     .pipe_destroy = vulkan_pipe_destroy,
     .viewport_attach = vulkan_viewport_attach,
     .viewport_present = vulkan_viewport_present,
-    .viewport_detach = vulkan_viewport_detach
+    .viewport_detach = vulkan_viewport_detach,
+    .viewport_readback = NULL
 };
 
 extern "C" {

@@ -840,7 +840,8 @@ static mental_backend g_opengl_backend = {
     .pipe_destroy = opengl_pipe_destroy,
     .viewport_attach = NULL,
     .viewport_present = NULL,
-    .viewport_detach = NULL
+    .viewport_detach = NULL,
+    .viewport_readback = NULL
 };
 
 mental_backend* opengl_backend = &g_opengl_backend;

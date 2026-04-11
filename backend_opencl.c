@@ -683,7 +683,8 @@ static mental_backend g_opencl_backend = {
     .pipe_destroy = opencl_pipe_destroy,
     .viewport_attach = NULL,
     .viewport_present = NULL,
-    .viewport_detach = NULL
+    .viewport_detach = NULL,
+    .viewport_readback = NULL
 };
 
 mental_backend* opencl_backend = &g_opencl_backend;

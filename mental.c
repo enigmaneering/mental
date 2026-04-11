@@ -723,10 +723,8 @@ mental_viewport mental_viewport_attach(mental_reference ref, void* surface) {
         return NULL;
     }
 
-    if (!surface) {
-        mental_set_error(MENTAL_ERROR_INVALID_DEVICE, "Invalid surface");
-        return NULL;
-    }
+    /* NULL surface is valid for backends that support readback (e.g., WASM).
+     * Native backends validate their own surface handles. */
 
     /* Check if backend supports viewports */
     if (!ref->device->backend->viewport_attach) {
@@ -743,6 +741,8 @@ mental_viewport mental_viewport_attach(mental_reference ref, void* surface) {
 
     viewport->reference = ref;
     viewport->valid = 1;
+    viewport->readback_pixels = NULL;
+    viewport->readback_size = 0;
     pthread_mutex_init(&viewport->lock, NULL);
 
     /* Call backend to attach surface */
@@ -780,6 +780,14 @@ void mental_viewport_present(mental_viewport viewport) {
 
     viewport->reference->device->backend->viewport_present(viewport->backend_viewport);
 
+    /* Update readback buffer if backend supports it (WASM readback viewport) */
+    if (viewport->reference->device->backend->viewport_readback) {
+        size_t rb_size = 0;
+        viewport->readback_pixels = viewport->reference->device->backend->viewport_readback(
+            viewport->backend_viewport, &rb_size);
+        viewport->readback_size = rb_size;
+    }
+
     pthread_mutex_unlock(&viewport->reference->lock);
     pthread_mutex_unlock(&viewport->lock);
 }
@@ -796,6 +804,29 @@ void mental_viewport_detach(mental_viewport viewport) {
     pthread_mutex_destroy(&viewport->lock);
 
     free(viewport);
+}
+
+int mental_viewport_read(mental_viewport viewport,
+                         const void **out_pixels, size_t *out_size) {
+    if (!viewport || !viewport->valid) {
+        mental_set_error(MENTAL_ERROR_INVALID_DEVICE, "Invalid viewport");
+        return -1;
+    }
+
+    pthread_mutex_lock(&viewport->lock);
+
+    if (!viewport->readback_pixels || viewport->readback_size == 0) {
+        pthread_mutex_unlock(&viewport->lock);
+        mental_set_error(MENTAL_ERROR_BACKEND_FAILED,
+                         "Viewport has no readback framebuffer (call present first, or backend does not support readback)");
+        return -1;
+    }
+
+    if (out_pixels) *out_pixels = viewport->readback_pixels;
+    if (out_size) *out_size = viewport->readback_size;
+
+    pthread_mutex_unlock(&viewport->lock);
+    return 0;
 }
 
 /*

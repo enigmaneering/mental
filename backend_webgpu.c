@@ -913,6 +913,71 @@ static void webgpu_pipe_destroy(void* pipe_ptr) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  WASM Readback Viewport                                            */
+/*  In WASM the library doesn't own the display surface — the host    */
+/*  (browser/Node.js) does. The viewport renders into an internal     */
+/*  RGBA framebuffer that the host reads via mental_viewport_read().  */
+/* ------------------------------------------------------------------ */
+
+#ifdef __EMSCRIPTEN__
+
+typedef struct {
+    WebGPUBuffer *buffer;       /* source GPU buffer */
+    WebGPUDevice *dev;          /* device context */
+    void         *framebuffer;  /* malloc'd pixel data */
+    size_t        fb_size;      /* byte length */
+} WasmViewport;
+
+static void* wasm_viewport_attach(void* dev, void* buffer, void* surface,
+                                   char* error, size_t error_len) {
+    (void)surface;  /* WASM readback ignores the surface parameter */
+    WebGPUBuffer *wbuf = (WebGPUBuffer*)buffer;
+
+    WasmViewport *vp = calloc(1, sizeof(WasmViewport));
+    if (!vp) {
+        if (error) snprintf(error, error_len, "Failed to allocate WASM viewport");
+        return NULL;
+    }
+
+    vp->buffer = wbuf;
+    vp->dev = (WebGPUDevice*)dev;
+    vp->fb_size = wbuf->size;
+    vp->framebuffer = malloc(vp->fb_size);
+    if (!vp->framebuffer) {
+        if (error) snprintf(error, error_len, "Failed to allocate WASM framebuffer (%zu bytes)", vp->fb_size);
+        free(vp);
+        return NULL;
+    }
+
+    return vp;
+}
+
+static void wasm_viewport_present(void* viewport_ptr) {
+    if (!viewport_ptr) return;
+    WasmViewport *vp = (WasmViewport*)viewport_ptr;
+
+    /* Copy GPU buffer contents into the internal framebuffer.
+     * In WASM the "GPU buffer" is CPU-accessible, so this is essentially memcpy. */
+    webgpu_buffer_read(vp->buffer, vp->framebuffer, vp->fb_size);
+}
+
+static const void* wasm_viewport_readback(void* viewport_ptr, size_t *out_size) {
+    if (!viewport_ptr) return NULL;
+    WasmViewport *vp = (WasmViewport*)viewport_ptr;
+    if (out_size) *out_size = vp->fb_size;
+    return vp->framebuffer;
+}
+
+static void wasm_viewport_detach(void* viewport_ptr) {
+    if (!viewport_ptr) return;
+    WasmViewport *vp = (WasmViewport*)viewport_ptr;
+    free(vp->framebuffer);
+    free(vp);
+}
+
+#endif /* __EMSCRIPTEN__ */
+
+/* ------------------------------------------------------------------ */
 /*  Backend descriptor                                                */
 /* ------------------------------------------------------------------ */
 
@@ -939,9 +1004,17 @@ static mental_backend g_webgpu_backend = {
     .pipe_add = webgpu_pipe_add,
     .pipe_execute = webgpu_pipe_execute,
     .pipe_destroy = webgpu_pipe_destroy,
-    .viewport_attach = NULL,
+#ifdef __EMSCRIPTEN__
+    .viewport_attach  = wasm_viewport_attach,
+    .viewport_present = wasm_viewport_present,
+    .viewport_detach  = wasm_viewport_detach,
+    .viewport_readback = wasm_viewport_readback,
+#else
+    .viewport_attach  = NULL,
     .viewport_present = NULL,
-    .viewport_detach = NULL,
+    .viewport_detach  = NULL,
+    .viewport_readback = NULL,
+#endif
 };
 
 mental_backend* webgpu_backend = &g_webgpu_backend;
