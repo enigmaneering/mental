@@ -55,7 +55,12 @@ typedef WGPUInstance     (*pfn_wgpuCreateInstance)(const WGPUInstanceDescriptor*
 typedef void             (*pfn_wgpuInstanceRelease)(WGPUInstance);
 typedef void             (*pfn_wgpuInstanceProcessEvents)(WGPUInstance);
 typedef WGPUFuture       (*pfn_wgpuInstanceRequestAdapter)(WGPUInstance, const WGPURequestAdapterOptions*, WGPURequestAdapterCallbackInfo);
+#ifndef __EMSCRIPTEN__
+/* wgpu-native extensions not available in Dawn/Emscripten */
 typedef size_t           (*pfn_wgpuInstanceEnumerateAdapters)(WGPUInstance, const WGPUInstanceEnumerateAdapterOptions*, WGPUAdapter*);
+#else
+typedef size_t           (*pfn_wgpuInstanceEnumerateAdapters)(void*, const void*, void*);
+#endif
 
 typedef WGPUStatus       (*pfn_wgpuAdapterGetInfo)(WGPUAdapter, WGPUAdapterInfo*);
 typedef void             (*pfn_wgpuAdapterInfoFreeMembers)(WGPUAdapterInfo);
@@ -72,7 +77,12 @@ typedef WGPUBindGroup    (*pfn_wgpuDeviceCreateBindGroup)(WGPUDevice, const WGPU
 typedef WGPUBindGroupLayout (*pfn_wgpuDeviceCreateBindGroupLayout)(WGPUDevice, const WGPUBindGroupLayoutDescriptor*);
 typedef WGPUCommandEncoder (*pfn_wgpuDeviceCreateCommandEncoder)(WGPUDevice, const WGPUCommandEncoderDescriptor*);
 typedef WGPUPipelineLayout (*pfn_wgpuDeviceCreatePipelineLayout)(WGPUDevice, const WGPUPipelineLayoutDescriptor*);
+#ifndef __EMSCRIPTEN__
 typedef WGPUBool         (*pfn_wgpuDevicePoll)(WGPUDevice, WGPUBool, const WGPUSubmissionIndex*);
+#else
+/* Dawn doesn't have wgpuDevicePoll — use wgpuInstanceProcessEvents instead */
+typedef void             (*pfn_wgpuDevicePoll)(void*, int, const void*);
+#endif
 
 typedef void             (*pfn_wgpuQueueSubmit)(WGPUQueue, size_t, const WGPUCommandBuffer*);
 typedef void             (*pfn_wgpuQueueWriteBuffer)(WGPUQueue, WGPUBuffer, uint64_t, const void*, size_t);
@@ -265,7 +275,7 @@ static int open_wgpu_library(void) {
     p_wgpuDeviceCreateBindGroupLayout = wgpuDeviceCreateBindGroupLayout;
     p_wgpuDeviceCreateCommandEncoder  = wgpuDeviceCreateCommandEncoder;
     p_wgpuDeviceCreatePipelineLayout  = wgpuDeviceCreatePipelineLayout;
-    p_wgpuDevicePoll                  = wgpuDevicePoll;
+    p_wgpuDevicePoll                  = NULL; /* Dawn uses wgpuInstanceProcessEvents instead */
     p_wgpuQueueSubmit                 = wgpuQueueSubmit;
     p_wgpuQueueWriteBuffer            = wgpuQueueWriteBuffer;
     p_wgpuQueueRelease                = wgpuQueueRelease;
@@ -396,7 +406,12 @@ static void submit_and_wait(WebGPUDevice *dev, WGPUCommandEncoder encoder) {
     p_wgpuQueueSubmit(dev->queue, 1, &cmd);
     p_wgpuCommandBufferRelease(cmd);
     /* Poll until all GPU work completes */
+#ifdef __EMSCRIPTEN__
+    /* Dawn/Emscripten uses instance-level event processing */
+    p_wgpuInstanceProcessEvents(g_instance);
+#else
     p_wgpuDevicePoll(dev->device, 1, NULL);
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -411,6 +426,7 @@ static int webgpu_init(void) {
     g_instance = p_wgpuCreateInstance(&inst_desc);
     if (!g_instance) return -1;
 
+#ifndef __EMSCRIPTEN__
     if (p_wgpuInstanceEnumerateAdapters) {
         /* wgpu-native path: enumerate all adapters synchronously */
         WGPUInstanceEnumerateAdapterOptions enum_opts = {
@@ -430,7 +446,9 @@ static int webgpu_init(void) {
             return -1;
         }
         p_wgpuInstanceEnumerateAdapters(g_instance, &enum_opts, g_adapters);
-    } else {
+    } else
+#endif
+    {
         /* Dawn/Emscripten path: request a single adapter via the standard API */
         AdapterCallbackData cb = {0};
         WGPURequestAdapterCallbackInfo cb_info = {
@@ -1000,7 +1018,11 @@ static int webgpu_pipe_execute(void* pipe_ptr) {
     p_wgpuCommandBufferRelease(cmd);
 
     /* Poll until all GPU work completes */
+#ifdef __EMSCRIPTEN__
+    p_wgpuInstanceProcessEvents(g_instance);
+#else
     p_wgpuDevicePoll(pipe->dev->device, 1, NULL);
+#endif
 
     return 0;
 }
