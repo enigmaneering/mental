@@ -33,14 +33,14 @@ The first backend that initializes successfully and reports devices wins. Everyt
 Shaders are automatically transpiled to whatever the active backend needs - through other languages or intermediaries, as necessary:
 
 ```                             
-         Input              ╎      Backend
-              ╭───────────╮ ╎
-╭────────╮    │ GLSL      │ ╎ ╭⇥ Vulkan, OpenGL
+         Input              ╎  Backend
+              ╭───────────╮ ╎ ╭⇥ Vulkan
+╭────────╮    │ GLSL      │ ╎ ├⇥ OpenGL
 │        │    │ HLSL      │ ╎ ├⇥ D3D12, D3D11
 │ SPIR-V │ ←→ │ MSL       │─┼─┼⇥ Metal
 │        │    │ WGSL      │ ╎ ├⇥ WebGPU    
-╰────────╯    │ OpenCL C  │ ╎ ╰⇥ OpenCL, PoCL    
-              ╰───────────╯ ╎
+╰────────╯    │ OpenCL C  │ ╎ ├⇥ OpenCL    
+              ╰───────────╯ ╎ ╰⇥ PoCL
 ```
 
 The OpenCL C path is a custom transpiler (`transpile_opencl.c`) that converts spirv-cross GLSL output into valid OpenCL C with a GLSL compatibility shim. This enables GLSL compute shaders to run on CPU-only PoCL -- the absolute last resort.
