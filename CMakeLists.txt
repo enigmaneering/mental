@@ -348,6 +348,11 @@ if(EMSCRIPTEN)
         target_link_libraries(mental PUBLIC ${EXTERNAL_DIR}/naga/lib/libnaga_ffi.a)
         message(STATUS "Naga direct API enabled for WASM (libnaga_ffi.a)")
     endif()
+
+    # DXC's LLVM-based compiler needs more than Emscripten's default 16MB heap.
+    # Allow the WASM memory to grow at runtime so shader compilation can allocate
+    # as much as it needs.
+    target_link_options(mental PUBLIC "SHELL:-sALLOW_MEMORY_GROWTH")
 endif()
 
 # Install targets
