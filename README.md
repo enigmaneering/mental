@@ -35,8 +35,8 @@ Shaders are automatically transpiled to whatever the active backend needs - thro
 ```                             
          Input              ╎      Backend
               ╭───────────╮ ╎
-╭────────╮    │ GLSL      │ ╎ ╭→ Vulkan, OpenGL
-│        │    │ HLSL      │ ╎ ├→ D3D12, D3D11
+╭────────╮    │ GLSL      │ ╎ ╭⇢ Vulkan, OpenGL
+│        │    │ HLSL      │ ╎ ├⇀ D3D12, D3D11
 │ SPIR-V │ ←→ │ MSL       │─┼─┼→ Metal
 │        │    │ WGSL      │ ╎ ├→ WebGPU    
 ╰────────╯    │ OpenCL C  │ ╎ ╰→ OpenCL, PoCL    
