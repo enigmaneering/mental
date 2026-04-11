@@ -317,7 +317,7 @@ jobs:
         if: matrix.platform == 'wasm'
         uses: mymindstorm/setup-emsdk@v14
         with:
-          version: "3.1.61"
+          version: "5.0.1"
 
       # ---- Linux packages ----
       - name: Install packages (Linux)

@@ -170,7 +170,7 @@ jobs:
         if: matrix.platform == 'wasm'
         uses: mymindstorm/setup-emsdk@v14
         with:
-          version: "3.1.61"
+          version: "5.0.1"
 
       # ---- Fetch external dependencies ----
       - name: Fetch external dependencies (WASM)
@@ -202,6 +202,22 @@ jobs:
               --pattern "spirv-cross-linux-amd64.tar.gz" --dir .
             tar -xzf "spirv-cross-linux-amd64.tar.gz"
             cp -r spirv-cross-linux-amd64/* external/spirv-cross/
+          fi
+
+          # DXC WASM (static library + headers for direct linking)
+          mkdir -p external/dxc
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "dxc-wasm.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "dxc-wasm.tar.gz"
+            cp -r dxc-wasm/* external/dxc/
+          fi
+
+          # Naga WASM (FFI static library for direct linking)
+          mkdir -p external/naga
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "naga-wasm.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "naga-wasm.tar.gz"
+            cp -r naga-wasm/* external/naga/
           fi
 
       - name: Fetch external dependencies (Unix)
@@ -341,7 +357,7 @@ jobs:
         if: matrix.platform == 'wasm'
         run: |
           emcmake cmake -B build \
-            -DBUILD_TESTING=OFF \
+            -DBUILD_TESTING=ON \
             -DBUILD_EXAMPLES=OFF \
             -DMENTAL_DISABLE_METAL=ON \
             -DMENTAL_DISABLE_POCL=ON \
@@ -369,10 +385,11 @@ jobs:
       # ---- Test ----
       - name: Test (WASM via Node.js)
         if: matrix.platform == 'wasm'
+        working-directory: build
         run: |
-          echo "Running WASM sanity check via Node.js..."
-          ls -la build/sanity-check.js build/sanity-check.wasm 2>/dev/null || ls -la build/sanity-check* 2>/dev/null
-          node build/sanity-check.js
+          # Emscripten sets CMAKE_CROSSCOMPILING_EMULATOR=node, so CTest
+          # automatically invokes each test .js file via Node.js
+          ctest --output-on-failure --timeout 30
 
       - name: Test
         if: ${{ !matrix.needs_xvfb && runner.os != 'Windows' && matrix.platform != 'wasm' }}
