@@ -176,6 +176,11 @@ static void mental_initialize(void) {
         NULL
     };
     if (!mental_get_tool_path(MENTAL_TOOL_DXC)) {
+#if defined(__EMSCRIPTEN__) && defined(MENTAL_HAS_DXC_DIRECT)
+        /* WASM: DXC is linked directly as a library — no external binary needed.
+         * Register a sentinel path so consumers know HLSL compilation is available. */
+        mental_set_tool_path(MENTAL_TOOL_DXC, "(direct)");
+#else
         for (int i = 0; dxc_paths[i]; i++) {
             if (MENTAL_ACCESS(dxc_paths[i], F_OK) == 0) {
                 /* Resolve to absolute path — MSYS2 popen can't handle ../.. */
@@ -189,8 +194,13 @@ static void mental_initialize(void) {
                 break;
             }
         }
+#endif
     }
     if (!mental_get_tool_path(MENTAL_TOOL_NAGA)) {
+#if defined(__EMSCRIPTEN__) && defined(MENTAL_HAS_NAGA_DIRECT)
+        /* WASM: Naga is linked directly as a library — no external binary needed. */
+        mental_set_tool_path(MENTAL_TOOL_NAGA, "(direct)");
+#else
         for (int i = 0; naga_paths[i]; i++) {
             if (MENTAL_ACCESS(naga_paths[i], F_OK) == 0) {
                 char resolved[4096];
@@ -203,6 +213,7 @@ static void mental_initialize(void) {
                 break;
             }
         }
+#endif
     }
 
     /* External tools (dxc, naga) are registered lazily — the Go layer
