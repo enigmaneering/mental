@@ -177,7 +177,7 @@ static void mental_initialize(void) {
     };
     if (!mental_get_tool_path(MENTAL_TOOL_DXC)) {
 #if defined(__EMSCRIPTEN__) && defined(MENTAL_HAS_DXC_DIRECT)
-        /* WASM: DXC is linked directly as a library — no external binary needed.
+        /* WASM: DXC is linked directly — call dxc::main() instead of subprocess.
          * Register a sentinel path so consumers know HLSL compilation is available. */
         mental_set_tool_path(MENTAL_TOOL_DXC, "(direct)");
 #else
