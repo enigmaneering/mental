@@ -234,12 +234,64 @@ static const char* g_wgpu_search_paths[] = {
 #define WGPU_SEARCH_PATH_COUNT (sizeof(g_wgpu_search_paths) / sizeof(g_wgpu_search_paths[0]))
 
 static int open_wgpu_library(void) {
+#ifdef __EMSCRIPTEN__
+    /* Emscripten's emdawnwebgpu port provides WebGPU symbols at link time —
+     * no dlopen needed. Bind function pointers directly. */
+    p_wgpuCreateInstance              = wgpuCreateInstance;
+    p_wgpuInstanceRelease             = wgpuInstanceRelease;
+    p_wgpuInstanceProcessEvents       = wgpuInstanceProcessEvents;
+    p_wgpuInstanceRequestAdapter      = wgpuInstanceRequestAdapter;
+    /* wgpuInstanceEnumerateAdapters is a wgpu-native extension, not available
+     * in Dawn/emdawnwebgpu. The init function handles NULL gracefully by
+     * falling back to wgpuInstanceRequestAdapter. */
+    p_wgpuInstanceEnumerateAdapters   = NULL;
+    p_wgpuAdapterGetInfo              = wgpuAdapterGetInfo;
+    p_wgpuAdapterInfoFreeMembers      = wgpuAdapterInfoFreeMembers;
+    p_wgpuAdapterRequestDevice        = wgpuAdapterRequestDevice;
+    p_wgpuAdapterRelease              = wgpuAdapterRelease;
+    p_wgpuDeviceDestroy               = wgpuDeviceDestroy;
+    p_wgpuDeviceRelease               = wgpuDeviceRelease;
+    p_wgpuDeviceGetQueue              = wgpuDeviceGetQueue;
+    p_wgpuDeviceCreateBuffer          = wgpuDeviceCreateBuffer;
+    p_wgpuDeviceCreateShaderModule    = wgpuDeviceCreateShaderModule;
+    p_wgpuDeviceCreateComputePipeline = wgpuDeviceCreateComputePipeline;
+    p_wgpuDeviceCreateBindGroup       = wgpuDeviceCreateBindGroup;
+    p_wgpuDeviceCreateBindGroupLayout = wgpuDeviceCreateBindGroupLayout;
+    p_wgpuDeviceCreateCommandEncoder  = wgpuDeviceCreateCommandEncoder;
+    p_wgpuDeviceCreatePipelineLayout  = wgpuDeviceCreatePipelineLayout;
+    p_wgpuDevicePoll                  = wgpuDevicePoll;
+    p_wgpuQueueSubmit                 = wgpuQueueSubmit;
+    p_wgpuQueueWriteBuffer            = wgpuQueueWriteBuffer;
+    p_wgpuQueueRelease                = wgpuQueueRelease;
+    p_wgpuBufferMapAsync              = wgpuBufferMapAsync;
+    p_wgpuBufferGetConstMappedRange   = wgpuBufferGetConstMappedRange;
+    p_wgpuBufferUnmap                 = wgpuBufferUnmap;
+    p_wgpuBufferDestroy               = wgpuBufferDestroy;
+    p_wgpuBufferRelease               = wgpuBufferRelease;
+    p_wgpuCommandEncoderBeginComputePass    = wgpuCommandEncoderBeginComputePass;
+    p_wgpuCommandEncoderCopyBufferToBuffer  = wgpuCommandEncoderCopyBufferToBuffer;
+    p_wgpuCommandEncoderFinish              = wgpuCommandEncoderFinish;
+    p_wgpuCommandEncoderRelease             = wgpuCommandEncoderRelease;
+    p_wgpuComputePassEncoderSetPipeline         = wgpuComputePassEncoderSetPipeline;
+    p_wgpuComputePassEncoderSetBindGroup        = wgpuComputePassEncoderSetBindGroup;
+    p_wgpuComputePassEncoderDispatchWorkgroups  = wgpuComputePassEncoderDispatchWorkgroups;
+    p_wgpuComputePassEncoderEnd                 = wgpuComputePassEncoderEnd;
+    p_wgpuComputePassEncoderRelease             = wgpuComputePassEncoderRelease;
+    p_wgpuComputePipelineGetBindGroupLayout = wgpuComputePipelineGetBindGroupLayout;
+    p_wgpuComputePipelineRelease            = wgpuComputePipelineRelease;
+    p_wgpuShaderModuleRelease          = wgpuShaderModuleRelease;
+    p_wgpuBindGroupRelease             = wgpuBindGroupRelease;
+    p_wgpuBindGroupLayoutRelease       = wgpuBindGroupLayoutRelease;
+    p_wgpuCommandBufferRelease         = wgpuCommandBufferRelease;
+    return 0;
+#else
     for (size_t i = 0; i < WGPU_SEARCH_PATH_COUNT; i++) {
         g_wgpu_lib = WGPU_DLOPEN(g_wgpu_search_paths[i]);
         if (g_wgpu_lib && load_wgpu_symbols() == 0) return 0;
         if (g_wgpu_lib) { WGPU_DLCLOSE(g_wgpu_lib); g_wgpu_lib = NULL; }
     }
     return -1;
+#endif
 }
 
 /* Probe-only: try to dlopen wgpu-native without loading symbols. */
@@ -302,6 +354,21 @@ static void on_device_request(WGPURequestDeviceStatus status, WGPUDevice device,
 }
 
 typedef struct {
+    int          done;
+    WGPUAdapter  adapter;
+    WGPURequestAdapterStatus status;
+} AdapterCallbackData;
+
+static void on_adapter_request(WGPURequestAdapterStatus status, WGPUAdapter adapter,
+                               WGPUStringView message, void* userdata1, void* userdata2) {
+    (void)message; (void)userdata2;
+    AdapterCallbackData *d = (AdapterCallbackData*)userdata1;
+    d->adapter = adapter;
+    d->status = status;
+    d->done = 1;
+}
+
+typedef struct {
     int               done;
     WGPUMapAsyncStatus status;
 } MapCallbackData;
@@ -338,25 +405,52 @@ static int webgpu_init(void) {
     g_instance = p_wgpuCreateInstance(&inst_desc);
     if (!g_instance) return -1;
 
-    /* Enumerate all adapters via wgpu-native extension */
-    WGPUInstanceEnumerateAdapterOptions enum_opts = {
-        .nextInChain = NULL,
-        .backends = WGPUInstanceBackend_All,
-    };
-    g_adapter_count = p_wgpuInstanceEnumerateAdapters(g_instance, &enum_opts, NULL);
-    if (g_adapter_count == 0) {
-        p_wgpuInstanceRelease(g_instance);
-        g_instance = NULL;
-        return -1;
+    if (p_wgpuInstanceEnumerateAdapters) {
+        /* wgpu-native path: enumerate all adapters synchronously */
+        WGPUInstanceEnumerateAdapterOptions enum_opts = {
+            .nextInChain = NULL,
+            .backends = WGPUInstanceBackend_All,
+        };
+        g_adapter_count = p_wgpuInstanceEnumerateAdapters(g_instance, &enum_opts, NULL);
+        if (g_adapter_count == 0) {
+            p_wgpuInstanceRelease(g_instance);
+            g_instance = NULL;
+            return -1;
+        }
+        g_adapters = malloc(sizeof(WGPUAdapter) * g_adapter_count);
+        if (!g_adapters) {
+            p_wgpuInstanceRelease(g_instance);
+            g_instance = NULL;
+            return -1;
+        }
+        p_wgpuInstanceEnumerateAdapters(g_instance, &enum_opts, g_adapters);
+    } else {
+        /* Dawn/Emscripten path: request a single adapter via the standard API */
+        AdapterCallbackData cb = {0};
+        WGPURequestAdapterCallbackInfo cb_info = {
+            .callback = on_adapter_request,
+            .userdata1 = &cb,
+        };
+        p_wgpuInstanceRequestAdapter(g_instance, NULL, cb_info);
+        /* Poll until the adapter request completes */
+        while (!cb.done) {
+            p_wgpuInstanceProcessEvents(g_instance);
+        }
+        if (cb.status != WGPURequestAdapterStatus_Success || !cb.adapter) {
+            p_wgpuInstanceRelease(g_instance);
+            g_instance = NULL;
+            return -1;
+        }
+        g_adapter_count = 1;
+        g_adapters = malloc(sizeof(WGPUAdapter));
+        if (!g_adapters) {
+            p_wgpuAdapterRelease(cb.adapter);
+            p_wgpuInstanceRelease(g_instance);
+            g_instance = NULL;
+            return -1;
+        }
+        g_adapters[0] = cb.adapter;
     }
-
-    g_adapters = malloc(sizeof(WGPUAdapter) * g_adapter_count);
-    if (!g_adapters) {
-        p_wgpuInstanceRelease(g_instance);
-        g_instance = NULL;
-        return -1;
-    }
-    p_wgpuInstanceEnumerateAdapters(g_instance, &enum_opts, g_adapters);
 
     return 0;
 }
