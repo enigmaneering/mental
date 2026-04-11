@@ -49,22 +49,11 @@ unsigned char* mental_hlsl_to_spirv_direct(const char* source, size_t source_len
 
     *out_len = 0;
 
-    /* DXC's library initialization normally runs via __attribute__((constructor))
-     * in DXCompiler.cpp's DllMain(). When linked as a static library under
-     * Emscripten, this constructor may not fire — initialize manually.
-     * Both functions are declared in dxc/Support/Global.h. */
-    static bool dxc_initialized = false;
-    if (!dxc_initialized) {
-        extern HRESULT DxcInitThreadMalloc() throw();
-        extern void DxcSetThreadMallocToDefault() throw();
-        HRESULT initHr = DxcInitThreadMalloc();
-        if (FAILED(initHr)) {
-            if (error) snprintf(error, error_len, "DXC: DxcInitThreadMalloc failed (0x%08x)", (unsigned)initHr);
-            return nullptr;
-        }
-        DxcSetThreadMallocToDefault();
-        dxc_initialized = true;
-    }
+    /* DXC's library initialization runs via __attribute__((constructor)) on
+     * DllMain() in DXCompiler.cpp. Emscripten supports constructors from
+     * static libraries, so the thread allocator should be initialized before
+     * we reach here. If it isn't, DxcCreateInstance will fail with an HRESULT
+     * and we report that gracefully below. */
 
     /* Create compiler and utils instances */
     HRESULT hr = DxcCreateInstance(CLSID_DxcCompiler, __uuidof(IDxcCompiler3), (void**)&compiler);
