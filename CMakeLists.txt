@@ -358,6 +358,11 @@ if(EMSCRIPTEN)
     # Enable exception catching so throw/catch works in the linked DXC code.
     target_link_options(mental PUBLIC "SHELL:-sNO_DISABLE_EXCEPTION_CATCHING")
     target_compile_options(mental PUBLIC -fexceptions)
+
+    # Enable Emscripten's WebGPU bindings — provides navigator.gpu backed by
+    # the host system's GPU via Dawn. This gives us a real WebGPU device so
+    # compute dispatch and viewport presentation work in Node.js and browsers.
+    target_link_options(mental PUBLIC "SHELL:-sUSE_WEBGPU")
 endif()
 
 # Install targets
