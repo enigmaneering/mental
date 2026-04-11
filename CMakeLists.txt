@@ -353,6 +353,11 @@ if(EMSCRIPTEN)
     # Allow the WASM memory to grow at runtime so shader compilation can allocate
     # as much as it needs.
     target_link_options(mental PUBLIC "SHELL:-sALLOW_MEMORY_GROWTH")
+
+    # DXC uses C++ exceptions internally (built with -DLLVM_ENABLE_EH=ON).
+    # Enable exception catching so throw/catch works in the linked DXC code.
+    target_link_options(mental PUBLIC "SHELL:-sNO_DISABLE_EXCEPTION_CATCHING")
+    target_compile_options(mental PUBLIC -fexceptions)
 endif()
 
 # Install targets
