@@ -26,16 +26,7 @@ unsigned char* mental_hlsl_to_spirv_direct(const char* source, size_t source_len
 
 }
 
-/* CLSID and IID definitions (normally from Windows COM headers) */
-static const CLSID CLSID_DxcCompiler = {
-    0x73e22d93, 0xe6ce, 0x47f3,
-    {0xb5, 0xbf, 0xf0, 0x66, 0x4f, 0x39, 0xc1, 0xb0}
-};
-
-static const CLSID CLSID_DxcUtils = {
-    0x6245d6af, 0x66e0, 0x48fd,
-    {0x80, 0xb4, 0x4d, 0x27, 0x17, 0x96, 0x74, 0x8c}
-};
+/* CLSID_DxcCompiler and CLSID_DxcUtils are defined in dxcapi.h */
 
 /* Helper to convert narrow string to wide string (DXC API uses wchar_t) */
 static wchar_t* to_wide(const char* str) {
