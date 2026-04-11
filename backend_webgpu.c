@@ -34,8 +34,14 @@
 #  endif
 #endif
 
+#ifdef __EMSCRIPTEN__
+/* emdawnwebgpu port provides webgpu.h via --use-port flag */
+#include <webgpu/webgpu.h>
+#else
+/* wgpu-native headers from redistributables */
 #include "external/wgpu/include/webgpu/webgpu.h"
 #include "external/wgpu/include/webgpu/wgpu.h"
+#endif
 #include "mental_internal.h"
 #include <stdio.h>
 #include <stdlib.h>
