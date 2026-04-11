@@ -360,8 +360,7 @@ jobs:
             -DBUILD_TESTING=ON \
             -DBUILD_EXAMPLES=OFF \
             -DMENTAL_DISABLE_METAL=ON \
-            -DMENTAL_DISABLE_POCL=ON \
-            -DMENTAL_DISABLE_WEBGPU=ON
+            -DMENTAL_DISABLE_POCL=ON
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
