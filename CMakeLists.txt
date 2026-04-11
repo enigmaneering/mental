@@ -333,14 +333,24 @@ install(FILES mental.h DESTINATION include)
 
 # Install licenses — 1:1 snapshot of each tool's upstream license structure
 install(FILES license DESTINATION .)
+
+# Required dependencies (always present)
 install(FILES external/glslang/LICENSE.txt DESTINATION LICENSES/glslang)
 install(DIRECTORY external/glslang/LICENSES DESTINATION LICENSES/glslang)
 install(FILES external/spirv-cross/LICENSE DESTINATION LICENSES/spirv-cross)
 install(DIRECTORY external/spirv-cross/LICENSES DESTINATION LICENSES/spirv-cross)
-install(FILES external/dxc/LICENSE.TXT DESTINATION LICENSES/dxc)
-install(DIRECTORY external/dxc/LICENSES DESTINATION LICENSES/dxc)
-install(FILES external/naga/LICENSE.APACHE external/naga/LICENSE.MIT DESTINATION LICENSES/naga)
-install(FILES external/wgpu/LICENSE.APACHE external/wgpu/LICENSE.MIT DESTINATION LICENSES/wgpu)
+
+# Optional dependencies (may not be fetched for all platforms)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/dxc/LICENSE.TXT")
+    install(FILES external/dxc/LICENSE.TXT DESTINATION LICENSES/dxc)
+    install(DIRECTORY external/dxc/LICENSES DESTINATION LICENSES/dxc)
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/naga/LICENSE.APACHE")
+    install(FILES external/naga/LICENSE.APACHE external/naga/LICENSE.MIT DESTINATION LICENSES/naga)
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/wgpu/LICENSE.APACHE")
+    install(FILES external/wgpu/LICENSE.APACHE external/wgpu/LICENSE.MIT DESTINATION LICENSES/wgpu)
+endif()
 
 # Examples (optional)
 option(BUILD_EXAMPLES "Build examples" ON)

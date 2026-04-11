@@ -188,6 +188,7 @@ jobs:
             else
               cp -r "naga-${{ matrix.platform }}"/* external/naga/bin/
             fi
+            cp "naga-${{ matrix.platform }}"/LICENSE.* external/naga/ 2>/dev/null || true
           fi
 
           chmod +x external/dxc/bin/* external/naga/bin/* 2>/dev/null || true
@@ -259,6 +260,7 @@ jobs:
             else
               cp -r "naga-${{ matrix.platform }}"/* external/naga/bin/
             fi
+            cp "naga-${{ matrix.platform }}"/LICENSE.* external/naga/ 2>/dev/null || true
           fi
 
       # ---- Fetch external dependencies (WASM) ----
