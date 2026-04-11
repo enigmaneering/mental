@@ -62,12 +62,19 @@ option(MENTAL_DISABLE_WEBGPU "Force-disable WebGPU backend" OFF)
 if(MENTAL_DISABLE_WEBGPU)
     message(STATUS "WebGPU backend force-disabled")
 else()
-    find_path(WGPU_HEADER "webgpu/webgpu.h" HINTS ${EXTERNAL_DIR}/wgpu/include)
-    if(WGPU_HEADER)
+    if(EMSCRIPTEN)
+        # Emscripten's emdawnwebgpu port provides webgpu.h at compile time (not
+        # configure time), so find_path won't find it. Force-enable WebGPU.
         set(MENTAL_HAS_WEBGPU ON)
-        message(STATUS "WebGPU headers found - enabling WebGPU backend (wgpu-native, runtime-loaded)")
+        message(STATUS "WebGPU enabled for Emscripten (via emdawnwebgpu port)")
     else()
-        message(STATUS "WebGPU headers not found - WebGPU backend disabled")
+        find_path(WGPU_HEADER "webgpu/webgpu.h" HINTS ${EXTERNAL_DIR}/wgpu/include)
+        if(WGPU_HEADER)
+            set(MENTAL_HAS_WEBGPU ON)
+            message(STATUS "WebGPU headers found - enabling WebGPU backend (wgpu-native, runtime-loaded)")
+        else()
+            message(STATUS "WebGPU headers not found - WebGPU backend disabled")
+        endif()
     endif()
 endif()
 
@@ -324,10 +331,14 @@ elseif(PLATFORM_LINUX)
     target_link_libraries(mental PUBLIC ${LINUX_LIBS} ${LINUX_STATIC_LIBS})
 endif()
 
-# WebGPU (cross-platform, runtime-loaded — same on all platforms)
+# WebGPU (cross-platform — runtime-loaded on native, port-linked on WASM)
 if(MENTAL_HAS_WEBGPU)
     target_compile_definitions(mental PRIVATE MENTAL_HAS_WEBGPU=1)
-    target_include_directories(mental PRIVATE ${EXTERNAL_DIR}/wgpu/include)
+    if(NOT EMSCRIPTEN)
+        # Native: wgpu-native headers from redistributables
+        target_include_directories(mental PRIVATE ${EXTERNAL_DIR}/wgpu/include)
+    endif()
+    # Emscripten: emdawnwebgpu port provides headers via --use-port flag
 endif()
 
 # Emscripten/WASM — link DXC and Naga as static libraries for direct API calls

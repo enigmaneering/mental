@@ -51,65 +51,36 @@ int main(void) {
     mental_viewport_detach(NULL);
     printf("  NULL viewport detach handled\n");
 
+    /*
+     * Note: We can't actually create a real window/surface in a headless test,
+     * so we test error handling for NULL surface and unsupported backends.
+     * Full viewport testing is done by the platform-specific test #16
+     * (ViewportWindowMetal, ViewportWindowD3D12, ViewportWindowVulkan,
+     * ViewportReadbackWasm).
+     */
+
     const char* device_name = mental_device_name(dev);
     printf("  Testing on device: %s\n", device_name);
 
-#ifdef __EMSCRIPTEN__
-    /* WASM readback viewport: attach with NULL surface, present, read back pixels */
-    printf("  Testing WASM readback viewport...\n");
-
-    mental_viewport viewport = mental_viewport_attach(ref, NULL);
-    ASSERT(viewport != NULL, "WASM viewport attach failed (NULL surface should be accepted)");
-    ASSERT_NO_ERROR();
-
-    /* Present: copies GPU buffer into internal framebuffer */
-    mental_viewport_present(viewport);
-    ASSERT_NO_ERROR();
-
-    /* Read back the framebuffer */
-    const void *pixels = NULL;
-    size_t pixel_size = 0;
-    int rc = mental_viewport_read(viewport, &pixels, &pixel_size);
-    ASSERT(rc == 0, "mental_viewport_read failed");
-    ASSERT(pixels != NULL, "Readback pixels should not be NULL");
-    ASSERT(pixel_size == size, "Readback size should match reference size");
-
-    /* Verify pixel data matches the test pattern we wrote */
-    const unsigned char *px = (const unsigned char*)pixels;
-    int mismatch = 0;
-    for (size_t i = 0; i < size && i < pixel_size; i++) {
-        if (px[i] != (unsigned char)(i % 256)) {
-            fprintf(stderr, "  Pixel mismatch at byte %zu: expected %u, got %u\n",
-                    i, (unsigned)(i % 256), (unsigned)px[i]);
-            mismatch = 1;
-            break;
-        }
-    }
-    ASSERT(!mismatch, "Readback pixel data does not match expected pattern");
-    printf("  Readback verified: %zu bytes match\n", pixel_size);
-
-    mental_viewport_detach(viewport);
-    ASSERT_NO_ERROR();
-    printf("  WASM readback viewport: PASS\n");
-
-#else
-    /* Native: test error handling for NULL surface and unsupported backends */
+    /* Test NULL surface (should fail gracefully on native, succeed on WASM readback) */
     mental_viewport viewport = mental_viewport_attach(ref, NULL);
     if (viewport == NULL) {
+        /* Expected on native backends that require a real surface */
         printf("  NULL surface correctly rejected\n");
         (void)mental_get_error(); /* Clear error */
+    } else {
+        /* Expected on WASM readback viewport (NULL surface is valid) */
+        printf("  NULL surface accepted (readback viewport)\n");
+        mental_viewport_detach(viewport);
     }
 
     if (strstr(device_name, "OpenCL") != NULL) {
+        /* OpenCL backend should not support viewports */
         viewport = mental_viewport_attach(ref, (void*)0x1234);
         ASSERT(viewport == NULL, "OpenCL should not support viewports");
         ASSERT(mental_get_error() != MENTAL_SUCCESS, "Expected error for unsupported backend");
         printf("  OpenCL correctly reports no viewport support\n");
-    } else {
-        printf("  Native backend detected (viewport support available)\n");
-        printf("  Note: Full viewport testing requires actual window/surface\n");
     }
-#endif
 
     /* Cleanup */
     mental_reference_close(ref);
