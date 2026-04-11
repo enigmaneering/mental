@@ -41,6 +41,12 @@ set(MENTAL_CXX_SOURCES
     backend_d3d11.cpp
 )
 
+# Direct API transpilation (WASM only — bypasses subprocess invocation)
+if(EMSCRIPTEN)
+    list(APPEND MENTAL_SOURCES transpile_naga_direct.c)
+    list(APPEND MENTAL_CXX_SOURCES transpile_dxc_direct.cpp)
+endif()
+
 # Backend disable switches (for CI fallback-chain testing)
 option(MENTAL_DISABLE_METAL  "Force-disable Metal backend"  OFF)
 option(MENTAL_DISABLE_D3D12  "Force-disable D3D12 backend"  OFF)
@@ -322,6 +328,26 @@ endif()
 if(MENTAL_HAS_WEBGPU)
     target_compile_definitions(mental PRIVATE MENTAL_HAS_WEBGPU=1)
     target_include_directories(mental PRIVATE ${EXTERNAL_DIR}/wgpu/include)
+endif()
+
+# Emscripten/WASM — link DXC and Naga as static libraries for direct API calls
+# (posix_spawn is not available in WASM, so we can't invoke external tools as subprocesses)
+if(EMSCRIPTEN)
+    # DXC — HLSL to SPIRV via the DXC COM API (libdxcompiler-full.a)
+    if(EXISTS "${EXTERNAL_DIR}/dxc/lib/libdxcompiler-full.a")
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_DXC_DIRECT=1)
+        target_include_directories(mental PRIVATE ${EXTERNAL_DIR}/dxc/include)
+        target_link_libraries(mental PUBLIC ${EXTERNAL_DIR}/dxc/lib/libdxcompiler-full.a)
+        message(STATUS "DXC direct API enabled for WASM (libdxcompiler-full.a)")
+    endif()
+
+    # Naga — WGSL to/from SPIRV via the Naga C FFI (libnaga_ffi.a)
+    if(EXISTS "${EXTERNAL_DIR}/naga/lib/libnaga_ffi.a")
+        target_compile_definitions(mental PRIVATE MENTAL_HAS_NAGA_DIRECT=1)
+        target_include_directories(mental PRIVATE ${EXTERNAL_DIR}/naga/include)
+        target_link_libraries(mental PUBLIC ${EXTERNAL_DIR}/naga/lib/libnaga_ffi.a)
+        message(STATUS "Naga direct API enabled for WASM (libnaga_ffi.a)")
+    endif()
 endif()
 
 # Install targets

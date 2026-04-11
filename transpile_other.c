@@ -291,6 +291,12 @@ static unsigned char* read_file(const char* path, size_t* out_len) {
 
 unsigned char* mental_hlsl_to_spirv(const char* source, size_t source_len,
                                     size_t* out_len, char* error, size_t error_len) {
+#if defined(__EMSCRIPTEN__) && defined(MENTAL_HAS_DXC_DIRECT)
+    /* WASM: call the DXC API directly (no subprocess available) */
+    extern unsigned char* mental_hlsl_to_spirv_direct(const char*, size_t, size_t*, char*, size_t);
+    return mental_hlsl_to_spirv_direct(source, source_len, out_len, error, error_len);
+#endif
+
     const char* dxc = mental_get_tool_path(MENTAL_TOOL_DXC);
     if (!dxc) {
         if (error) strncpy(error, "DXC compiler not configured (call mental_set_tool_path)", error_len - 1);
@@ -378,6 +384,12 @@ unsigned char* mental_hlsl_to_spirv(const char* source, size_t source_len,
 
 unsigned char* mental_wgsl_to_spirv(const char* source, size_t source_len,
                                     size_t* out_len, char* error, size_t error_len) {
+#if defined(__EMSCRIPTEN__) && defined(MENTAL_HAS_NAGA_DIRECT)
+    /* WASM: call the Naga FFI directly (no subprocess available) */
+    extern unsigned char* mental_wgsl_to_spirv_direct(const char*, size_t, size_t*, char*, size_t);
+    return mental_wgsl_to_spirv_direct(source, source_len, out_len, error, error_len);
+#endif
+
     const char* naga = mental_get_tool_path(MENTAL_TOOL_NAGA);
     if (!naga) {
         if (error) strncpy(error, "Naga compiler not configured (call mental_set_tool_path)", error_len - 1);
@@ -450,6 +462,12 @@ unsigned char* mental_wgsl_to_spirv(const char* source, size_t source_len,
  */
 char* mental_spirv_to_wgsl(const unsigned char* spirv, size_t spirv_len,
                             size_t* out_len, char* error, size_t error_len) {
+#if defined(__EMSCRIPTEN__) && defined(MENTAL_HAS_NAGA_DIRECT)
+    /* WASM: call the Naga FFI directly (no subprocess available) */
+    extern char* mental_spirv_to_wgsl_direct(const unsigned char*, size_t, size_t*, char*, size_t);
+    return mental_spirv_to_wgsl_direct(spirv, spirv_len, out_len, error, error_len);
+#endif
+
     const char* naga = mental_get_tool_path(MENTAL_TOOL_NAGA);
     if (!naga) {
         if (error) strncpy(error, "Naga compiler not configured (call mental_set_tool_path)", error_len - 1);

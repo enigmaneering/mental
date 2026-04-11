@@ -43,7 +43,7 @@ Shaders are automatically transpiled to whatever the active backend needs - thro
               ╰───────────╯ ╎ ╰⇥ PoCL
 ```
 
-The OpenCL C path is a custom transpiler (`transpile_opencl.c`) that converts spirv-cross GLSL output into valid OpenCL C with a GLSL compatibility shim. This enables GLSL compute shaders to run on CPU-only PoCL -- the absolute last resort.
+The OpenCL C path is a custom transpiler (`transpile_opencl.c`) that converts spirv-cross GLSL output into valid OpenCL C with a GLSL compatibility shim.
 
 ## Quick Start
 

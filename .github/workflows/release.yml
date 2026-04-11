@@ -296,6 +296,22 @@ jobs:
             cp -r spirv-cross-linux-amd64/* external/spirv-cross/
           fi
 
+          # DXC WASM (optional — static library + headers for direct linking)
+          mkdir -p external/dxc
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "dxc-wasm.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "dxc-wasm.tar.gz"
+            cp -r dxc-wasm/* external/dxc/
+          fi
+
+          # Naga WASM (optional — FFI static library for direct linking)
+          mkdir -p external/naga
+          if gh release download "$VERSION" --repo enigmaneering/redistributables \
+              --pattern "naga-wasm.tar.gz" --dir . 2>/dev/null; then
+            tar -xzf "naga-wasm.tar.gz"
+            cp -r naga-wasm/* external/naga/
+          fi
+
       # ---- Install Emscripten (WASM only) ----
       - name: Install Emscripten
         if: matrix.platform == 'wasm'
